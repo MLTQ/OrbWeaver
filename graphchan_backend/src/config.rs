@@ -1,0 +1,124 @@
+use anyhow::{anyhow, Result};
+use serde::Deserialize;
+use std::env;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone)]
+pub struct GraphchanConfig {
+    pub api_port: u16,
+    pub paths: GraphchanPaths,
+    pub network: NetworkConfig,
+}
+
+impl GraphchanConfig {
+    pub fn from_env() -> Result<Self> {
+        let paths = GraphchanPaths::discover()?;
+        let api_port = env::var("GRAPHCHAN_API_PORT")
+            .ok()
+            .and_then(|raw| raw.parse().ok())
+            .unwrap_or(8080);
+        let network = NetworkConfig::from_env();
+        Ok(Self {
+            api_port,
+            paths,
+            network,
+        })
+    }
+
+    pub fn new(api_port: u16, paths: GraphchanPaths, network: NetworkConfig) -> Self {
+        Self {
+            api_port,
+            paths,
+            network,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NetworkConfig {
+    pub relay_url: Option<String>,
+    pub public_addresses: Vec<String>,
+}
+
+impl NetworkConfig {
+    pub fn from_env() -> Self {
+        let relay_url = env::var("GRAPHCHAN_RELAY_URL").ok().and_then(|raw| {
+            if raw.trim().is_empty() {
+                None
+            } else {
+                Some(raw)
+            }
+        });
+        let public_addresses = env::var("GRAPHCHAN_PUBLIC_ADDRS")
+            .ok()
+            .map(|raw| {
+                raw.split(',')
+                    .map(|part| part.trim().to_string())
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        Self {
+            relay_url,
+            public_addresses,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GraphchanPaths {
+    pub base: PathBuf,
+    pub data_dir: PathBuf,
+    pub db_path: PathBuf,
+    pub files_dir: PathBuf,
+    pub uploads_dir: PathBuf,
+    pub downloads_dir: PathBuf,
+    pub keys_dir: PathBuf,
+    pub gpg_dir: PathBuf,
+    pub gpg_private_key: PathBuf,
+    pub gpg_public_key: PathBuf,
+    pub iroh_key_path: PathBuf,
+    pub logs_dir: PathBuf,
+}
+
+impl GraphchanPaths {
+    pub fn discover() -> Result<Self> {
+        let exe_path = std::env::current_exe()
+            .map_err(|err| anyhow!("failed to resolve current executable: {err}"))?;
+        let base = exe_path
+            .parent()
+            .ok_or_else(|| anyhow!("executable path missing parent"))?
+            .to_path_buf();
+        Self::from_base_dir(base)
+    }
+
+    pub fn from_base_dir<P: AsRef<Path>>(base: P) -> Result<Self> {
+        let base = base.as_ref().to_path_buf();
+        let data_dir = base.join("data");
+        let db_path = data_dir.join("graphchan.db");
+        let files_dir = base.join("files");
+        let uploads_dir = files_dir.join("uploads");
+        let downloads_dir = files_dir.join("downloads");
+        let keys_dir = base.join("keys");
+        let gpg_dir = keys_dir.join("gpg");
+        let gpg_private_key = gpg_dir.join("private.asc");
+        let gpg_public_key = gpg_dir.join("public.asc");
+        let iroh_key_path = keys_dir.join("iroh.key");
+        let logs_dir = base.join("logs");
+
+        Ok(Self {
+            base,
+            data_dir,
+            db_path,
+            files_dir,
+            uploads_dir,
+            downloads_dir,
+            keys_dir,
+            gpg_dir,
+            gpg_private_key,
+            gpg_public_key,
+            iroh_key_path,
+            logs_dir,
+        })
+    }
+}

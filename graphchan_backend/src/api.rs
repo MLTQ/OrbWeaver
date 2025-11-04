@@ -1,0 +1,437 @@
+use crate::config::GraphchanConfig;
+use crate::database::Database;
+use crate::files::{FileService, FileView, SaveFileInput};
+use crate::identity::decode_friendcode;
+use crate::identity::IdentitySummary;
+use crate::network::FileAnnouncement;
+use crate::network::NetworkHandle;
+use crate::peers::{PeerService, PeerView};
+use crate::threading::{
+    CreatePostInput, CreateThreadInput, ThreadDetails, ThreadService, ThreadSummary,
+};
+use anyhow::{Context, Result};
+use axum::body::Body;
+use axum::extract::{Multipart, Path, Query, State};
+use axum::http::{
+    header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
+    HeaderValue, StatusCode,
+};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
+use tokio::fs::File as TokioFile;
+use tokio::net::TcpListener;
+use tokio_util::io::ReaderStream;
+
+#[derive(Clone)]
+pub struct AppState {
+    pub config: GraphchanConfig,
+    pub identity: IdentitySummary,
+    pub database: Database,
+    pub network: NetworkHandle,
+}
+
+pub async fn serve_http(
+    config: GraphchanConfig,
+    identity: IdentitySummary,
+    database: Database,
+    network: NetworkHandle,
+) -> Result<()> {
+    let state = AppState {
+        config: config.clone(),
+        identity,
+        database,
+        network,
+    };
+
+    let router = Router::new()
+        .route("/health", get(health_handler))
+        .route("/threads", get(list_threads).post(create_thread))
+        .route("/threads/:id", get(get_thread))
+        .route("/threads/:id/posts", post(create_post))
+        .route(
+            "/posts/:id/files",
+            get(list_post_files).post(upload_post_file),
+        )
+        .route("/files/:id", get(download_file))
+        .route("/peers", get(list_peers).post(add_peer))
+        .route("/peers/self", get(get_self_peer))
+        .with_state(state.clone());
+
+    let addr = SocketAddr::from(([0, 0, 0, 0], config.api_port));
+    let listener = TcpListener::bind(addr).await?;
+    tracing::info!(?addr, "HTTP server listening");
+    axum::serve(listener, router.into_make_service()).await?;
+    Ok(())
+}
+
+async fn health_handler(State(state): State<AppState>) -> Json<HealthResponse> {
+    Json(HealthResponse {
+        status: "ok",
+        version: env!("CARGO_PKG_VERSION"),
+        api_port: state.config.api_port,
+        identity: IdentityInfo {
+            gpg_fingerprint: state.identity.gpg_fingerprint.clone(),
+            iroh_peer_id: state.identity.iroh_peer_id.clone(),
+            friendcode: state.identity.friendcode.clone(),
+        },
+        network: NetworkInfo::from_handle(&state.network),
+    })
+}
+
+async fn list_threads(
+    State(state): State<AppState>,
+    Query(params): Query<Option<ListThreadsParams>>,
+) -> ApiResult<Vec<ThreadSummary>> {
+    let service = ThreadService::new(state.database.clone());
+    let limit = params.and_then(|p| p.limit).unwrap_or(50).min(200);
+    let threads = service.list_threads(limit)?;
+    Ok(Json(threads))
+}
+
+async fn get_thread(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<ThreadDetails> {
+    let service = ThreadService::new(state.database.clone());
+    match service.get_thread(&id)? {
+        Some(thread) => Ok(Json(thread)),
+        None => Err(ApiError::NotFound(format!("thread {id} not found"))),
+    }
+}
+
+async fn create_thread(
+    State(state): State<AppState>,
+    Json(payload): Json<CreateThreadInput>,
+) -> Result<(StatusCode, Json<ThreadDetails>), ApiError> {
+    let service = ThreadService::new(state.database.clone());
+    match service.create_thread(payload) {
+        Ok(thread) => {
+            if let Err(err) = state.network.publish_thread_snapshot(thread.clone()).await {
+                tracing::warn!(error = ?err, thread_id = %thread.thread.id, "failed to publish thread update over network");
+            }
+            Ok((StatusCode::CREATED, Json(thread)))
+        }
+        Err(err) if err.to_string().contains("may not be empty") => {
+            Err(ApiError::BadRequest(err.to_string()))
+        }
+        Err(err) => Err(ApiError::Internal(err)),
+    }
+}
+
+async fn create_post(
+    State(state): State<AppState>,
+    Path(thread_id): Path<String>,
+    Json(mut payload): Json<CreatePostInput>,
+) -> Result<(StatusCode, Json<PostResponse>), ApiError> {
+    let service = ThreadService::new(state.database.clone());
+    payload.thread_id = thread_id.clone();
+    match service.create_post(payload) {
+        Ok(post) => {
+            let outbound = post.clone();
+            if let Err(err) = state.network.publish_post_update(outbound).await {
+                tracing::warn!(
+                    error = ?err,
+                    thread_id = %post.thread_id,
+                    post_id = %post.id,
+                    "failed to publish post update over network"
+                );
+            }
+            Ok((StatusCode::CREATED, Json(PostResponse { post })))
+        }
+        Err(err) if err.to_string().contains("thread not found") => {
+            Err(ApiError::NotFound(format!("thread {thread_id} not found")))
+        }
+        Err(err) if err.to_string().contains("may not be empty") => {
+            Err(ApiError::BadRequest(err.to_string()))
+        }
+        Err(err) => Err(ApiError::Internal(err)),
+    }
+}
+
+async fn list_post_files(
+    State(state): State<AppState>,
+    Path(post_id): Path<String>,
+) -> ApiResult<Vec<FileResponse>> {
+    let service = FileService::new(state.database.clone(), state.config.paths.clone());
+    let files = service.list_post_files(&post_id)?;
+    let responses = files.into_iter().map(map_file_view).collect();
+    Ok(Json(responses))
+}
+
+async fn upload_post_file(
+    State(state): State<AppState>,
+    Path(post_id): Path<String>,
+    mut multipart: Multipart,
+) -> Result<(StatusCode, Json<FileResponse>), ApiError> {
+    let service = FileService::new(state.database.clone(), state.config.paths.clone());
+    let mut file_bytes = None;
+    let mut filename = None;
+    let mut mime = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|err| ApiError::Internal(anyhow::Error::new(err)))?
+    {
+        if let Some(name) = field.name() {
+            if name == "file" {
+                filename = field.file_name().map(|s| s.to_string());
+                mime = field.content_type().map(|s| s.to_string());
+                let bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|err| ApiError::Internal(anyhow::Error::new(err)))?;
+                file_bytes = Some(bytes.to_vec());
+                break;
+            }
+        }
+    }
+
+    let data = file_bytes.ok_or_else(|| ApiError::BadRequest("missing file field".into()))?;
+    match service
+        .save_post_file(SaveFileInput {
+            post_id: post_id.clone(),
+            original_name: filename,
+            mime,
+            data,
+        })
+        .await
+    {
+        Ok(file_view) => {
+            let announcement = FileAnnouncement {
+                id: file_view.id.clone(),
+                post_id: file_view.post_id.clone(),
+                original_name: file_view.original_name.clone(),
+                mime: file_view.mime.clone(),
+                size_bytes: file_view.size_bytes,
+                checksum: file_view.checksum.clone(),
+                blob_id: file_view.blob_id.clone(),
+            };
+            if let Err(err) = state.network.publish_file_available(announcement).await {
+                tracing::warn!(
+                    error = ?err,
+                    post_id = %post_id,
+                    file_id = %file_view.id,
+                    "failed to publish file availability over network"
+                );
+            }
+            Ok((StatusCode::CREATED, Json(map_file_view(file_view))))
+        }
+        Err(err) if err.to_string().contains("post not found") => {
+            Err(ApiError::NotFound(format!("post {post_id} not found")))
+        }
+        Err(err) => Err(ApiError::Internal(err)),
+    }
+}
+
+async fn download_file(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    let service = FileService::new(state.database.clone(), state.config.paths.clone());
+    let Some(download) = service
+        .prepare_download(&id)
+        .await
+        .map_err(ApiError::Internal)?
+    else {
+        return Err(ApiError::NotFound(format!("file {id} not found")));
+    };
+
+    let file = TokioFile::open(&download.absolute_path)
+        .await
+        .with_context(|| format!("unable to open {}", download.absolute_path.display()))
+        .map_err(ApiError::Internal)?;
+    let stream = ReaderStream::new(file);
+    let body = Body::from_stream(stream);
+    let mut response = Response::new(body);
+    let headers = response.headers_mut();
+
+    let content_type = download
+        .metadata
+        .mime
+        .clone()
+        .unwrap_or_else(|| "application/octet-stream".into());
+    if let Ok(value) = HeaderValue::from_str(&content_type) {
+        headers.insert(CONTENT_TYPE, value);
+    }
+
+    if let Some(size) = download.metadata.size_bytes {
+        if let Ok(value) = HeaderValue::from_str(&size.to_string()) {
+            headers.insert(CONTENT_LENGTH, value);
+        }
+    }
+
+    if let Some(name) = download.metadata.original_name.clone() {
+        let safe = name.replace('"', "\"");
+        let value = format!("attachment; filename=\"{}\"", safe);
+        if let Ok(value) = HeaderValue::from_str(&value) {
+            headers.insert(CONTENT_DISPOSITION, value);
+        }
+    }
+
+    Ok(response)
+}
+
+async fn list_peers(State(state): State<AppState>) -> ApiResult<Vec<PeerView>> {
+    let service = PeerService::new(state.database.clone());
+    let peers = service.list_peers()?;
+    Ok(Json(peers))
+}
+
+async fn get_self_peer(State(state): State<AppState>) -> ApiResult<Option<PeerView>> {
+    let service = PeerService::new(state.database.clone());
+    let peer = service.get_local_peer()?;
+    Ok(Json(peer))
+}
+
+async fn add_peer(
+    State(state): State<AppState>,
+    Json(request): Json<AddPeerRequest>,
+) -> Result<(StatusCode, Json<PeerView>), ApiError> {
+    let service = PeerService::new(state.database.clone());
+    let friendcode = request.friendcode.trim();
+    match service.register_friendcode(friendcode) {
+        Ok(peer) => {
+            if let Ok(payload) = decode_friendcode(friendcode) {
+                if let Err(err) = state.network.connect_friendcode(&payload).await {
+                    tracing::warn!(error = ?err, "failed to connect to peer after registering friendcode");
+                }
+            }
+            Ok((StatusCode::CREATED, Json(peer)))
+        }
+        Err(err) if err.to_string().contains("decode friendcode") => {
+            Err(ApiError::BadRequest("invalid friendcode".into()))
+        }
+        Err(err) => Err(ApiError::Internal(err)),
+    }
+}
+
+#[derive(Serialize)]
+struct HealthResponse {
+    status: &'static str,
+    version: &'static str,
+    api_port: u16,
+    identity: IdentityInfo,
+    network: NetworkInfo,
+}
+
+#[derive(Serialize)]
+struct IdentityInfo {
+    gpg_fingerprint: String,
+    iroh_peer_id: String,
+    friendcode: String,
+}
+
+#[derive(Serialize)]
+struct NetworkInfo {
+    peer_id: String,
+    addresses: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListThreadsParams {
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct PostResponse {
+    post: crate::threading::PostView,
+}
+
+#[derive(Debug, Serialize)]
+struct FileResponse {
+    id: String,
+    post_id: String,
+    original_name: Option<String>,
+    mime: Option<String>,
+    size_bytes: Option<i64>,
+    checksum: Option<String>,
+    blob_id: Option<String>,
+    path: String,
+    download_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AddPeerRequest {
+    friendcode: String,
+}
+
+type ApiResult<T> = Result<Json<T>, ApiError>;
+
+#[derive(Debug)]
+pub enum ApiError {
+    BadRequest(String),
+    NotFound(String),
+    Internal(anyhow::Error),
+}
+
+impl ApiError {
+    fn into_response_parts(self) -> (StatusCode, ErrorResponse) {
+        match self {
+            ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, ErrorResponse { message: msg }),
+            ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, ErrorResponse { message: msg }),
+            ApiError::Internal(err) => {
+                tracing::error!(error = ?err, "internal server error");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ErrorResponse {
+                        message: "internal server error".into(),
+                    },
+                )
+            }
+        }
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let (status, body) = self.into_response_parts();
+        (status, Json(body)).into_response()
+    }
+}
+
+impl From<anyhow::Error> for ApiError {
+    fn from(err: anyhow::Error) -> Self {
+        ApiError::Internal(err)
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ErrorResponse {
+    message: String,
+}
+
+fn map_file_view(file: FileView) -> FileResponse {
+    FileResponse {
+        id: file.id.clone(),
+        post_id: file.post_id.clone(),
+        original_name: file.original_name.clone(),
+        mime: file.mime.clone(),
+        size_bytes: file.size_bytes,
+        checksum: file.checksum.clone(),
+        blob_id: file.blob_id.clone(),
+        path: file.path.clone(),
+        download_url: format!("/files/{}", file.id),
+    }
+}
+
+impl NetworkInfo {
+    fn from_handle(handle: &NetworkHandle) -> Self {
+        let addr = handle.current_addr();
+        let mut addresses = Vec::new();
+        for ip in addr.ip_addrs() {
+            addresses.push(ip.to_string());
+        }
+        for relay in addr.relay_urls() {
+            addresses.push(relay.to_string());
+        }
+        Self {
+            peer_id: handle.peer_id(),
+            addresses,
+        }
+    }
+}

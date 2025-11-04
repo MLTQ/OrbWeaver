@@ -1,0 +1,28 @@
+[package]
+name = "graphchan_backend"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+rusqlite = { version = "0.30", features = ["bundled"] }
+thiserror = "1"
+uuid = { version = "1", features = ["v4"] }
+axum = { version = "0.7", features = ["macros", "json", "multipart"] }
+base64 = "0.22"
+iroh-base = { git = "https://github.com/n0-computer/iroh", tag = "v0.94.0", package = "iroh-base", features = ["key"] }
+iroh = { git = "https://github.com/n0-computer/iroh", tag = "v0.94.0" }
+iroh-relay = { git = "https://github.com/n0-computer/iroh", tag = "v0.94.0", package = "iroh-relay" }
+rand = { version = "0.9", features = ["std"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+tokio-util = { version = "0.7", features = ["io"] }
+blake3 = "1"
+
+[dev-dependencies]
+tempfile = "3"
+reqwest = { version = "0.12", features = ["json", "multipart"] }
