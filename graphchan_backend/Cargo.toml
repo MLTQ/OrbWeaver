@@ -15,6 +15,8 @@ thiserror = "1"
 uuid = { version = "1", features = ["v4"] }
 axum = { version = "0.7", features = ["macros", "json", "multipart"] }
 base64 = "0.22"
+clap = { version = "4.5", features = ["derive"] }
+shell-words = "1.1"
 iroh-base = { git = "https://github.com/n0-computer/iroh", tag = "v0.94.0", package = "iroh-base", features = ["key"] }
 iroh = { git = "https://github.com/n0-computer/iroh", tag = "v0.94.0" }
 iroh-relay = { git = "https://github.com/n0-computer/iroh", tag = "v0.94.0", package = "iroh-relay" }

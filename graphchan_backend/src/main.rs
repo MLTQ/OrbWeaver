@@ -1,19 +1,36 @@
 use anyhow::Result;
+use clap::{Parser, Subcommand};
 use graphchan_backend::bootstrap;
 use graphchan_backend::cli;
 use graphchan_backend::config::GraphchanConfig;
 use graphchan_backend::network;
 
+#[derive(Parser)]
+#[command(author, version, about = "Graphchan backend daemon and CLI")]
+struct Args {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Run the HTTP server (Axum) for REST/API access
+    Serve,
+    /// Start the interactive CLI for friendcodes, threads, and posts
+    Cli,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
+
+    let args = Args::parse();
 
     let config = GraphchanConfig::from_env()?;
     let bootstrap = bootstrap::initialize(&config).await?;
     let network =
         network::NetworkHandle::start(&config.paths, &config.network, bootstrap.database.clone())
             .await?;
-    let identity = bootstrap.identity.clone();
     tracing::info!(
         directories_created = ?bootstrap.directories_created,
         database_initialized = bootstrap.database_initialized,
@@ -22,7 +39,26 @@ async fn main() -> Result<()> {
         "bootstrap complete"
     );
 
-    cli::run(config, identity, bootstrap.database, network).await
+    match args.command.unwrap_or(Command::Cli) {
+        Command::Serve => {
+            cli::run_server(
+                config,
+                bootstrap.identity.clone(),
+                bootstrap.database.clone(),
+                network,
+            )
+            .await
+        }
+        Command::Cli => {
+            cli::run_cli(
+                config,
+                bootstrap.identity.clone(),
+                bootstrap.database.clone(),
+                network,
+            )
+            .await
+        }
+    }
 }
 
 fn init_tracing() {

@@ -33,7 +33,7 @@ All paths are resolved via `GraphchanPaths`, derived from `current_exe().parent(
 - `peers`: Wraps friendcode registration, maintains peer metadata, and synthesises the local peer record on demand.
 - `network`: Starts the Iroh endpoint, tracks live connections, serialises outbound gossip events, and exposes helpers for dialing friendcodes. Inbound event processing remains a TODO.
 - `api`: Defines the Axum router and handlers for health, thread/post/file operations, and peer management. Emits networking events after local mutations.
-- `cli`: Currently runs the HTTP server; future subcommands (e.g., key export) will attach here.
+- `cli`: Hosts the interactive shell and the HTTP server entrypoint. The shell lets operators manage friendcodes, inspect threads, and post messages without a REST client.
 - `utils`: Houses shared helpers such as time utilities.
 
 ## Identity & Provisioning Flow

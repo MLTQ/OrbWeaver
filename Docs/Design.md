@@ -67,6 +67,7 @@ Remote announcements arriving over gossip create or update file rows under `file
 - Unit tests cover repository CRUD, thread/post flows, peer registration, and file persistence (using in-memory SQLite + temporary directories).
 - The ignored integration harness in `tests/rest_api.rs` is reserved for end-to-end HTTP scenarios once networking behaviours stabilize.
 - Recommended dev commands: `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, `cargo test --all`, and `cargo run --bin graphchan_backend`.
+- The executable now ships an interactive CLI (`graphchan_backend cli`) that prints your friendcode, lets you add peers, browse threads, post messages, and poll for new activity without hitting the REST API.
 
 ## Upcoming Work
 Refer to `Docs/ImplementationPlan.md` for the detailed roadmap. The high-priority items are:

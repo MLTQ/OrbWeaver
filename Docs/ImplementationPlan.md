@@ -58,6 +58,7 @@
 - Added `NetworkHandle` that binds Iroh endpoint (custom relay support), maintains connection registry, accepts incoming connections, and attempts friendcode dialing.
 - Gossip layer (`network/events.rs`) now serializes thread/post/file payloads, supports targeted direct sends, and keeps connection metadata so broadcasts and requests share the same worker.
 - Ingest worker (`network/ingest.rs`) applies inbound snapshots/posts, tracks missing blobs, issues `FileRequest`s, and stores returned `FileChunk`s under `files/downloads/` with checksum verification.
+- Added an interactive CLI (`graphchan_backend cli`) to manage friendcodes, inspect threads, and post messages without a REST client.
 - Added documentation (`Docs/Architecture.md`, `Docs/NetworkingPlan.md`, `Docs/ImplementationPlan.md`) capturing current design decisions and roadmap.
 - Unit tests (`cargo test`) pass; REST integration harness exists (ignored pending network sync).
 

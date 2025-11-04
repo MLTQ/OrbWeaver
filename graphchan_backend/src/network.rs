@@ -165,6 +165,15 @@ impl NetworkHandle {
         Ok(())
     }
 
+    /// Returns the list of currently connected peer IDs.
+    pub async fn connected_peer_ids(&self) -> Vec<String> {
+        let guard = self.connections.read().await;
+        guard
+            .iter()
+            .filter_map(|entry| entry.peer_id.clone())
+            .collect()
+    }
+
     pub async fn connect_friendcode(&self, payload: &FriendCodePayload) -> Result<()> {
         let addr = build_endpoint_addr(payload)?;
         match self.endpoint.connect(addr.clone(), GRAPHCHAN_ALPN).await {
