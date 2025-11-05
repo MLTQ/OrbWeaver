@@ -87,10 +87,10 @@ async fn health_handler(State(state): State<AppState>) -> Json<HealthResponse> {
 
 async fn list_threads(
     State(state): State<AppState>,
-    Query(params): Query<Option<ListThreadsParams>>,
+    Query(params): Query<ListThreadsParams>,
 ) -> ApiResult<Vec<ThreadSummary>> {
     let service = ThreadService::new(state.database.clone());
-    let limit = params.and_then(|p| p.limit).unwrap_or(50).min(200);
+    let limit = params.limit.unwrap_or(50).min(200);
     let threads = service.list_threads(limit)?;
     Ok(Json(threads))
 }
@@ -158,7 +158,7 @@ async fn create_post(
 async fn list_post_files(
     State(state): State<AppState>,
     Path(post_id): Path<String>,
-    Query(params): Query<Option<ListFilesParams>>,
+    Query(params): Query<ListFilesParams>,
 ) -> ApiResult<Vec<FileResponse>> {
     let service = FileService::new(
         state.database.clone(),
@@ -167,13 +167,11 @@ async fn list_post_files(
         state.blobs.clone(),
     );
     let mut files = service.list_post_files(&post_id)?;
-    if let Some(filters) = params {
-        if filters.missing_only.unwrap_or(false) {
-            files.retain(|f| !f.present.unwrap_or(true));
-        }
-        if let Some(mime_filter) = filters.mime {
-            files.retain(|f| f.mime.as_deref() == Some(mime_filter.as_str()));
-        }
+    if params.missing_only.unwrap_or(false) {
+        files.retain(|f| !f.present.unwrap_or(true));
+    }
+    if let Some(mime_filter) = params.mime {
+        files.retain(|f| f.mime.as_deref() == Some(mime_filter.as_str()));
     }
     let responses = files.into_iter().map(map_file_view).collect();
     Ok(Json(responses))

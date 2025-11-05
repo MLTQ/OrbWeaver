@@ -1,15 +1,19 @@
-use crate::config::NetworkConfig;
 use crate::threading::{PostView, ThreadDetails};
 use anyhow::Result;
-use iroh::endpoint::{Connection, Endpoint, RecvStream};
+use bytes::Bytes;
+use futures_util::StreamExt;
 use iroh_blobs::ticket::BlobTicket;
+use iroh_gossip::api::GossipTopic;
+use iroh_gossip::net::Gossip;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{
     mpsc::{Receiver, Sender},
     RwLock,
 };
-use uuid::Uuid;
+
+type TopicId = iroh_gossip::proto::TopicId;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventEnvelope {
@@ -61,53 +65,31 @@ pub enum NetworkEvent {
 }
 
 #[derive(Debug, Clone)]
-pub struct ConnectionEntry {
-    pub id: Uuid,
-    pub connection: Arc<Connection>,
-    pub peer_id: Option<String>,
-}
-
-#[derive(Debug, Clone)]
 pub struct InboundGossip {
     pub peer_id: Option<String>,
     pub payload: EventPayload,
 }
 
 pub async fn run_event_loop(
-    _endpoint: Arc<Endpoint>,
-    config: NetworkConfig,
-    connections: Arc<RwLock<Vec<ConnectionEntry>>>,
+    gossip: Gossip,
+    topics: Arc<RwLock<HashMap<String, GossipTopic>>>,
     mut rx: Receiver<NetworkEvent>,
 ) {
-    if let Some(relay) = config.relay_url.as_deref() {
-        tracing::info!(relay, "network event loop starting with relay");
-    } else {
-        tracing::info!("network event loop starting without relay override");
-    }
+    tracing::info!("network event loop starting with iroh-gossip");
 
     while let Some(event) = rx.recv().await {
         match event {
             NetworkEvent::Broadcast(payload) => {
-                let envelope = envelope_for(payload);
-                if let Err(err) = broadcast_envelope(&connections, envelope).await {
-                    tracing::warn!(error = ?err, "failed to broadcast event");
+                let topic_name = topic_for_payload(&payload);
+                if let Err(err) = broadcast_to_topic(&gossip, &topics, &topic_name, payload).await {
+                    tracing::warn!(error = ?err, topic = %topic_name, "failed to broadcast event");
                 }
             }
-            NetworkEvent::Direct { peer_id, payload } => {
-                let envelope = envelope_for(payload);
-                let targets = collect_targets_by_peer(&connections, &peer_id).await;
-                if targets.is_empty() {
-                    tracing::debug!(
-                        peer_id,
-                        "no active connection for direct event; broadcasting instead"
-                    );
-                    if let Err(err) = broadcast_envelope(&connections, envelope).await {
-                        tracing::warn!(error = ?err, "failed to broadcast fallback event");
-                    }
-                    continue;
-                }
-                if let Err(err) = send_envelope_to_targets(targets, &connections, envelope).await {
-                    tracing::warn!(error = ?err, peer_id, "failed to deliver direct event");
+            NetworkEvent::Direct { peer_id: _, payload } => {
+                // iroh-gossip doesn't support direct messaging, so broadcast instead
+                let topic_name = topic_for_payload(&payload);
+                if let Err(err) = broadcast_to_topic(&gossip, &topics, &topic_name, payload).await {
+                    tracing::warn!(error = ?err, topic = %topic_name, "failed to broadcast direct event");
                 }
             }
         }
@@ -116,51 +98,86 @@ pub async fn run_event_loop(
     tracing::info!("network event loop shutting down");
 }
 
-pub async fn register_connection(
-    connection: Connection,
-    connections: Arc<RwLock<Vec<ConnectionEntry>>>,
-    inbound: Sender<InboundGossip>,
-) {
-    let connection = Arc::new(connection);
-    let entry_id = Uuid::new_v4();
-    let peer_id = connection.remote_id().ok().map(|id| id.to_string());
-    {
-        let mut guard = connections.write().await;
-        guard.push(ConnectionEntry {
-            id: entry_id,
-            connection: connection.clone(),
-            peer_id: peer_id.clone(),
-        });
+async fn broadcast_to_topic(
+    gossip: &Gossip,
+    topics: &Arc<RwLock<HashMap<String, GossipTopic>>>,
+    topic_name: &str,
+    payload: EventPayload,
+) -> Result<()> {
+    let topic_id = TopicId::from_bytes(*blake3::hash(topic_name.as_bytes()).as_bytes());
+    
+    // Ensure we're subscribed to this topic and get a mutable reference
+    let guard = topics.read().await;
+    let needs_subscribe = !guard.contains_key(topic_name);
+    drop(guard);
+    
+    if needs_subscribe {
+        let mut guard = topics.write().await;
+        if !guard.contains_key(topic_name) {
+            let topic = gossip.subscribe(topic_id, vec![]).await?;
+            guard.insert(topic_name.to_string(), topic);
+            tracing::debug!(topic = %topic_name, "subscribed to new topic");
+        }
     }
 
-    let remote = peer_id.clone().unwrap_or_else(|| "unknown".into());
-    tracing::info!(%remote, "iroh connection established");
-
-    let reader_connection = connection.clone();
-    let reader_inbound = inbound.clone();
-    let reader_remote = peer_id.clone();
-    tokio::spawn(async move {
-        if let Err(err) =
-            pump_inbound_streams(reader_connection, reader_inbound, reader_remote).await
-        {
-            tracing::warn!(error = ?err, "failed to read inbound gossip stream");
-        }
-    });
-
-    tokio::spawn(async move {
-        let _ = connection.closed().await;
-        tracing::info!(%remote, "iroh connection closed");
-        let mut guard = connections.write().await;
-        guard.retain(|entry| entry.id != entry_id);
-    });
+    let envelope = envelope_for(payload);
+    let bytes = serde_json::to_vec(&envelope)?;
+    
+    // Get mutable access to broadcast
+    let mut guard = topics.write().await;
+    if let Some(topic) = guard.get_mut(topic_name) {
+        topic.broadcast(Bytes::from(bytes)).await?;
+    }
+    
+    Ok(())
 }
 
-async fn send_event(connection: &Connection, bytes: &[u8]) -> Result<()> {
-    let mut stream = connection.open_uni().await?;
-    let len = bytes.len() as u32;
-    stream.write_all(&len.to_be_bytes()).await?;
-    stream.write_all(bytes).await?;
-    stream.finish()?;
+pub async fn run_gossip_receiver_loop(
+    gossip: Gossip,
+    inbound_tx: Sender<InboundGossip>,
+) -> Result<()> {
+    // Subscribe to a global topic for general updates
+    let global_topic_id = TopicId::from_bytes(*blake3::hash(b"graphchan-global").as_bytes());
+    let mut receiver = gossip.subscribe(global_topic_id, vec![]).await?;
+    
+    tracing::info!("gossip receiver loop started");
+    
+    while let Some(event_result) = receiver.next().await {
+        match event_result {
+            Ok(iroh_gossip::api::Event::Received(message)) => {
+                match serde_json::from_slice::<EventEnvelope>(&message.content) {
+                    Ok(envelope) => {
+                        let peer_id = Some(message.delivered_from.to_string());
+                        if let Err(err) = inbound_tx.send(InboundGossip {
+                            peer_id,
+                            payload: envelope.payload,
+                        }).await {
+                            tracing::warn!(error = ?err, "failed to forward inbound gossip");
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = ?err, "failed to decode gossip envelope");
+                    }
+                }
+            }
+            Ok(iroh_gossip::api::Event::NeighborUp(peer_id)) => {
+                tracing::debug!(peer = %peer_id.fmt_short(), "gossip neighbor up");
+            }
+            Ok(iroh_gossip::api::Event::NeighborDown(peer_id)) => {
+                tracing::debug!(peer = %peer_id.fmt_short(), "gossip neighbor down");
+            }
+            Ok(iroh_gossip::api::Event::Lagged) => {
+                tracing::warn!("gossip receiver lagged, some messages may have been dropped");
+            }
+            Err(err) => {
+                tracing::error!(error = ?err, "gossip receiver error");
+                break;
+            }
+        }
+    }
+    
+    tracing::info!("gossip receiver loop ended");
     Ok(())
 }
 
@@ -185,102 +202,4 @@ fn topic_for_payload(payload: &EventPayload) -> String {
         }
         EventPayload::FileChunk(chunk) => format!("file-chunk:{}", chunk.file_id.clone()),
     }
-}
-
-async fn send_envelope_to_targets(
-    targets: Vec<(Uuid, Arc<Connection>)>,
-    connections: &Arc<RwLock<Vec<ConnectionEntry>>>,
-    envelope: EventEnvelope,
-) -> Result<()> {
-    let bytes = serde_json::to_vec(&envelope)?;
-    let mut failed = Vec::new();
-    for (id, connection) in targets {
-        if let Err(err) = send_event(&connection, &bytes).await {
-            let remote = connection
-                .remote_id()
-                .map(|id| id.to_string())
-                .unwrap_or_else(|_| "unknown".into());
-            tracing::warn!(error = ?err, %remote, "failed to deliver network event");
-            failed.push(id);
-        }
-    }
-
-    if !failed.is_empty() {
-        let mut guard = connections.write().await;
-        guard.retain(|entry| !failed.contains(&entry.id));
-    }
-    Ok(())
-}
-
-async fn broadcast_envelope(
-    connections: &Arc<RwLock<Vec<ConnectionEntry>>>,
-    envelope: EventEnvelope,
-) -> Result<()> {
-    let targets = collect_all_targets(connections).await;
-    send_envelope_to_targets(targets, connections, envelope).await
-}
-
-async fn collect_all_targets(
-    connections: &Arc<RwLock<Vec<ConnectionEntry>>>,
-) -> Vec<(Uuid, Arc<Connection>)> {
-    let guard = connections.read().await;
-    guard
-        .iter()
-        .map(|entry| (entry.id, entry.connection.clone()))
-        .collect()
-}
-
-async fn collect_targets_by_peer(
-    connections: &Arc<RwLock<Vec<ConnectionEntry>>>,
-    peer_id: &str,
-) -> Vec<(Uuid, Arc<Connection>)> {
-    let guard = connections.read().await;
-    guard
-        .iter()
-        .filter(|entry| entry.peer_id.as_deref() == Some(peer_id))
-        .map(|entry| (entry.id, entry.connection.clone()))
-        .collect()
-}
-
-async fn pump_inbound_streams(
-    connection: Arc<Connection>,
-    inbound: Sender<InboundGossip>,
-    peer_id: Option<String>,
-) -> Result<()> {
-    loop {
-        match connection.accept_uni().await {
-            Ok(mut stream) => match receive_event(&mut stream).await {
-                Ok(payload) => {
-                    if inbound
-                        .send(InboundGossip {
-                            peer_id: peer_id.clone(),
-                            payload,
-                        })
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-                Err(err) => {
-                    tracing::warn!(error = ?err, "failed to decode inbound gossip payload");
-                }
-            },
-            Err(err) => {
-                tracing::debug!(error = ?err, "connection accept_uni failed, stopping reader");
-                break;
-            }
-        }
-    }
-    Ok(())
-}
-
-async fn receive_event(stream: &mut RecvStream) -> Result<EventPayload> {
-    let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf).await?;
-    let len = u32::from_be_bytes(len_buf) as usize;
-    let mut payload = vec![0u8; len];
-    stream.read_exact(&mut payload).await?;
-    let envelope: EventEnvelope = serde_json::from_slice(&payload)?;
-    Ok(envelope.payload)
 }

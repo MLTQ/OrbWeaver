@@ -1214,6 +1214,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "futures-util",
  "infer",
  "iroh",
  "iroh-base",

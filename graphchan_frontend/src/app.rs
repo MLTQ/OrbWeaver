@@ -397,10 +397,13 @@ impl GraphchanApp {
             if self.threads.is_empty() && !self.threads_loading {
                 ui.label("No threads yet. Create one to get started.");
             }
+            
+            let mut thread_to_open: Option<ThreadSummary> = None;
+            
             for thread in &self.threads {
                 egui::Frame::group(ui.style())
                     .fill(ui.visuals().extreme_bg_color)
-                    .margin(egui::vec2(12.0, 8.0))
+                    .inner_margin(egui::vec2(12.0, 8.0))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             let title = if thread.title.is_empty() {
@@ -409,7 +412,7 @@ impl GraphchanApp {
                                 &thread.title
                             };
                             if ui.button(RichText::new(title).strong()).clicked() {
-                                self.open_thread(thread.clone());
+                                thread_to_open = Some(thread.clone());
                             }
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
@@ -422,6 +425,10 @@ impl GraphchanApp {
                             ui.label(format!("Created by {peer}"));
                         }
                     });
+            }
+            
+            if let Some(thread) = thread_to_open {
+                self.open_thread(thread);
             }
         });
     }
@@ -445,6 +452,9 @@ impl GraphchanApp {
 
     fn render_thread_view(&mut self, ui: &mut egui::Ui, state: &mut ThreadState) -> bool {
         let mut go_back = false;
+        let mut should_retry = false;
+        let mut should_create_post = false;
+        
         ui.horizontal(|ui| {
             if ui.button("← Back to catalog").clicked() {
                 go_back = true;
@@ -461,21 +471,32 @@ impl GraphchanApp {
         if let Some(err) = &state.error {
             ui.colored_label(Color32::LIGHT_RED, err);
             if ui.button("Retry").clicked() {
+                should_retry = true;
+            }
+            if should_retry {
                 state.is_loading = true;
                 state.error = None;
-                self.spawn_load_thread(&state.summary.id);
+                let thread_id = state.summary.id.clone();
+                self.spawn_load_thread(&thread_id);
             }
             return go_back;
         }
 
         if let Some(details) = &state.details {
+            let posts_clone = details.posts.clone();
+            let thread_id = state.summary.id.clone();
+            let attachments = &state.attachments;
+            let attachments_loading = &state.attachments_loading;
+            let attachments_errors = &state.attachments_errors;
+            let api_base = self.api.base_url().to_string();
+            
             egui::ScrollArea::vertical()
                 .id_source("thread-posts")
                 .show(ui, |ui| {
-                    for post in &details.posts {
+                    for post in &posts_clone {
                         egui::Frame::group(ui.style())
                             .fill(ui.visuals().extreme_bg_color)
-                            .margin(egui::vec2(12.0, 8.0))
+                            .inner_margin(egui::vec2(12.0, 8.0))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.label(RichText::new(&post.id).monospace());
@@ -499,8 +520,39 @@ impl GraphchanApp {
                                     ));
                                 }
                                 ui.add_space(6.0);
-                                self.render_attachments(ui, state, post);
+                                
+                                // Render attachments inline
+                                if let Some(err) = attachments_errors.get(&post.id) {
+                                    ui.colored_label(Color32::LIGHT_RED, err);
+                                } else if attachments_loading.contains(&post.id) {
+                                    ui.horizontal(|ui| {
+                                        ui.add(egui::Spinner::new());
+                                        ui.label("Loading attachments…");
+                                    });
+                                } else if let Some(files) = attachments.get(&post.id) {
+                                    if !files.is_empty() {
+                                        ui.label(RichText::new("Attachments").strong());
+                                        for file in files {
+                                            let name = file.original_name.as_deref().unwrap_or("attachment");
+                                            let label = if file.present {
+                                                name.to_string()
+                                            } else {
+                                                format!("{name} (remote)")
+                                            };
+                                            let url = format!("{}/files/{}", api_base, file.id);
+                                            ui.hyperlink_to(label, url);
+                                        }
+                                    }
+                                }
                             });
+                            
+                        // Queue attachment loading if needed
+                        if !state.attachments.contains_key(&post.id)
+                            && !state.attachments_loading.contains(&post.id)
+                            && !state.attachments_errors.contains_key(&post.id)
+                        {
+                            self.spawn_load_attachments_for_post(&thread_id, &post.id);
+                        }
                     }
                 });
         }
@@ -519,7 +571,7 @@ impl GraphchanApp {
                 if state.new_post_sending {
                     ui.add(egui::Spinner::new());
                 } else if ui.button("Post").clicked() {
-                    self.spawn_create_post(state);
+                    should_create_post = true;
                 }
                 if ui.button("Cancel").clicked() {
                     state.new_post_body.clear();
@@ -527,60 +579,24 @@ impl GraphchanApp {
                 }
             });
         });
+        
+        if should_create_post {
+            self.spawn_create_post(state);
+        }
 
         go_back
-    }
-
-    fn render_attachments(&mut self, ui: &mut egui::Ui, state: &mut ThreadState, post: &PostView) {
-        if !state.attachments.contains_key(&post.id)
-            && !state.attachments_loading.contains(&post.id)
-            && !state.attachments_errors.contains_key(&post.id)
-        {
-            self.spawn_load_attachments_for_post(&state.summary.id, &post.id);
-        }
-
-        if let Some(err) = state.attachments_errors.get(&post.id) {
-            ui.colored_label(Color32::LIGHT_RED, err);
-            if ui.small_button("Retry attachments").clicked() {
-                state.attachments_errors.remove(&post.id);
-                self.spawn_load_attachments_for_post(&state.summary.id, &post.id);
-            }
-            return;
-        }
-
-        if state.attachments_loading.contains(&post.id) {
-            ui.horizontal(|ui| {
-                ui.add(egui::Spinner::new());
-                ui.label("Loading attachments…");
-            });
-            return;
-        }
-
-        if let Some(files) = state.attachments.get(&post.id) {
-            if files.is_empty() {
-                return;
-            }
-            ui.label(RichText::new("Attachments").strong());
-            for file in files {
-                let name = file.original_name.as_deref().unwrap_or("attachment");
-                let label = if file.present {
-                    name.to_string()
-                } else {
-                    format!("{name} (remote)")
-                };
-                let url = self.api.download_url(&file.id);
-                ui.hyperlink_to(label, url);
-            }
-        }
     }
 
     fn render_create_thread_dialog(&mut self, ctx: &Context) {
         if !self.show_create_thread {
             return;
         }
-        let mut open = self.show_create_thread;
+        
+        let mut should_close = false;
+        let mut should_submit = false;
+        
         egui::Window::new("Create Thread")
-            .open(&mut open)
+            .open(&mut self.show_create_thread)
             .default_width(400.0)
             .anchor(Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
@@ -601,24 +617,33 @@ impl GraphchanApp {
                     if self.create_thread.submitting {
                         ui.add(egui::Spinner::new());
                     } else if ui.button("Create").clicked() {
-                        self.spawn_create_thread();
+                        should_submit = true;
                     }
                     if ui.button("Cancel").clicked() {
-                        self.show_create_thread = false;
-                        self.create_thread = CreateThreadState::default();
+                        should_close = true;
                     }
                 });
             });
-        self.show_create_thread = open;
+            
+        if should_submit {
+            self.spawn_create_thread();
+        }
+        if should_close {
+            self.show_create_thread = false;
+            self.create_thread = CreateThreadState::default();
+        }
     }
 
     fn render_import_dialog(&mut self, ctx: &Context) {
         if !self.importer.open {
             return;
         }
-        let mut open = self.importer.open;
+        
+        let mut should_close = false;
+        let mut should_import = false;
+        
         egui::Window::new("Import from 4chan")
-            .open(&mut open)
+            .open(&mut self.importer.open)
             .default_width(420.0)
             .anchor(Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
@@ -632,14 +657,20 @@ impl GraphchanApp {
                     if self.importer.importing {
                         ui.add(egui::Spinner::new());
                     } else if ui.button("Import").clicked() {
-                        self.spawn_import_fourchan();
+                        should_import = true;
                     }
                     if ui.button("Close").clicked() {
-                        open = false;
+                        should_close = true;
                     }
                 });
             });
-        self.importer.open = open;
+            
+        if should_import {
+            self.spawn_import_fourchan();
+        }
+        if should_close {
+            self.importer.open = false;
+        }
     }
 }
 
@@ -691,15 +722,56 @@ impl eframe::App for GraphchanApp {
             }
         });
 
-        egui::CentralPanel::default().show(ctx, |ui| match &mut self.view {
-            ViewState::Catalog => self.render_catalog(ui),
-            ViewState::Thread(state) => {
-                let go_back = self.render_thread_view(ui, state);
-                if go_back {
-                    self.view = ViewState::Catalog;
-                }
+        let mut go_back = false;
+        
+        // We need to extract mutable state to avoid double-borrowing self in the CentralPanel closure
+        let view_type = match &self.view {
+            ViewState::Catalog => "catalog",
+            ViewState::Thread(_) => "thread",
+        };
+        
+        if view_type == "catalog" {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                self.render_catalog(ui);
+            });
+        } else if view_type == "thread" {
+            // Extract thread state temporarily
+            let mut temp_state = if let ViewState::Thread(state) = &mut self.view {
+                std::mem::replace(state, ThreadState {
+                    summary: ThreadSummary {
+                        id: String::new(),
+                        title: String::new(),
+                        creator_peer_id: None,
+                        created_at: String::new(),
+                        pinned: false,
+                    },
+                    details: None,
+                    is_loading: false,
+                    error: None,
+                    new_post_body: String::new(),
+                    new_post_error: None,
+                    new_post_sending: false,
+                    attachments: HashMap::new(),
+                    attachments_loading: HashSet::new(),
+                    attachments_errors: HashMap::new(),
+                })
+            } else {
+                unreachable!()
+            };
+            
+            egui::CentralPanel::default().show(ctx, |ui| {
+                go_back = self.render_thread_view(ui, &mut temp_state);
+            });
+            
+            // Put it back
+            if let ViewState::Thread(state) = &mut self.view {
+                *state = temp_state;
             }
-        });
+        }
+        
+        if go_back {
+            self.view = ViewState::Catalog;
+        }
 
         self.render_create_thread_dialog(ctx);
         self.render_import_dialog(ctx);

@@ -28,6 +28,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 tokio-util = { version = "0.7", features = ["io"] }
 bytes = "1"
 blake3 = "1"
+futures-util = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
