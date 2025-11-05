@@ -7,6 +7,8 @@ use graphchan_backend::{
     threading::{CreatePostInput, CreateThreadInput},
 };
 use iroh_blobs::store::fs::FsStore;
+use iroh_blobs::ticket::BlobTicket;
+use iroh_blobs::Hash;
 use tempfile::{tempdir, TempDir};
 use tokio::time::{sleep, timeout, Duration};
 
@@ -80,14 +82,14 @@ async fn rest_roundtrip_with_file_upload() {
     let server_config = config.clone();
     let server_identity = identity.clone();
     let server_database = database.clone();
-    let blob_store = blob_store.clone();
+    let server_blob_store = blob_store.clone();
     let server = tokio::spawn(async move {
         let _ = api::serve_http(
             server_config,
             server_identity,
             server_database,
             server_network,
-            blob_store,
+            server_blob_store,
         )
         .await;
     });
@@ -157,6 +159,24 @@ async fn rest_roundtrip_with_file_upload() {
         .await
         .expect("upload json");
 
+    let ticket_value = file_resp
+        .get("ticket")
+        .and_then(|value| value.as_str())
+        .expect("ticket present")
+        .to_string();
+    let blob_id = file_resp
+        .get("blob_id")
+        .and_then(|value| value.as_str())
+        .expect("blob id");
+    let ticket = ticket_value
+        .parse::<BlobTicket>()
+        .expect("parse blob ticket");
+    assert_eq!(ticket.hash().to_hex().to_string(), blob_id);
+    assert!(blob_store
+        .has(blob_id.parse::<Hash>().expect("blob hash"))
+        .await
+        .expect("blob presence"));
+
     let file_id = file_resp
         .get("id")
         .and_then(|id| id.as_str())
@@ -212,14 +232,14 @@ async fn spawn_node(port: u16) -> TestNode {
     let server_config = config.clone();
     let server_identity = identity.clone();
     let server_database = database.clone();
-    let blob_store = blob_store.clone();
+    let server_blob_store = blob_store.clone();
     let server = tokio::spawn(async move {
         let _ = api::serve_http(
             server_config,
             server_identity,
             server_database,
             server_network,
-            blob_store,
+            server_blob_store,
         )
         .await;
     });

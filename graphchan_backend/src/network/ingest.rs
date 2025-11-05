@@ -297,3 +297,101 @@ fn apply_file_chunk(database: &Database, paths: &GraphchanPaths, chunk: FileChun
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::GraphchanPaths;
+    use crate::database::models::{PostRecord, ThreadRecord};
+    use crate::database::repositories::{PostRepository, ThreadRepository};
+    use crate::utils::now_utc_iso;
+    use iroh::SecretKey;
+    use iroh_base::EndpointAddr;
+    use iroh_blobs::{ticket::BlobTicket, BlobFormat, Hash};
+    use rusqlite::Connection;
+    use tempfile::tempdir;
+    use tokio::sync::mpsc;
+    use tokio::time::{timeout, Duration};
+
+    #[tokio::test]
+    async fn file_announcement_persists_ticket_and_requests_fetch() {
+        let temp = tempdir().expect("tempdir");
+        let paths = GraphchanPaths::from_base_dir(temp.path()).expect("paths");
+        let conn = Connection::open_in_memory().expect("db");
+        let database = Database::from_connection(conn, true);
+        database.ensure_migrations().expect("migrations");
+
+        database
+            .with_repositories(|repos| {
+                repos.threads().create(&ThreadRecord {
+                    id: "thread-1".into(),
+                    title: "T".into(),
+                    creator_peer_id: None,
+                    created_at: now_utc_iso(),
+                    pinned: false,
+                })?;
+                repos.posts().create(&PostRecord {
+                    id: "post-1".into(),
+                    thread_id: "thread-1".into(),
+                    author_peer_id: None,
+                    body: "body".into(),
+                    created_at: now_utc_iso(),
+                    updated_at: None,
+                })?;
+                Ok(())
+            })
+            .expect("seed");
+
+        let (publisher_tx, mut publisher_rx) = mpsc::channel(8);
+        let (inbound_tx, inbound_rx) = mpsc::channel(1);
+        let blob_store = FsStore::load(&paths.blobs_dir).await.expect("blob store");
+
+        let ingest_db = database.clone();
+        let ingest_paths = paths.clone();
+        let ingest_publisher = publisher_tx.clone();
+        let handle = tokio::spawn(async move {
+            run_ingest_loop(ingest_db, ingest_paths, ingest_publisher, inbound_rx, blob_store).await;
+        });
+
+        let secret = SecretKey::from_bytes(&[9u8; 32]);
+        let hash = Hash::from_bytes([1u8; 32]);
+        let blob_hex = hash.to_hex().to_string();
+        let ticket = BlobTicket::new(EndpointAddr::new(secret.public()), hash, BlobFormat::Raw);
+        let ticket_string = ticket.to_string();
+
+        let announcement = FileAnnouncement {
+            id: "file-1".into(),
+            post_id: "post-1".into(),
+            original_name: Some("note.txt".into()),
+            mime: Some("text/plain".into()),
+            size_bytes: Some(4),
+            checksum: Some(format!("blake3:{}", blob_hex)),
+            blob_id: Some(blob_hex.clone()),
+            ticket: Some(ticket.clone()),
+        };
+
+        inbound_tx
+            .send(InboundGossip {
+                peer_id: Some("peer-1".into()),
+                payload: EventPayload::FileAvailable(announcement),
+            })
+            .await
+            .expect("send announcement");
+
+        let _ = timeout(Duration::from_secs(2), publisher_rx.recv())
+            .await
+            .expect("ingest did not publish request");
+
+        drop(inbound_tx);
+        drop(publisher_tx);
+
+        handle.await.expect("ingest loop");
+
+        let record = database
+            .with_repositories(|repos| repos.files().get("file-1"))
+            .expect("query")
+            .expect("record");
+        assert_eq!(record.ticket.as_deref(), Some(ticket_string.as_str()));
+        assert_eq!(record.blob_id.as_deref(), Some(blob_hex.as_str()));
+    }
+}

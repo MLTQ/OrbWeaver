@@ -9,3 +9,11 @@ graphchan_backend/target/
 AGENTS.md
 
 .DS_Store
+
+Docs/iroh-blobs 0.96.0/
+
+Docs/iroh-gossip 0.94.0/
+
+test_1/
+
+test_2/

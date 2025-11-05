@@ -250,6 +250,9 @@ mod tests {
     use tempfile::tempdir;
     use tokio::runtime::Runtime;
 
+    use iroh::SecretKey;
+    use iroh_base::EndpointAddr;
+    use iroh_blobs::{ticket::BlobTicket, BlobFormat, Hash};
     #[test]
     fn save_and_list_files() {
         let rt = Runtime::new().unwrap();
@@ -315,6 +318,70 @@ mod tests {
             assert!(download.absolute_path.exists());
             assert_eq!(download.metadata.blob_id, file.blob_id);
             assert_eq!(files[0].present, Some(true));
+        });
+    }
+
+    #[test]
+    fn persist_ticket_updates_record_and_store_has_blob() {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let temp = tempdir().expect("tempdir");
+            let paths = GraphchanPaths::from_base_dir(temp.path()).expect("paths");
+            let conn = Connection::open_in_memory().expect("db");
+            let db = Database::from_connection(conn, true);
+            db.ensure_migrations().expect("migrations");
+
+            db.with_repositories(|repos| {
+                repos.threads().create(&ThreadRecord {
+                    id: "thread-1".into(),
+                    title: "T".into(),
+                    creator_peer_id: None,
+                    created_at: now_utc_iso(),
+                    pinned: false,
+                })?;
+                repos.posts().create(&PostRecord {
+                    id: "post-1".into(),
+                    thread_id: "thread-1".into(),
+                    author_peer_id: None,
+                    body: "body".into(),
+                    created_at: now_utc_iso(),
+                    updated_at: None,
+                })?;
+                Ok(())
+            })
+            .unwrap();
+
+            let blob_store = FsStore::load(&paths.blobs_dir).await.expect("blob store");
+            let service = FileService::new(db.clone(), paths.clone(), FileConfig::default(), blob_store.clone());
+
+            let file = service
+                .save_post_file(SaveFileInput {
+                    post_id: "post-1".into(),
+                    original_name: Some("example.txt".into()),
+                    mime: Some("text/plain".into()),
+                    data: b"hello".to_vec(),
+                })
+                .await
+                .expect("save file");
+
+            let blob_hex = file.blob_id.clone().expect("blob id");
+            let hash_for_store: Hash = blob_hex.parse().expect("hash");
+            assert!(blob_store.has(hash_for_store).await.expect("blob presence"));
+
+            let hash_for_ticket: Hash = blob_hex.parse().expect("hash");
+            let secret = SecretKey::from_bytes(&[7u8; 32]);
+            let ticket = BlobTicket::new(EndpointAddr::new(secret.public()), hash_for_ticket, BlobFormat::Raw);
+            let ticket_string = ticket.to_string();
+
+            service
+                .persist_ticket(&file.id, Some(&ticket))
+                .expect("persist ticket");
+
+            let record = db
+                .with_repositories(|repos| repos.files().get(&file.id))
+                .expect("query")
+                .expect("record");
+            assert_eq!(record.ticket.as_deref(), Some(ticket_string.as_str()));
         });
     }
 
