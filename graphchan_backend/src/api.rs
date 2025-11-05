@@ -11,7 +11,7 @@ use crate::threading::{
 };
 use anyhow::{Context, Result};
 use axum::body::Body;
-use axum::extract::{Multipart, Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{
     header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
     HeaderValue, StatusCode,
@@ -50,6 +50,7 @@ pub async fn serve_http(
         blobs,
     };
 
+    // Increase body limit to 50MB for file uploads (4chan images can be large)
     let router = Router::new()
         .route("/health", get(health_handler))
         .route("/threads", get(list_threads).post(create_thread))
@@ -62,6 +63,7 @@ pub async fn serve_http(
         .route("/files/:id", get(download_file))
         .route("/peers", get(list_peers).post(add_peer))
         .route("/peers/self", get(get_self_peer))
+        .layer(DefaultBodyLimit::max(50 * 1024 * 1024))  // 50MB limit
         .with_state(state.clone());
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.api_port));
