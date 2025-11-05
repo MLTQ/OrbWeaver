@@ -59,17 +59,20 @@
 - Gossip layer (`network/events.rs`) now serializes thread/post/file payloads, supports targeted direct sends, and keeps connection metadata so broadcasts and requests share the same worker.
 - Ingest worker (`network/ingest.rs`) applies inbound snapshots/posts, tracks missing blobs, issues `FileRequest`s, and stores returned `FileChunk`s under `files/downloads/` with checksum verification.
 - Added an interactive CLI (`graphchan_backend cli`) to manage friendcodes, inspect threads, and post messages without a REST client.
+- File uploads now stream into the `FsStore`, retain MIME hints, enforce optional size caps (`GRAPHCHAN_MAX_UPLOAD_BYTES`), expose blob tickets/presence via API/CLI, and provide interactive `upload`/`download` commands for manual verification.
+- Two-node integration harness (`two_node_gossip_replication`) proves friendcode exchange, bi-directional post replication, and attachment request/response flows end-to-end (blob ticket validation still manual).
 - Added documentation (`Docs/Architecture.md`, `Docs/NetworkingPlan.md`, `Docs/ImplementationPlan.md`) capturing current design decisions and roadmap.
 - Unit tests (`cargo test`) pass; REST integration harness exists (ignored pending network sync).
 
 ## Next Actions
 1. Gossip hardening:
    - Add deduplication/backoff, surface telemetry for queued/failed deliveries, and persist replication stats.
-2. Encoding & signatures:
+2. Blob ticket validation:
+   - Add unit tests for `FileService` (store writes + `persist_ticket`), ingest ticket handling, and downloader happy-path coverage.
+   - Extend the ignored REST harness to assert tickets appear in responses and a second node can redeem them.
+3. Encoding & signatures:
    - Switch to CBOR/MessagePack, add versioning + optional signatures to `EventEnvelope`.
-3. Blob transport upgrade:
-   - Replace the single-chunk transfer with the upstream Iroh blob API, support streaming for large attachments, and resume interrupted downloads.
 4. Multi-node integration harness:
-   - Update the ignored REST test (or add new one) to launch two nodes, exchange friendcodes, and verify posts/files replicate end to end.
+   - Automate a two-node scenario that exchanges friendcodes, posts files, and verifies blob replication end to end.
 5. REST/API polish:
-   - Pagination/search/auth, better error mapping, and derived advertised addresses from the live endpoint rather than env hints.
+   - Pagination/search/auth, better error mapping, derived advertised addresses from the live endpoint rather than env hints.

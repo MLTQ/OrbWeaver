@@ -2,6 +2,7 @@ use crate::config::NetworkConfig;
 use crate::threading::{PostView, ThreadDetails};
 use anyhow::Result;
 use iroh::endpoint::{Connection, Endpoint, RecvStream};
+use iroh_blobs::ticket::BlobTicket;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::{
@@ -35,6 +36,7 @@ pub struct FileAnnouncement {
     pub size_bytes: Option<i64>,
     pub checksum: Option<String>,
     pub blob_id: Option<String>,
+    pub ticket: Option<BlobTicket>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,7 +60,7 @@ pub enum NetworkEvent {
     },
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ConnectionEntry {
     pub id: Uuid,
     pub connection: Arc<Connection>,
@@ -87,49 +89,26 @@ pub async fn run_event_loop(
         match event {
             NetworkEvent::Broadcast(payload) => {
                 let envelope = envelope_for(payload);
-                let bytes = match serde_json::to_vec(&envelope) {
-                    Ok(bytes) => bytes,
-                    Err(err) => {
-                        tracing::warn!(error = ?err, "failed to serialize network event");
-                        continue;
-                    }
-                };
-
-                let targets: Vec<(Uuid, Arc<Connection>)> = {
-                    let guard = connections.read().await;
-                    guard
-                        .iter()
-                        .map(|entry| (entry.id, entry.connection.clone()))
-                        .collect()
-                };
-
-                prune_failed(targets, &bytes, &connections).await;
+                if let Err(err) = broadcast_envelope(&connections, envelope).await {
+                    tracing::warn!(error = ?err, "failed to broadcast event");
+                }
             }
             NetworkEvent::Direct { peer_id, payload } => {
                 let envelope = envelope_for(payload);
-                let bytes = match serde_json::to_vec(&envelope) {
-                    Ok(bytes) => bytes,
-                    Err(err) => {
-                        tracing::warn!(error = ?err, ?peer_id, "failed to serialize direct network event");
-                        continue;
-                    }
-                };
-
-                let targets: Vec<(Uuid, Arc<Connection>)> = {
-                    let guard = connections.read().await;
-                    guard
-                        .iter()
-                        .filter(|entry| entry.peer_id.as_deref() == Some(&peer_id))
-                        .map(|entry| (entry.id, entry.connection.clone()))
-                        .collect()
-                };
-
+                let targets = collect_targets_by_peer(&connections, &peer_id).await;
                 if targets.is_empty() {
-                    tracing::debug!(peer_id, "no active connection for direct event");
+                    tracing::debug!(
+                        peer_id,
+                        "no active connection for direct event; broadcasting instead"
+                    );
+                    if let Err(err) = broadcast_envelope(&connections, envelope).await {
+                        tracing::warn!(error = ?err, "failed to broadcast fallback event");
+                    }
                     continue;
                 }
-
-                prune_failed(targets, &bytes, &connections).await;
+                if let Err(err) = send_envelope_to_targets(targets, &connections, envelope).await {
+                    tracing::warn!(error = ?err, peer_id, "failed to deliver direct event");
+                }
             }
         }
     }
@@ -208,14 +187,15 @@ fn topic_for_payload(payload: &EventPayload) -> String {
     }
 }
 
-async fn prune_failed(
+async fn send_envelope_to_targets(
     targets: Vec<(Uuid, Arc<Connection>)>,
-    bytes: &[u8],
     connections: &Arc<RwLock<Vec<ConnectionEntry>>>,
-) {
+    envelope: EventEnvelope,
+) -> Result<()> {
+    let bytes = serde_json::to_vec(&envelope)?;
     let mut failed = Vec::new();
     for (id, connection) in targets {
-        if let Err(err) = send_event(&connection, bytes).await {
+        if let Err(err) = send_event(&connection, &bytes).await {
             let remote = connection
                 .remote_id()
                 .map(|id| id.to_string())
@@ -229,6 +209,37 @@ async fn prune_failed(
         let mut guard = connections.write().await;
         guard.retain(|entry| !failed.contains(&entry.id));
     }
+    Ok(())
+}
+
+async fn broadcast_envelope(
+    connections: &Arc<RwLock<Vec<ConnectionEntry>>>,
+    envelope: EventEnvelope,
+) -> Result<()> {
+    let targets = collect_all_targets(connections).await;
+    send_envelope_to_targets(targets, connections, envelope).await
+}
+
+async fn collect_all_targets(
+    connections: &Arc<RwLock<Vec<ConnectionEntry>>>,
+) -> Vec<(Uuid, Arc<Connection>)> {
+    let guard = connections.read().await;
+    guard
+        .iter()
+        .map(|entry| (entry.id, entry.connection.clone()))
+        .collect()
+}
+
+async fn collect_targets_by_peer(
+    connections: &Arc<RwLock<Vec<ConnectionEntry>>>,
+    peer_id: &str,
+) -> Vec<(Uuid, Arc<Connection>)> {
+    let guard = connections.read().await;
+    guard
+        .iter()
+        .filter(|entry| entry.peer_id.as_deref() == Some(peer_id))
+        .map(|entry| (entry.id, entry.connection.clone()))
+        .collect()
 }
 
 async fn pump_inbound_streams(

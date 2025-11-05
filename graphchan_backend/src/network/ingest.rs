@@ -6,8 +6,9 @@ use crate::network::events::{
     EventPayload, FileAnnouncement, FileChunk, FileRequest, InboundGossip, NetworkEvent,
 };
 use crate::threading::{PostView, ThreadDetails};
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use blake3::Hasher;
+use iroh_blobs::store::fs::FsStore;
 use std::fs;
 use tokio::sync::mpsc::{Receiver, Sender};
 
@@ -16,7 +17,9 @@ pub async fn run_ingest_loop(
     paths: GraphchanPaths,
     publisher: Sender<NetworkEvent>,
     mut rx: Receiver<InboundGossip>,
+    blobs: FsStore,
 ) {
+    let _ = &blobs;
     tracing::info!("network ingest loop started");
     while let Some(message) = rx.recv().await {
         let peer = message.peer_id.clone();
@@ -42,17 +45,27 @@ fn handle_message(
         EventPayload::FileAvailable(announcement) => {
             let fetch_needed = apply_file_announcement(database, paths, &announcement)?;
             if fetch_needed {
-                if let Some(peer_id) = peer_id {
-                    let request = EventPayload::FileRequest(FileRequest {
-                        file_id: announcement.id.clone(),
+                let request_payload = EventPayload::FileRequest(FileRequest {
+                    file_id: announcement.id.clone(),
+                });
+                if let Some(peer_id) = peer_id.clone() {
+                    let sender = publisher.clone();
+                    let payload = request_payload.clone();
+                    tokio::spawn(async move {
+                        if let Err(err) =
+                            sender.send(NetworkEvent::Direct { peer_id, payload }).await
+                        {
+                            tracing::warn!(error = ?err, "failed to enqueue direct file request");
+                        }
                     });
-                    publisher
-                        .try_send(NetworkEvent::Direct {
-                            peer_id,
-                            payload: request,
-                        })
-                        .map_err(|err| anyhow!("failed to queue file request: {err}"))?;
                 }
+
+                let sender = publisher.clone();
+                tokio::spawn(async move {
+                    if let Err(err) = sender.send(NetworkEvent::Broadcast(request_payload)).await {
+                        tracing::warn!(error = ?err, "failed to broadcast file request");
+                    }
+                });
             }
             Ok(())
         }
@@ -135,6 +148,7 @@ fn apply_file_announcement(
         blob_id: announcement.blob_id.clone(),
         size_bytes: announcement.size_bytes,
         checksum: announcement.checksum.clone(),
+        ticket: announcement.ticket.as_ref().map(|t| t.to_string()),
     };
 
     let should_persist = database.with_repositories(|repos| {
@@ -212,16 +226,36 @@ fn respond_with_file_chunk(
         return Ok(());
     }
     let data = fs::read(&absolute)?;
-    publisher
-        .try_send(NetworkEvent::Direct {
-            peer_id: peer_id.to_string(),
-            payload: EventPayload::FileChunk(FileChunk {
-                file_id: request.file_id,
-                data,
-                eof: true,
-            }),
-        })
-        .map_err(|err| anyhow!("failed to queue file chunk: {err}"))?;
+    let chunk_payload = EventPayload::FileChunk(FileChunk {
+        file_id: request.file_id,
+        data,
+        eof: true,
+    });
+
+    let direct_sender = publisher.clone();
+    let direct_peer = peer_id.to_string();
+    let direct_payload = chunk_payload.clone();
+    tokio::spawn(async move {
+        if let Err(err) = direct_sender
+            .send(NetworkEvent::Direct {
+                peer_id: direct_peer,
+                payload: direct_payload,
+            })
+            .await
+        {
+            tracing::warn!(error = ?err, "failed to enqueue direct file chunk");
+        }
+    });
+
+    let broadcast_sender = publisher.clone();
+    tokio::spawn(async move {
+        if let Err(err) = broadcast_sender
+            .send(NetworkEvent::Broadcast(chunk_payload))
+            .await
+        {
+            tracing::warn!(error = ?err, "failed to broadcast file chunk");
+        }
+    });
     Ok(())
 }
 

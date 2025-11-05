@@ -380,8 +380,8 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
     fn attach(&self, record: &FileRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO files (id, post_id, path, original_name, mime, blob_id, size_bytes, checksum)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            INSERT INTO files (id, post_id, path, original_name, mime, blob_id, size_bytes, checksum, ticket)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             "#,
             params![
                 record.id,
@@ -391,7 +391,8 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
                 record.mime,
                 record.blob_id,
                 record.size_bytes,
-                record.checksum
+                record.checksum,
+                record.ticket
             ],
         )?;
         Ok(())
@@ -400,8 +401,8 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
     fn upsert(&self, record: &FileRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO files (id, post_id, path, original_name, mime, blob_id, size_bytes, checksum)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            INSERT INTO files (id, post_id, path, original_name, mime, blob_id, size_bytes, checksum, ticket)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             ON CONFLICT(id) DO UPDATE SET
                 post_id = excluded.post_id,
                 path = excluded.path,
@@ -409,7 +410,8 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
                 mime = excluded.mime,
                 blob_id = excluded.blob_id,
                 size_bytes = excluded.size_bytes,
-                checksum = excluded.checksum
+                checksum = excluded.checksum,
+                ticket = excluded.ticket
             "#,
             params![
                 record.id,
@@ -419,7 +421,8 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
                 record.mime,
                 record.blob_id,
                 record.size_bytes,
-                record.checksum
+                record.checksum,
+                record.ticket
             ],
         )?;
         Ok(())
@@ -428,7 +431,7 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
     fn list_for_post(&self, post_id: &str) -> Result<Vec<FileRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, post_id, path, original_name, mime, blob_id, size_bytes, checksum
+            SELECT id, post_id, path, original_name, mime, blob_id, size_bytes, checksum, ticket
             FROM files
             WHERE post_id = ?1
             ORDER BY id ASC
@@ -444,6 +447,7 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
                 blob_id: row.get(5)?,
                 size_bytes: row.get(6)?,
                 checksum: row.get(7)?,
+                ticket: row.get(8)?,
             })
         })?;
         let mut files = Vec::new();
@@ -458,7 +462,7 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
             .conn
             .query_row(
                 r#"
-                SELECT id, post_id, path, original_name, mime, blob_id, size_bytes, checksum
+                SELECT id, post_id, path, original_name, mime, blob_id, size_bytes, checksum, ticket
                 FROM files
                 WHERE id = ?1
                 "#,
@@ -473,6 +477,7 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
                         blob_id: row.get(5)?,
                         size_bytes: row.get(6)?,
                         checksum: row.get(7)?,
+                        ticket: row.get(8)?,
                     })
                 },
             )
@@ -580,6 +585,7 @@ mod tests {
             blob_id: Some("blob-1".into()),
             size_bytes: Some(42),
             checksum: Some("sha256:deadbeef".into()),
+            ticket: None,
         };
         repos.files().attach(&file).unwrap();
         let files = repos.files().list_for_post(&post.id).unwrap();

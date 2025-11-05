@@ -69,6 +69,7 @@ pub(crate) const MIGRATIONS: &str = r#"
         blob_id TEXT,
         size_bytes INTEGER,
         checksum TEXT,
+        ticket TEXT,
         FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE
     );
 
@@ -163,6 +164,7 @@ impl Database {
     fn ensure_files_schema_locked(&self, conn: &Connection) -> Result<()> {
         let mut stmt = conn.prepare("PRAGMA table_info(files)")?;
         let mut has_original_name = false;
+        let mut has_ticket = false;
         let rows = stmt.query_map([], |row| {
             let name: String = row.get(1)?;
             Ok(name)
@@ -171,11 +173,16 @@ impl Database {
             let name = row?;
             if name.eq_ignore_ascii_case("original_name") {
                 has_original_name = true;
-                break;
+            }
+            if name.eq_ignore_ascii_case("ticket") {
+                has_ticket = true;
             }
         }
         if !has_original_name {
             conn.execute("ALTER TABLE files ADD COLUMN original_name TEXT", [])?;
+        }
+        if !has_ticket {
+            conn.execute("ALTER TABLE files ADD COLUMN ticket TEXT", [])?;
         }
         Ok(())
     }

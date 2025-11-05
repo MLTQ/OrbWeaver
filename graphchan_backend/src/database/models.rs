@@ -46,4 +46,5 @@ pub struct FileRecord {
     pub blob_id: Option<String>,
     pub size_bytes: Option<i64>,
     pub checksum: Option<String>,
+    pub ticket: Option<String>,
 }

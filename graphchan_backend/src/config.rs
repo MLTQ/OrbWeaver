@@ -8,6 +8,7 @@ pub struct GraphchanConfig {
     pub api_port: u16,
     pub paths: GraphchanPaths,
     pub network: NetworkConfig,
+    pub file: FileConfig,
 }
 
 impl GraphchanConfig {
@@ -18,10 +19,12 @@ impl GraphchanConfig {
             .and_then(|raw| raw.parse().ok())
             .unwrap_or(8080);
         let network = NetworkConfig::from_env();
+        let file = FileConfig::from_env();
         Ok(Self {
             api_port,
             paths,
             network,
+            file,
         })
     }
 
@@ -30,6 +33,21 @@ impl GraphchanConfig {
             api_port,
             paths,
             network,
+            file: FileConfig::from_env(),
+        }
+    }
+
+    pub fn with_file(
+        api_port: u16,
+        paths: GraphchanPaths,
+        network: NetworkConfig,
+        file: FileConfig,
+    ) -> Self {
+        Self {
+            api_port,
+            paths,
+            network,
+            file,
         }
     }
 }
@@ -38,6 +56,20 @@ impl GraphchanConfig {
 pub struct NetworkConfig {
     pub relay_url: Option<String>,
     pub public_addresses: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct FileConfig {
+    pub max_upload_bytes: Option<u64>,
+}
+
+impl FileConfig {
+    pub fn from_env() -> Self {
+        let max_upload_bytes = env::var("GRAPHCHAN_MAX_UPLOAD_BYTES")
+            .ok()
+            .and_then(|raw| raw.parse::<u64>().ok());
+        Self { max_upload_bytes }
+    }
 }
 
 impl NetworkConfig {
@@ -73,6 +105,7 @@ pub struct GraphchanPaths {
     pub files_dir: PathBuf,
     pub uploads_dir: PathBuf,
     pub downloads_dir: PathBuf,
+    pub blobs_dir: PathBuf,
     pub keys_dir: PathBuf,
     pub gpg_dir: PathBuf,
     pub gpg_private_key: PathBuf,
@@ -99,6 +132,7 @@ impl GraphchanPaths {
         let files_dir = base.join("files");
         let uploads_dir = files_dir.join("uploads");
         let downloads_dir = files_dir.join("downloads");
+        let blobs_dir = base.join("blobs");
         let keys_dir = base.join("keys");
         let gpg_dir = keys_dir.join("gpg");
         let gpg_private_key = gpg_dir.join("private.asc");
@@ -113,6 +147,7 @@ impl GraphchanPaths {
             files_dir,
             uploads_dir,
             downloads_dir,
+            blobs_dir,
             keys_dir,
             gpg_dir,
             gpg_private_key,

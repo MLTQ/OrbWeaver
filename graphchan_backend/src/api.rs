@@ -19,6 +19,7 @@ use axum::http::{
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use iroh_blobs::store::fs::FsStore;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use tokio::fs::File as TokioFile;
@@ -31,6 +32,7 @@ pub struct AppState {
     pub identity: IdentitySummary,
     pub database: Database,
     pub network: NetworkHandle,
+    pub blobs: FsStore,
 }
 
 pub async fn serve_http(
@@ -38,12 +40,14 @@ pub async fn serve_http(
     identity: IdentitySummary,
     database: Database,
     network: NetworkHandle,
+    blobs: FsStore,
 ) -> Result<()> {
     let state = AppState {
         config: config.clone(),
         identity,
         database,
         network,
+        blobs,
     };
 
     let router = Router::new()
@@ -154,9 +158,23 @@ async fn create_post(
 async fn list_post_files(
     State(state): State<AppState>,
     Path(post_id): Path<String>,
+    Query(params): Query<Option<ListFilesParams>>,
 ) -> ApiResult<Vec<FileResponse>> {
-    let service = FileService::new(state.database.clone(), state.config.paths.clone());
-    let files = service.list_post_files(&post_id)?;
+    let service = FileService::new(
+        state.database.clone(),
+        state.config.paths.clone(),
+        state.config.file.clone(),
+        state.blobs.clone(),
+    );
+    let mut files = service.list_post_files(&post_id)?;
+    if let Some(filters) = params {
+        if filters.missing_only.unwrap_or(false) {
+            files.retain(|f| !f.present.unwrap_or(true));
+        }
+        if let Some(mime_filter) = filters.mime {
+            files.retain(|f| f.mime.as_deref() == Some(mime_filter.as_str()));
+        }
+    }
     let responses = files.into_iter().map(map_file_view).collect();
     Ok(Json(responses))
 }
@@ -166,7 +184,12 @@ async fn upload_post_file(
     Path(post_id): Path<String>,
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<FileResponse>), ApiError> {
-    let service = FileService::new(state.database.clone(), state.config.paths.clone());
+    let service = FileService::new(
+        state.database.clone(),
+        state.config.paths.clone(),
+        state.config.file.clone(),
+        state.blobs.clone(),
+    );
     let mut file_bytes = None;
     let mut filename = None;
     let mut mime = None;
@@ -200,7 +223,12 @@ async fn upload_post_file(
         })
         .await
     {
-        Ok(file_view) => {
+        Ok(mut file_view) => {
+            let ticket = file_view
+                .blob_id
+                .as_deref()
+                .and_then(|blob| state.network.make_blob_ticket(blob));
+            file_view.ticket = ticket.as_ref().map(|t| t.to_string());
             let announcement = FileAnnouncement {
                 id: file_view.id.clone(),
                 post_id: file_view.post_id.clone(),
@@ -209,7 +237,11 @@ async fn upload_post_file(
                 size_bytes: file_view.size_bytes,
                 checksum: file_view.checksum.clone(),
                 blob_id: file_view.blob_id.clone(),
+                ticket: ticket.clone(),
             };
+            if let Err(err) = service.persist_ticket(&file_view.id, ticket.as_ref()) {
+                tracing::warn!(error = ?err, file_id = %file_view.id, "failed to persist blob ticket");
+            }
             if let Err(err) = state.network.publish_file_available(announcement).await {
                 tracing::warn!(
                     error = ?err,
@@ -231,7 +263,12 @@ async fn download_file(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
-    let service = FileService::new(state.database.clone(), state.config.paths.clone());
+    let service = FileService::new(
+        state.database.clone(),
+        state.config.paths.clone(),
+        state.config.file.clone(),
+        state.blobs.clone(),
+    );
     let Some(download) = service
         .prepare_download(&id)
         .await
@@ -337,6 +374,14 @@ struct ListThreadsParams {
     limit: Option<usize>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ListFilesParams {
+    #[serde(default)]
+    missing_only: Option<bool>,
+    #[serde(default)]
+    mime: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct PostResponse {
     post: crate::threading::PostView,
@@ -351,8 +396,11 @@ struct FileResponse {
     size_bytes: Option<i64>,
     checksum: Option<String>,
     blob_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ticket: Option<String>,
     path: String,
     download_url: String,
+    present: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -414,8 +462,10 @@ fn map_file_view(file: FileView) -> FileResponse {
         size_bytes: file.size_bytes,
         checksum: file.checksum.clone(),
         blob_id: file.blob_id.clone(),
+        ticket: file.ticket.clone(),
         path: file.path.clone(),
         download_url: format!("/files/{}", file.id),
+        present: file.present.unwrap_or(true),
     }
 }
 

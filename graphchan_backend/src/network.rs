@@ -7,9 +7,13 @@ use crate::identity::{load_iroh_secret, FriendCodePayload};
 use crate::threading::{PostView, ThreadDetails};
 use anyhow::{Context, Result};
 use events::{EventPayload, NetworkEvent};
-use iroh::endpoint::{Endpoint, RelayMode};
+use iroh::endpoint::{Connection, Endpoint, RelayMode};
+use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh_base::{EndpointAddr, PublicKey, RelayUrl};
+use iroh_blobs::store::fs::FsStore;
+use iroh_blobs::{ticket::BlobTicket, BlobFormat, BlobsProtocol, Hash, ALPN as BLOBS_ALPN};
 use iroh_relay::RelayMap;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -20,6 +24,26 @@ const GRAPHCHAN_ALPN: &[u8] = b"graphchan/0";
 const GOSSIP_BUFFER: usize = 128;
 const INBOUND_BUFFER: usize = 256;
 
+#[derive(Debug, Clone)]
+struct GossipProtocol {
+    connections: Arc<RwLock<Vec<events::ConnectionEntry>>>,
+    inbound: mpsc::Sender<events::InboundGossip>,
+}
+
+impl ProtocolHandler for GossipProtocol {
+    fn accept(
+        &self,
+        connection: Connection,
+    ) -> impl Future<Output = std::result::Result<(), AcceptError>> + Send {
+        let connections = self.connections.clone();
+        let inbound = self.inbound.clone();
+        async move {
+            events::register_connection(connection, connections, inbound).await;
+            Ok(())
+        }
+    }
+}
+
 pub use events::FileAnnouncement;
 
 #[derive(Clone)]
@@ -28,15 +52,17 @@ pub struct NetworkHandle {
     publisher: mpsc::Sender<events::NetworkEvent>,
     inbound_tx: mpsc::Sender<events::InboundGossip>,
     _event_worker: Arc<JoinHandle<()>>,
-    _accept_worker: Arc<JoinHandle<()>>,
     _ingest_worker: Arc<JoinHandle<()>>,
+    _router: Arc<Router>,
     connections: Arc<RwLock<Vec<events::ConnectionEntry>>>,
+    _blob_store: FsStore,
 }
 
 impl NetworkHandle {
     pub async fn start(
         paths: &GraphchanPaths,
         config: &NetworkConfig,
+        blob_store: FsStore,
         database: Database,
     ) -> Result<Self> {
         let secret = load_iroh_secret(paths)?;
@@ -56,7 +82,6 @@ impl NetworkHandle {
             .bind()
             .await
             .context("failed to bind iroh endpoint")?;
-        endpoint.set_alpns(vec![GRAPHCHAN_ALPN.to_vec()]);
         let endpoint = Arc::new(endpoint);
         let connections = Arc::new(RwLock::new(Vec::new()));
 
@@ -72,49 +97,38 @@ impl NetworkHandle {
         let ingest_publisher = tx.clone();
         let ingest_database = database.clone();
         let ingest_paths = paths.clone();
+        let ingest_store = blob_store.clone();
         let ingest_worker = tokio::spawn(async move {
-            ingest::run_ingest_loop(ingest_database, ingest_paths, ingest_publisher, inbound_rx)
-                .await;
+            ingest::run_ingest_loop(
+                ingest_database,
+                ingest_paths,
+                ingest_publisher,
+                inbound_rx,
+                ingest_store,
+            )
+            .await;
         });
 
-        let accept_endpoint = endpoint.clone();
-        let accept_connections = connections.clone();
-        let accept_inbound = inbound_tx.clone();
-        let accept_worker = tokio::spawn(async move {
-            loop {
-                match accept_endpoint.accept().await {
-                    Some(incoming) => match incoming.accept() {
-                        Ok(connecting) => match connecting.await {
-                            Ok(connection) => {
-                                events::register_connection(
-                                    connection,
-                                    accept_connections.clone(),
-                                    accept_inbound.clone(),
-                                )
-                                .await;
-                            }
-                            Err(err) => {
-                                tracing::warn!(error = ?err, "failed to finalize incoming connection");
-                            }
-                        },
-                        Err(err) => {
-                            tracing::warn!(error = ?err, "failed to accept incoming connection");
-                        }
-                    },
-                    None => break,
-                }
-            }
-            tracing::info!("accept loop shutting down");
-        });
+        let gossip_protocol = GossipProtocol {
+            connections: connections.clone(),
+            inbound: inbound_tx.clone(),
+        };
+        let blob_protocol = BlobsProtocol::new(&blob_store, None);
+        let router = Router::builder(endpoint.as_ref().clone())
+            .accept(GRAPHCHAN_ALPN, gossip_protocol)
+            .accept(BLOBS_ALPN, blob_protocol)
+            .spawn();
+        let router = Arc::new(router);
 
         let handle = Self {
             endpoint,
             publisher: tx,
             inbound_tx,
             _event_worker: Arc::new(event_worker),
-            _accept_worker: Arc::new(accept_worker),
             _ingest_worker: Arc::new(ingest_worker),
+            _router: router.clone(),
             connections,
+            _blob_store: blob_store.clone(),
         };
         tracing::info!(peer_id = %handle.peer_id(), "iroh endpoint started");
         Ok(handle)
@@ -126,6 +140,16 @@ impl NetworkHandle {
 
     pub fn current_addr(&self) -> EndpointAddr {
         self.endpoint.addr()
+    }
+
+    pub fn make_blob_ticket(&self, blob_hex: &str) -> Option<BlobTicket> {
+        match blob_hex.parse::<Hash>() {
+            Ok(hash) => Some(BlobTicket::new(self.current_addr(), hash, BlobFormat::Raw)),
+            Err(err) => {
+                tracing::warn!(error = %err, "failed to parse blob id for ticket");
+                None
+            }
+        }
     }
 
     pub fn endpoint(&self) -> Arc<Endpoint> {
@@ -194,6 +218,7 @@ impl NetworkHandle {
     }
 
     pub async fn shutdown(&self) {
+        let _ = self._router.shutdown().await;
         self.endpoint.close().await;
     }
 }

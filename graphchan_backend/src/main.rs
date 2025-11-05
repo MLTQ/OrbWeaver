@@ -4,6 +4,7 @@ use graphchan_backend::bootstrap;
 use graphchan_backend::cli;
 use graphchan_backend::config::GraphchanConfig;
 use graphchan_backend::network;
+use iroh_blobs::store::fs::FsStore;
 
 #[derive(Parser)]
 #[command(author, version, about = "Graphchan backend daemon and CLI")]
@@ -28,9 +29,14 @@ async fn main() -> Result<()> {
 
     let config = GraphchanConfig::from_env()?;
     let bootstrap = bootstrap::initialize(&config).await?;
-    let network =
-        network::NetworkHandle::start(&config.paths, &config.network, bootstrap.database.clone())
-            .await?;
+    let blob_store = FsStore::load(&config.paths.blobs_dir).await?;
+    let network = network::NetworkHandle::start(
+        &config.paths,
+        &config.network,
+        blob_store.clone(),
+        bootstrap.database.clone(),
+    )
+    .await?;
     tracing::info!(
         directories_created = ?bootstrap.directories_created,
         database_initialized = bootstrap.database_initialized,
@@ -46,6 +52,7 @@ async fn main() -> Result<()> {
                 bootstrap.identity.clone(),
                 bootstrap.database.clone(),
                 network,
+                blob_store.clone(),
             )
             .await
         }
@@ -55,6 +62,7 @@ async fn main() -> Result<()> {
                 bootstrap.identity.clone(),
                 bootstrap.database.clone(),
                 network,
+                blob_store,
             )
             .await
         }

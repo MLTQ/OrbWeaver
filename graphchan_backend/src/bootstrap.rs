@@ -17,6 +17,7 @@ pub async fn initialize(config: &GraphchanConfig) -> Result<BootstrapResources> 
     create_dir_if_missing(&config.paths.files_dir, &mut directories_created)?;
     create_dir_if_missing(&config.paths.uploads_dir, &mut directories_created)?;
     create_dir_if_missing(&config.paths.downloads_dir, &mut directories_created)?;
+    create_dir_if_missing(&config.paths.blobs_dir, &mut directories_created)?;
     create_dir_if_missing(&config.paths.keys_dir, &mut directories_created)?;
     create_dir_if_missing(&config.paths.gpg_dir, &mut directories_created)?;
     create_dir_if_missing(&config.paths.logs_dir, &mut directories_created)?;

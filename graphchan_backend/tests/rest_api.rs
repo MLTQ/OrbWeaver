@@ -6,6 +6,7 @@ use graphchan_backend::{
     api,
     threading::{CreatePostInput, CreateThreadInput},
 };
+use iroh_blobs::store::fs::FsStore;
 use tempfile::{tempdir, TempDir};
 use tokio::time::{sleep, timeout, Duration};
 
@@ -62,20 +63,31 @@ async fn rest_roundtrip_with_file_upload() {
     let bootstrap = bootstrap::initialize(&config).await.expect("bootstrap");
     let identity = bootstrap.identity.clone();
     let database = bootstrap.database.clone();
-    let network = NetworkHandle::start(&config.paths, &config.network, database.clone())
+    let blob_store = FsStore::load(&config.paths.blobs_dir)
         .await
-        .expect("start network");
+        .expect("blob store");
+
+    let network = NetworkHandle::start(
+        &config.paths,
+        &config.network,
+        blob_store.clone(),
+        database.clone(),
+    )
+    .await
+    .expect("start network");
 
     let server_network = network.clone();
     let server_config = config.clone();
     let server_identity = identity.clone();
     let server_database = database.clone();
+    let blob_store = blob_store.clone();
     let server = tokio::spawn(async move {
         let _ = api::serve_http(
             server_config,
             server_identity,
             server_database,
             server_network,
+            blob_store,
         )
         .await;
     });
@@ -184,26 +196,37 @@ async fn spawn_node(port: u16) -> TestNode {
     let bootstrap = bootstrap::initialize(&config).await.expect("bootstrap");
     let identity = bootstrap.identity.clone();
     let database = bootstrap.database.clone();
-    let network = NetworkHandle::start(&config.paths, &config.network, database.clone())
+    let blob_store = FsStore::load(&config.paths.blobs_dir)
         .await
-        .expect("network start");
+        .expect("blob store");
+    let network = NetworkHandle::start(
+        &config.paths,
+        &config.network,
+        blob_store.clone(),
+        database.clone(),
+    )
+    .await
+    .expect("network start");
 
     let server_network = network.clone();
     let server_config = config.clone();
     let server_identity = identity.clone();
     let server_database = database.clone();
+    let blob_store = blob_store.clone();
     let server = tokio::spawn(async move {
         let _ = api::serve_http(
             server_config,
             server_identity,
             server_database,
             server_network,
+            blob_store,
         )
         .await;
     });
 
     let base_url = format!("http://127.0.0.1:{port}");
     wait_for_health(&base_url).await;
+    wait_for_addresses(&network).await;
 
     TestNode {
         _dir: dir,
@@ -379,6 +402,19 @@ async fn two_node_gossip_replication() {
     })
     .await;
 
+    wait_until(|| async {
+        let resp = client
+            .get(format!("{}/files/{}", node_b.base_url, file_id))
+            .send()
+            .await
+            .ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        resp.bytes().await.ok()
+    })
+    .await;
+
     let downloaded = client
         .get(format!("{}/files/{}", node_b.base_url, file_id))
         .send()
@@ -398,9 +434,8 @@ fn decorated_friendcode(friendcode: &str, network: &NetworkHandle) -> FriendCode
     let addr = network.current_addr();
     let mut addresses = advertised_addresses(&addr);
     if addresses.is_empty() {
-        if let Some(primary) = addr.ip_addrs().next() {
-            addresses.push(primary.to_string());
-        }
+        let direct: Vec<_> = addr.ip_addrs().collect();
+        addresses.extend(direct.into_iter().map(|a| a.to_string()));
     }
     payload.addresses = addresses;
     payload
@@ -411,7 +446,7 @@ where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Option<T>>,
 {
-    timeout(Duration::from_secs(10), async {
+    timeout(Duration::from_secs(20), async {
         loop {
             if let Some(value) = check().await {
                 break value;
@@ -421,4 +456,15 @@ where
     })
     .await
     .expect("condition not met in time")
+}
+
+async fn wait_for_addresses(network: &NetworkHandle) {
+    for _ in 0..50 {
+        let addr = network.current_addr();
+        if addr.ip_addrs().count() > 0 || addr.relay_urls().count() > 0 {
+            return;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    tracing::warn!("network endpoint did not report any addresses");
 }

@@ -17,12 +17,16 @@ axum = { version = "0.7", features = ["macros", "json", "multipart"] }
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
 shell-words = "1.1"
-iroh-base = { git = "https://github.com/n0-computer/iroh", tag = "v0.94.0", package = "iroh-base", features = ["key"] }
-iroh = { git = "https://github.com/n0-computer/iroh", tag = "v0.94.0" }
-iroh-relay = { git = "https://github.com/n0-computer/iroh", tag = "v0.94.0", package = "iroh-relay" }
+infer = "0.15"
+iroh-base = { version = "0.94.1", features = ["key"] }
+iroh = "0.94.0"
+iroh-relay = "0.94.0"
+iroh-blobs = "0.96.0"
+iroh-gossip = "0.94.0"
 rand = { version = "0.9", features = ["std"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 tokio-util = { version = "0.7", features = ["io"] }
+bytes = "1"
 blake3 = "1"
 
 [dev-dependencies]

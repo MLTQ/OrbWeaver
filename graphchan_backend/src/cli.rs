@@ -5,12 +5,14 @@ use crate::files::FileService;
 use crate::identity::{decode_friendcode, IdentitySummary};
 use crate::network::NetworkHandle;
 use crate::peers::PeerService;
-use crate::threading::{CreatePostInput, CreateThreadInput, ThreadDetails, ThreadService};
-use crate::utils::now_utc_iso;
+use crate::threading::{CreatePostInput, CreateThreadInput, ThreadService};
 use anyhow::{anyhow, Context, Result};
+use iroh_blobs::store::fs::FsStore;
 use shell_words;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
+use std::path::Path;
+use tokio::fs as async_fs;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 /// Run the HTTP server mode (former default behaviour).
@@ -19,12 +21,13 @@ pub async fn run_server(
     identity: IdentitySummary,
     database: Database,
     network: NetworkHandle,
+    blobs: FsStore,
 ) -> Result<()> {
     tracing::info!(
         port = config.api_port,
         "starting Graphchan backend HTTP server"
     );
-    api::serve_http(config, identity, database, network).await
+    api::serve_http(config, identity, database, network, blobs).await
 }
 
 /// Run the interactive CLI used for managing friendcodes, threads, and posts.
@@ -33,10 +36,16 @@ pub async fn run_cli(
     identity: IdentitySummary,
     database: Database,
     network: NetworkHandle,
+    blobs: FsStore,
 ) -> Result<()> {
     let thread_service = ThreadService::new(database.clone());
     let peer_service = PeerService::new(database.clone());
-    let file_service = FileService::new(database.clone(), config.paths.clone());
+    let file_service = FileService::new(
+        database.clone(),
+        config.paths.clone(),
+        config.file.clone(),
+        blobs.clone(),
+    );
 
     let mut session = CliSession {
         identity,
@@ -174,6 +183,27 @@ impl CliSession {
                 self.check_new_posts().await?;
                 Ok(LoopAction::Continue)
             }
+            "upload" => {
+                if tokens.len() < 3 {
+                    println!("Usage: upload <thread_id> <path> [mime]");
+                    return Ok(LoopAction::Continue);
+                }
+                let thread_id = tokens[1].clone();
+                let path = tokens[2].clone();
+                let mime = tokens.get(3).cloned();
+                self.upload_file(&thread_id, &path, mime).await?;
+                Ok(LoopAction::Continue)
+            }
+            "download" => {
+                if tokens.len() < 2 {
+                    println!("Usage: download <file_id> [dest]");
+                    return Ok(LoopAction::Continue);
+                }
+                let file_id = tokens[1].clone();
+                let dest = tokens.get(2).map(|s| s.as_str());
+                self.download_file(&file_id, dest).await?;
+                Ok(LoopAction::Continue)
+            }
             "quit" | "exit" => Ok(LoopAction::Exit),
             "clear" => {
                 print!("\x1B[2J\x1B[1;1H");
@@ -196,6 +226,8 @@ impl CliSession {
         println!("  view-thread <id>     Display posts within a thread");
         println!("  new-thread TITLE [BODY]  Create a new thread with optional initial post");
         println!("  post <thread_id> MSG Post a reply to an existing thread");
+        println!("  upload <thread_id> <path>  Attach a local file to a thread");
+        println!("  download <file_id> [dest]  Save an attachment to disk");
         println!("  check                Poll for new messages across all threads");
         println!("  clear                Clear the screen");
         println!("  exit                 Quit the CLI");
@@ -309,10 +341,19 @@ impl CliSession {
             if !files.is_empty() {
                 println!("Attachments:");
                 for file in files {
+                    let status = if file.present.unwrap_or(true) {
+                        "available"
+                    } else {
+                        "missing"
+                    };
                     println!(
-                        "  - {} ({} bytes)",
-                        file.original_name.unwrap_or_else(|| file.id.clone()),
-                        file.size_bytes.unwrap_or(0)
+                        "  - {} ({} bytes) -> {} [{}]",
+                        file.original_name
+                            .clone()
+                            .unwrap_or_else(|| file.id.clone()),
+                        file.size_bytes.unwrap_or(0),
+                        file.id,
+                        status
                     );
                 }
             }
@@ -395,6 +436,84 @@ impl CliSession {
             Some(previous) => previous != latest_post_id,
             None => true,
         }
+    }
+
+    async fn upload_file(
+        &mut self,
+        thread_id: &str,
+        path: &str,
+        mime: Option<String>,
+    ) -> Result<()> {
+        let bytes = async_fs::read(path)
+            .await
+            .with_context(|| format!("failed to read file {path}"))?;
+        let original = Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|s| s.to_string());
+        let mut view = self
+            .file_service
+            .save_post_file(crate::files::SaveFileInput {
+                post_id: thread_id.to_string(),
+                original_name: original.clone(),
+                mime,
+                data: bytes,
+            })
+            .await?;
+        println!(
+            "Uploaded {} ({} bytes) as {}",
+            original.unwrap_or_else(|| path.into()),
+            view.size_bytes.unwrap_or(0),
+            view.id
+        );
+        let ticket = view
+            .blob_id
+            .as_deref()
+            .and_then(|blob| self.network.make_blob_ticket(blob));
+        view.ticket = ticket.as_ref().map(|t| t.to_string());
+        let announcement = crate::network::FileAnnouncement {
+            id: view.id.clone(),
+            post_id: view.post_id.clone(),
+            original_name: view.original_name.clone(),
+            mime: view.mime.clone(),
+            size_bytes: view.size_bytes,
+            checksum: view.checksum.clone(),
+            blob_id: view.blob_id.clone(),
+            ticket: ticket.clone(),
+        };
+        if let Err(err) = self.file_service.persist_ticket(&view.id, ticket.as_ref()) {
+            tracing::warn!(error = ?err, file_id = %view.id, "failed to persist blob ticket");
+        }
+        self.network
+            .publish_file_available(announcement)
+            .await
+            .inspect_err(|err| tracing::warn!(error = ?err, "failed to gossip file"))
+            .ok();
+        Ok(())
+    }
+
+    async fn download_file(&self, file_id: &str, dest: Option<&str>) -> Result<()> {
+        let download = self
+            .file_service
+            .prepare_download(file_id)
+            .await?
+            .ok_or_else(|| anyhow!("file {file_id} not available locally"))?;
+        let default_name = download
+            .metadata
+            .original_name
+            .clone()
+            .unwrap_or_else(|| format!("{file_id}.bin"));
+        let destination = dest.unwrap_or(&default_name);
+        async_fs::copy(&download.absolute_path, destination)
+            .await
+            .with_context(|| format!("failed to copy to {destination}"))?;
+        println!(
+            "Saved {} to {} ({} bytes)",
+            file_id,
+            destination,
+            download.metadata.size_bytes.unwrap_or(0)
+        );
+        Ok(())
     }
 }
 
