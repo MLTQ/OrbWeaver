@@ -31,6 +31,7 @@ pub struct GraphchanApp {
     image_loading: HashSet<String>,
     image_pending: HashMap<String, LoadedImage>,
     image_errors: HashMap<String, String>,
+    image_viewers: HashMap<String, bool>,
 }
 
 #[derive(Default)]
@@ -118,6 +119,7 @@ impl GraphchanApp {
             image_loading: HashSet::new(),
             image_pending: HashMap::new(),
             image_errors: HashMap::new(),
+            image_viewers: HashMap::new(),
         };
         app.spawn_load_threads();
         app
@@ -641,14 +643,20 @@ impl GraphchanApp {
         
         if is_image && file.present {
             if let Some(tex) = self.image_textures.get(&file.id) { // display cached texture
-                let response = ui.add(egui::Image::from_texture(tex).max_width(400.0));
-                if response.hovered() { response.on_hover_text(name); }
+                let response = ui.add(egui::Image::from_texture(tex).max_width(400.0).sense(egui::Sense::click()));
+                let hovered = response.hovered();
+                let clicked = response.clicked();
+                if hovered { ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand); response.clone().on_hover_text(name); }
+                if clicked { self.image_viewers.insert(file.id.clone(), true); }
             } else if let Some(pending) = self.image_pending.remove(&file.id) {
                 let color = egui::ColorImage::from_rgba_unmultiplied(pending.size, &pending.pixels);
                 let tex = ui.ctx().load_texture(&file.id, color, egui::TextureOptions::default());
                 self.image_textures.insert(file.id.clone(), tex.clone());
-                let response = ui.add(egui::Image::from_texture(&tex).max_width(400.0));
-                if response.hovered() { response.on_hover_text(name); }
+                let response = ui.add(egui::Image::from_texture(&tex).max_width(400.0).sense(egui::Sense::click()));
+                let hovered = response.hovered();
+                let clicked = response.clicked();
+                if hovered { ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand); response.clone().on_hover_text(name); }
+                if clicked { self.image_viewers.insert(file.id.clone(), true); }
             } else if self.image_errors.get(&file.id).is_some() {
                 ui.colored_label(Color32::LIGHT_RED, format!("Image failed: {}", self.image_errors[&file.id]));
                 ui.hyperlink_to(name, download_url);
@@ -849,6 +857,27 @@ impl eframe::App for GraphchanApp {
         if go_back {
             self.view = ViewState::Catalog;
         }
+
+        // Render image viewer windows
+        let mut closed = Vec::new();
+        for (id, open) in self.image_viewers.iter_mut() {
+            egui::Window::new(format!("Image {}", id))
+                .open(open)
+                .resizable(true)
+                .show(ctx, |ui| {
+                    if let Some(tex) = self.image_textures.get(id) {
+                        let avail = ui.available_size();
+                        let mut size = tex.size_vec2();
+                        let max_w = (avail.x - 16.0).max(200.0);
+                        if size.x > max_w { let scale = max_w / size.x; size.x *= scale; size.y *= scale; }
+                        ui.image(tex);
+                    } else {
+                        ui.label("Loading image...");
+                    }
+                });
+            if !*open { closed.push(id.clone()); }
+        }
+        for id in closed { self.image_viewers.remove(&id); }
 
         self.render_create_thread_dialog(ctx);
         self.render_import_dialog(ctx);
