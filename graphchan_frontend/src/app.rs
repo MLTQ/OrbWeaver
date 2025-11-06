@@ -643,7 +643,7 @@ impl GraphchanApp {
         
         if is_image && file.present {
             if let Some(tex) = self.image_textures.get(&file.id) { // display cached texture
-                let response = ui.add(egui::Image::from_texture(tex).max_width(400.0).sense(egui::Sense::click()));
+                let response = ui.add(egui::Image::from_texture(tex).max_width(150.0).sense(egui::Sense::click()));
                 let hovered = response.hovered();
                 let clicked = response.clicked();
                 if hovered { ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand); response.clone().on_hover_text(name); }
@@ -652,7 +652,7 @@ impl GraphchanApp {
                 let color = egui::ColorImage::from_rgba_unmultiplied(pending.size, &pending.pixels);
                 let tex = ui.ctx().load_texture(&file.id, color, egui::TextureOptions::default());
                 self.image_textures.insert(file.id.clone(), tex.clone());
-                let response = ui.add(egui::Image::from_texture(&tex).max_width(400.0).sense(egui::Sense::click()));
+                let response = ui.add(egui::Image::from_texture(&tex).max_width(150.0).sense(egui::Sense::click()));
                 let hovered = response.hovered();
                 let clicked = response.clicked();
                 if hovered { ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand); response.clone().on_hover_text(name); }
