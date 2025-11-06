@@ -11,8 +11,10 @@ chrono = { version = "0.4", features = ["serde"] }
 eframe = { version = "0.27", features = ["glow"] }
 egui_extras = { version = "0.27", features = ["image"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
+lazy_static = "1.4"
 log = "0.4"
 env_logger = "0.11"
+open = "5"
 poll-promise = "0.3"
 reqwest = { version = "0.12", features = ["json", "blocking", "multipart"] }
 serde = { version = "1", features = ["derive"] }

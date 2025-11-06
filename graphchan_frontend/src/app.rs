@@ -7,21 +7,11 @@ use eframe::egui::{self, Align2, Color32, Context, RichText, TextureHandle};
 use log::error;
 
 use crate::api::ApiClient;
+// ImageLoader removed; using custom async pipeline
 use crate::importer;
 use crate::models::{
     CreatePostInput, CreateThreadInput, FileResponse, PostView, ThreadDetails, ThreadSummary,
 };
-
-type ImageCache = HashMap<String, ImageState>;
-
-#[derive(Clone)]
-enum ImageState {
-    Loading,
-    Loaded(TextureHandle),
-    Failed(String),
-}
-
-type PendingImages = HashMap<String, egui::ColorImage>;
 
 pub struct GraphchanApp {
     api: ApiClient,
@@ -37,9 +27,10 @@ pub struct GraphchanApp {
     info_banner: Option<String>,
     importer: ImporterState,
     pending_thread_focus: Option<String>,
-    image_cache: ImageCache,
-    loading_images: bool,
-    pending_images: PendingImages,
+    image_textures: HashMap<String, TextureHandle>,
+    image_loading: HashSet<String>,
+    image_pending: HashMap<String, LoadedImage>,
+    image_errors: HashMap<String, String>,
 }
 
 #[derive(Default)]
@@ -93,11 +84,11 @@ enum AppMessage {
         result: Result<Vec<FileResponse>, anyhow::Error>,
     },
     ImportFinished(Result<String, anyhow::Error>),
-    ImageLoaded {
-        file_id: String,
-        result: Result<egui::ColorImage, String>,
-    },
+    ImageLoaded { file_id: String, result: Result<LoadedImage, String> },
 }
+
+#[derive(Clone)]
+struct LoadedImage { pub size: [usize;2], pub pixels: Vec<u8> }
 
 impl GraphchanApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
@@ -123,9 +114,10 @@ impl GraphchanApp {
             info_banner: None,
             importer: ImporterState::default(),
             pending_thread_focus: None,
-            image_cache: HashMap::new(),
-            loading_images: false,
-            pending_images: HashMap::new(),
+            image_textures: HashMap::new(),
+            image_loading: HashSet::new(),
+            image_pending: HashMap::new(),
+            image_errors: HashMap::new(),
         };
         app.spawn_load_threads();
         app
@@ -371,8 +363,21 @@ impl GraphchanApp {
                             state.attachments_loading.remove(&post_id);
                             match result {
                                 Ok(files) => {
+                                    // Collect downloads outside borrow scope
+                                    let mut to_download = Vec::new();
+                                    for f in &files {
+                                        if let Some(mime) = &f.mime {
+                                            if mime.starts_with("image/") && f.present {
+                                                if !self.image_loading.contains(&f.id) && !self.image_textures.contains_key(&f.id) && !self.image_errors.contains_key(&f.id) {
+                                                    to_download.push(f.id.clone());
+                                                }
+                                            }
+                                        }
+                                    }
                                     state.attachments.insert(post_id.clone(), files);
                                     state.attachments_errors.remove(&post_id);
+                                    drop(state);
+                                    for id in to_download { let url = format!("{}/files/{}", self.api.base_url(), id); self.spawn_download_image(&id, &url); }
                                 }
                                 Err(err) => {
                                     state
@@ -400,15 +405,10 @@ impl GraphchanApp {
                     }
                 }
                 AppMessage::ImageLoaded { file_id, result } => {
+                    self.image_loading.remove(&file_id);
                     match result {
-                        Ok(color_image) => {
-                            log::info!("Image downloaded, will create texture on next render: {}", file_id);
-                            self.pending_images.insert(file_id, color_image);
-                        }
-                        Err(err) => {
-                            log::error!("Failed to download image {}: {}", file_id, err);
-                            self.image_cache.insert(file_id, ImageState::Failed(err));
-                        }
+                        Ok(img) => { self.image_pending.insert(file_id, img); }
+                        Err(e) => { self.image_errors.insert(file_id, e); }
                     }
                 }
             }
@@ -613,8 +613,26 @@ impl GraphchanApp {
         go_back
     }
 
-    fn render_file_attachment(&mut self, ui: &mut egui::Ui, file: &FileResponse, api_base: &str, post_id: &str) {
-        let url = format!("{}/files/{}", api_base, file.id);
+    fn spawn_download_image(&mut self, file_id: &str, url: &str) {
+        self.image_loading.insert(file_id.to_string());
+        let tx = self.tx.clone();
+        let id = file_id.to_string();
+        let url_owned = url.to_string();
+        thread::spawn(move || {
+            let result = (|| {
+                let resp = reqwest::blocking::get(&url_owned).map_err(|e| e.to_string())?;
+                let bytes = resp.bytes().map_err(|e| e.to_string())?;
+                let dyn_img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+                let rgba = dyn_img.to_rgba8();
+                let size = [dyn_img.width() as usize, dyn_img.height() as usize];
+                Ok(LoadedImage { size, pixels: rgba.as_flat_samples().as_slice().to_vec() })
+            })();
+            let _ = tx.send(AppMessage::ImageLoaded { file_id: id, result });
+        });
+    }
+
+    fn render_file_attachment(&mut self, ui: &mut egui::Ui, file: &FileResponse, api_base: &str, _post_id: &str) {
+        let download_url = format!("{}/files/{}", api_base, file.id);
         let name = file.original_name.as_deref().unwrap_or("attachment");
         let mime = file.mime.as_deref().unwrap_or("");
         
@@ -622,66 +640,27 @@ impl GraphchanApp {
         let is_image = mime.starts_with("image/");
         
         if is_image && file.present {
-            // First, check if we have a pending image that needs to be converted to texture
-            if let Some(color_image) = self.pending_images.remove(&file.id) {
-                log::info!("Creating texture for: {}", name);
-                let texture = ui.ctx().load_texture(
-                    file.id.clone(),
-                    color_image,
-                    egui::TextureOptions::default()
-                );
-                self.image_cache.insert(file.id.clone(), ImageState::Loaded(texture));
-            }
-            
-            // Now check cache state
-            match self.image_cache.get(&file.id) {
-                Some(ImageState::Loaded(texture)) => {
-                    // Image loaded, display it
-                    log::debug!("Displaying cached image: {}", name);
-                    ui.add(egui::Image::new(texture).max_width(400.0).shrink_to_fit());
-                    ui.label(RichText::new(name).small());
+            if let Some(tex) = self.image_textures.get(&file.id) { // display cached texture
+                let response = ui.add(egui::Image::from_texture(tex).max_width(400.0));
+                if response.hovered() { response.on_hover_text(name); }
+            } else if let Some(pending) = self.image_pending.remove(&file.id) {
+                let color = egui::ColorImage::from_rgba_unmultiplied(pending.size, &pending.pixels);
+                let tex = ui.ctx().load_texture(&file.id, color, egui::TextureOptions::default());
+                self.image_textures.insert(file.id.clone(), tex.clone());
+                let response = ui.add(egui::Image::from_texture(&tex).max_width(400.0));
+                if response.hovered() { response.on_hover_text(name); }
+            } else if self.image_errors.get(&file.id).is_some() {
+                ui.colored_label(Color32::LIGHT_RED, format!("Image failed: {}", self.image_errors[&file.id]));
+                ui.hyperlink_to(name, download_url);
+            } else {
+                if !self.image_loading.contains(&file.id) {
+                    self.spawn_download_image(&file.id, &download_url);
                 }
-                Some(ImageState::Loading) => {
-                    // Loading in progress
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Spinner::new());
-                        ui.label(format!("Loading {}...", name));
-                    });
-                }
-                Some(ImageState::Failed(err)) => {
-                    ui.colored_label(Color32::LIGHT_RED, format!("Failed to load {}: {}", name, err));
-                    ui.hyperlink_to("Download", &url);
-                }
-                None => {
-                    // Not started loading yet - spawn async load
-                    log::info!("Spawning async load for: {} ({})", name, file.id);
-                    self.image_cache.insert(file.id.clone(), ImageState::Loading);
-                    
-                    let file_id = file.id.clone();
-                    let url_clone = url.clone();
-                    let tx = self.tx.clone();
-                    
-                    thread::spawn(move || {
-                        log::info!("Loading image from URL: {}", url_clone);
-                        let result = load_image_sync(&url_clone);
-                        let _ = tx.send(AppMessage::ImageLoaded { file_id, result });
-                    });
-                    
-                    // Show spinner while loading
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Spinner::new());
-                        ui.label(format!("Loading {}...", name));
-                    });
-                }
+                ui.horizontal(|ui| { ui.add(egui::Spinner::new()); ui.label(format!("Loading {}", name)); });
             }
         } else {
-            // Not an image or not present, show as link
-            let label = if file.present {
-                name.to_string()
-            } else {
-                format!("{} (remote)", name)
-            };
-            ui.hyperlink_to(label, url);
+            let label = if file.present { name.to_string() } else { format!("{} (remote)", name) };
+            ui.hyperlink_to(label, download_url);
         }
     }
 
@@ -775,11 +754,6 @@ impl GraphchanApp {
 impl eframe::App for GraphchanApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         self.process_messages();
-
-        // Force continuous repaints while loading images to trigger lazy loads
-        if self.loading_images {
-            ctx.request_repaint();
-        }
 
         egui::TopBottomPanel::top("top_controls").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -892,7 +866,7 @@ fn format_timestamp(ts: &str) -> String {
 }
 
 fn load_image_sync(url: &str) -> Result<egui::ColorImage, String> {
-    use image::ImageFormat;
+    // removed unused: use image::ImageFormat;
     use reqwest::blocking::Client;
     
     let client = Client::builder()

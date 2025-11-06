@@ -1,5 +1,6 @@
 mod api;
 mod app;
+// mod image_loader; // removed legacy loader
 mod importer;
 mod models;
 

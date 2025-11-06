@@ -109,9 +109,11 @@
 - **Persistent Settings**:
   - Save API URL to config file or browser storage equivalent.
   - Remember window size/position.
-- **Image Thumbnails**:
-  - Use `egui_extras::image` to show inline previews for image attachments.
-  - Support common formats (PNG, JPEG, GIF).
+- ✅ **Image Thumbnails**: **COMPLETE**
+  - ✅ Inline image display for attachments using `image` crate.
+  - ✅ Support for PNG, JPEG, GIF formats.
+  - ✅ Max width 400px with shrink-to-fit.
+  - ✅ Fallback to download links for non-images.
 - **File Upload UI**:
   - Multipart form support for attaching files to posts.
   - Drag-and-drop file upload area.
