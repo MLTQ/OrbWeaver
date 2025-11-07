@@ -69,11 +69,16 @@ pub fn import_fourchan_thread(api: &ApiClient, url: &str) -> Result<String> {
     let mut id_map: HashMap<u64, String> = HashMap::new();
     if let Some(created_op) = details.posts.first() {
         id_map.insert(first_post.no, created_op.id.clone());
-        
+
         // Upload first post's image if it has one
         if let (Some(tim), Some(ext)) = (first_post.tim, first_post.ext.as_ref()) {
-            let filename = first_post.filename.clone().unwrap_or_else(|| format!("{}", tim));
-            if let Err(e) = upload_4chan_image(api, &board, tim, ext, &filename, &created_op.id, &client) {
+            let filename = first_post
+                .filename
+                .clone()
+                .unwrap_or_else(|| format!("{}", tim));
+            if let Err(e) =
+                upload_4chan_image(api, &board, tim, ext, &filename, &created_op.id, &client)
+            {
                 log::warn!("Failed to upload OP image: {}", e);
             }
         }
@@ -82,30 +87,32 @@ pub fn import_fourchan_thread(api: &ApiClient, url: &str) -> Result<String> {
     for post in posts_iter {
         let body = clean_body(post.com.clone());
         if body.is_empty() && post.tim.is_none() {
-            continue;  // Skip posts with no text and no image
+            continue; // Skip posts with no text and no image
         }
-        
+
         let mut payload = CreatePostInput::default();
         payload.thread_id = graph_thread_id.clone();
-        
+
         // Backend requires non-empty body, use placeholder for image-only posts
         payload.body = if body.is_empty() {
             "[image]".to_string()
         } else {
             body
         };
-        
+
         payload.parent_post_ids = extract_references(post.com.as_deref(), &id_map);
 
         let created = api
             .create_post(&graph_thread_id, &payload)
             .with_context(|| format!("failed to create post {}", post.no))?;
         id_map.insert(post.no, created.id.clone());
-        
+
         // Upload post's image if it has one
         if let (Some(tim), Some(ext)) = (post.tim, post.ext.as_ref()) {
             let filename = post.filename.clone().unwrap_or_else(|| format!("{}", tim));
-            if let Err(e) = upload_4chan_image(api, &board, tim, ext, &filename, &created.id, &client) {
+            if let Err(e) =
+                upload_4chan_image(api, &board, tim, ext, &filename, &created.id, &client)
+            {
                 log::warn!("Failed to upload image for post {}: {}", post.no, e);
             }
         }
@@ -125,18 +132,18 @@ fn upload_4chan_image(
 ) -> Result<()> {
     // 4chan image URL format: https://i.4cdn.org/{board}/{tim}{ext}
     let image_url = format!("https://i.4cdn.org/{}/{}{}", board, tim, ext);
-    
+
     log::info!("Downloading image: {}", image_url);
-    
+
     let response = client
         .get(&image_url)
         .send()
         .context("failed to fetch image")?
         .error_for_status()
         .context("image download failed")?;
-    
+
     let bytes = response.bytes().context("failed to read image bytes")?;
-    
+
     // Determine MIME type from extension
     let mime = match ext {
         ".jpg" | ".jpeg" => "image/jpeg",
@@ -145,23 +152,22 @@ fn upload_4chan_image(
         ".webm" => "video/webm",
         _ => "application/octet-stream",
     };
-    
+
     // Create multipart form
-    let form = reqwest::blocking::multipart::Form::new()
-        .part(
-            "file",
-            reqwest::blocking::multipart::Part::bytes(bytes.to_vec())
-                .file_name(format!("{}{}", filename, ext))
-                .mime_str(mime)?,
-        );
-    
+    let form = reqwest::blocking::multipart::Form::new().part(
+        "file",
+        reqwest::blocking::multipart::Part::bytes(bytes.to_vec())
+            .file_name(format!("{}{}", filename, ext))
+            .mime_str(mime)?,
+    );
+
     // Upload to backend
     let upload_url = format!("{}/posts/{}/files", api.base_url(), post_id);
     let upload_client = Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .context("failed to build upload client")?;
-    
+
     upload_client
         .post(&upload_url)
         .multipart(form)
@@ -169,7 +175,7 @@ fn upload_4chan_image(
         .context("failed to upload file")?
         .error_for_status()
         .context("file upload failed")?;
-    
+
     log::info!("Uploaded image {} for post {}", filename, post_id);
     Ok(())
 }
