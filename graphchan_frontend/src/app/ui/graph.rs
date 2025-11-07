@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use eframe::egui::{self, Color32, FontId, Margin, RichText};
+use eframe::egui::{self, Color32, FontId, Margin, Pos2, RichText};
+use log::debug;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -11,6 +12,12 @@ use super::super::state::{GraphNode, ThreadState};
 use super::super::{format_timestamp, GraphchanApp};
 
 static mut START_TIME: Option<Instant> = None;
+
+struct NodeLayoutData {
+    post: PostView,
+    rect: egui::Rect,
+    attachments: Option<Vec<FileResponse>>,
+}
 
 pub(crate) fn build_initial_graph(posts: &[PostView]) -> HashMap<String, GraphNode> {
     let mut rng = StdRng::seed_from_u64(42);
@@ -38,6 +45,15 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
         None => return,
     };
 
+    for post in &posts {
+        debug!(
+            "graph node post={} parents={:?} body_len={}",
+            post.id,
+            post.parent_post_ids,
+            post.body.len()
+        );
+    }
+
     let sim_active = unsafe {
         if START_TIME.is_none() {
             START_TIME = Some(Instant::now());
@@ -56,7 +72,7 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
 
     let available = ui.available_size();
     let (rect, response) = ui.allocate_at_least(available, egui::Sense::click_and_drag());
-    let canvas = ui.painter_at(rect);
+    let canvas = ui.painter().with_clip_rect(rect);
     canvas.rect_filled(rect, 0.0, Color32::from_rgb(12, 13, 20));
     let dot_spacing = 28.0;
     let dot_color = Color32::from_rgba_premultiplied(70, 72, 95, 90);
@@ -70,7 +86,7 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
         x += dot_spacing;
     }
 
-    let edge_painter = ui.painter_at(rect);
+    let edge_painter = ui.painter().with_clip_rect(rect);
 
     if let Some(pointer_pos) = ui.ctx().pointer_hover_pos() {
         if rect.contains(pointer_pos) {
@@ -115,49 +131,7 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
         )
     };
 
-    let reply_targets = state.reply_to.clone();
-
-    for post in posts.iter() {
-        for parent in &post.parent_post_ids {
-            if let (Some(a), Some(b)) = (
-                state.graph_nodes.get(parent),
-                state.graph_nodes.get(&post.id),
-            ) {
-                let pa = world_to_screen(a.pos);
-                let pb = world_to_screen(b.pos);
-                let is_reply_edge = reply_targets
-                    .iter()
-                    .any(|id| id == parent || id == &post.id);
-                let sel = state.selected_post.as_ref();
-                let color = if is_reply_edge {
-                    Color32::from_rgb(255, 190, 92)
-                } else if sel == Some(&post.id) || sel == Some(parent) {
-                    Color32::from_rgb(110, 190, 255)
-                } else {
-                    Color32::from_rgb(80, 98, 150)
-                };
-                edge_painter.line_segment(
-                    [pa, pb],
-                    egui::Stroke {
-                        width: if is_reply_edge { 3.4 } else { 2.0 },
-                        color,
-                    },
-                );
-            } else if state.graph_nodes.get(parent).is_none() {
-                let placeholder = GraphNode {
-                    pos: egui::pos2(0.05, 0.05),
-                    vel: egui::vec2(0.0, 0.0),
-                    id: parent.clone(),
-                    size: egui::vec2(220.0, 140.0),
-                    dragging: false,
-                };
-                state.graph_nodes.insert(parent.clone(), placeholder);
-            }
-        }
-    }
-
-    let api_base = app.api.base_url().to_string();
-
+    let mut layouts = Vec::new();
     for post in posts.iter() {
         if let Some(node) = state.graph_nodes.get_mut(&post.id) {
             let attachments = state.attachments.get(&post.id).cloned();
@@ -168,109 +142,129 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
                 .unwrap_or(false);
             let card_height = estimate_node_height(ui, post, has_preview);
             node.size = egui::vec2(card_width, card_height);
-
             let top_left = world_to_screen(node.pos);
             let size = node.size * state.graph_zoom;
             let rect_node = egui::Rect::from_min_size(top_left, size);
-            let drag_id = ui.make_persistent_id(format!("graph_node_drag_{}", post.id));
-            let mut drag_response = ui.interact(rect_node, drag_id, egui::Sense::drag());
-            let hovered = rect_node.contains(response.hover_pos().unwrap_or_default());
+            layouts.push(NodeLayoutData {
+                post: post.clone(),
+                rect: rect_node,
+                attachments,
+            });
+        }
+    }
 
-            if state.graph_dragging {
-                if let Some(pos) = response.hover_pos() {
-                    if let Some(current) = state.graph_nodes.get_mut(&post.id) {
-                        if current.dragging {
-                            let wx = ((pos.x - rect.left() - state.graph_offset.x)
-                                / (rect.width() * state.graph_zoom))
-                                .clamp(0.0, 1.0);
-                            let wy = ((pos.y - rect.top() - state.graph_offset.y)
-                                / (rect.height() * state.graph_zoom))
-                                .clamp(0.0, 1.0);
-                            current.pos = egui::pos2(wx, wy);
-                        }
+    let rect_lookup: HashMap<String, egui::Rect> = layouts
+        .iter()
+        .map(|layout| (layout.post.id.clone(), layout.rect))
+        .collect();
+
+    draw_edges(&edge_painter, &layouts, &rect_lookup, state);
+
+    let api_base = app.api.base_url().to_string();
+
+    for layout in layouts {
+        let rect_node = layout.rect;
+        let drag_id = ui.make_persistent_id(format!("graph_node_drag_{}", layout.post.id));
+        let drag_handle = ui.interact(rect_node, drag_id, egui::Sense::click_and_drag());
+        let hovered = rect_node.contains(response.hover_pos().unwrap_or_default());
+
+        if state.graph_dragging {
+            if let Some(pos) = response.hover_pos() {
+                if let Some(node) = state.graph_nodes.get_mut(&layout.post.id) {
+                    if node.dragging {
+                        let wx = ((pos.x - rect.left() - state.graph_offset.x)
+                            / (rect.width() * state.graph_zoom))
+                            .clamp(0.0, 1.0);
+                        let wy = ((pos.y - rect.top() - state.graph_offset.y)
+                            / (rect.height() * state.graph_zoom))
+                            .clamp(0.0, 1.0);
+                        node.pos = egui::pos2(wx, wy);
                     }
                 }
             }
+        }
 
-            let selected = state.selected_post.as_ref() == Some(&post.id);
-            let reply_target = state.reply_to.iter().any(|id| id == &post.id);
-            let fill_color = if reply_target {
-                Color32::from_rgb(40, 52, 85)
-            } else if selected {
-                Color32::from_rgb(58, 48, 24)
-            } else if hovered {
-                Color32::from_rgb(38, 41, 54)
-            } else {
-                Color32::from_rgb(30, 30, 38)
-            };
+        let selected = state.selected_post.as_ref() == Some(&layout.post.id);
+        let reply_target = state.reply_to.iter().any(|id| id == &layout.post.id);
+        let fill_color = if reply_target {
+            Color32::from_rgb(40, 52, 85)
+        } else if selected {
+            Color32::from_rgb(58, 48, 24)
+        } else if hovered {
+            Color32::from_rgb(38, 41, 54)
+        } else {
+            Color32::from_rgb(30, 30, 38)
+        };
 
-            let stroke_color = if reply_target {
-                Color32::from_rgb(255, 190, 92)
-            } else if selected {
-                Color32::from_rgb(250, 208, 108)
-            } else {
-                Color32::from_rgb(80, 90, 130)
-            };
+        let stroke_color = if reply_target {
+            Color32::from_rgb(255, 190, 92)
+        } else if selected {
+            Color32::from_rgb(250, 208, 108)
+        } else {
+            Color32::from_rgb(80, 90, 130)
+        };
 
-            let card_response = ui
-                .allocate_ui_at_rect(rect_node, |ui| {
-                    ui.set_clip_rect(rect_node);
-                    egui::Frame::none()
-                        .fill(fill_color)
-                        .stroke(egui::Stroke::new(1.5, stroke_color))
-                        .rounding(egui::Rounding::same(10.0))
-                        .inner_margin(Margin::same(10.0))
-                        .show(ui, |ui| {
-                            ui.vertical(|ui| {
-                                render_node_header(ui, state, post);
+        let card_response = ui
+            .allocate_ui_at_rect(rect_node, |ui| {
+                ui.set_clip_rect(rect_node);
+                egui::Frame::none()
+                    .fill(fill_color)
+                    .stroke(egui::Stroke::new(1.5, stroke_color))
+                    .rounding(egui::Rounding::same(10.0))
+                    .inner_margin(Margin::same(10.0))
+                    .show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            render_node_header(ui, state, &layout.post);
 
-                                if !post.parent_post_ids.is_empty() {
-                                    ui.add_space(4.0);
-                                    ui.horizontal_wrapped(|ui| {
-                                        ui.label(RichText::new("Replying to:").size(11.0));
-                                        for parent in &post.parent_post_ids {
-                                            if ui.link(format!("#{parent}")).clicked() {
-                                                state.selected_post = Some(parent.clone());
-                                            }
+                            if !layout.post.parent_post_ids.is_empty() {
+                                ui.add_space(4.0);
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(RichText::new("Replying to:").size(11.0));
+                                    for parent in &layout.post.parent_post_ids {
+                                        if ui.link(format!("#{parent}")).clicked() {
+                                            state.selected_post = Some(parent.clone());
                                         }
-                                    });
-                                }
+                                    }
+                                });
+                            }
 
-                                ui.add_space(6.0);
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(&post.body)
-                                            .size(13.0)
-                                            .color(Color32::from_rgb(220, 220, 230)),
-                                    )
-                                    .wrap(true),
-                                );
+                            ui.add_space(6.0);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&layout.post.body)
+                                        .size(13.0)
+                                        .color(Color32::from_rgb(220, 220, 230)),
+                                )
+                                .wrap(true),
+                            );
 
-                                if let Some(files) = attachments.as_ref() {
-                                    render_node_attachments(app, ui, files, &api_base);
-                                }
+                            render_node_attachments(
+                                app,
+                                ui,
+                                layout.attachments.as_ref(),
+                                &api_base,
+                            );
 
-                                ui.add_space(6.0);
-                                render_node_actions(ui, state, post);
-                            });
+                            ui.add_space(6.0);
+                            render_node_actions(ui, state, &layout.post);
                         });
-                })
-                .response;
+                    });
+            })
+            .response;
 
-            drag_response = drag_response.union(card_response);
+        let combined_drag = drag_handle.union(card_response);
 
-            if drag_response.drag_started() {
-                if let Some(current) = state.graph_nodes.get_mut(&post.id) {
-                    current.dragging = true;
-                    state.graph_dragging = true;
-                }
+        if combined_drag.drag_started() {
+            if let Some(node) = state.graph_nodes.get_mut(&layout.post.id) {
+                node.dragging = true;
             }
-            if drag_response.drag_stopped() {
-                if let Some(current) = state.graph_nodes.get_mut(&post.id) {
-                    current.dragging = false;
-                }
-                state.graph_dragging = false;
+            state.graph_dragging = true;
+        }
+        if combined_drag.drag_stopped() {
+            if let Some(node) = state.graph_nodes.get_mut(&layout.post.id) {
+                node.dragging = false;
             }
+            state.graph_dragging = false;
         }
     }
 
@@ -316,9 +310,14 @@ fn render_node_actions(ui: &mut egui::Ui, state: &mut ThreadState, post: &PostVi
 fn render_node_attachments(
     app: &mut GraphchanApp,
     ui: &mut egui::Ui,
-    files: &[FileResponse],
+    attachments: Option<&Vec<FileResponse>>,
     api_base: &str,
 ) {
+    let files = match attachments {
+        Some(list) => list,
+        None => return,
+    };
+
     if let Some(file) = files.iter().find(|f| is_image(f)) {
         match image_preview(app, ui, file, api_base) {
             ImagePreview::Ready(tex) => {
@@ -397,6 +396,79 @@ enum ImagePreview {
     Loading,
     Error(String),
     None,
+}
+
+fn draw_edges(
+    painter: &egui::Painter,
+    layouts: &[NodeLayoutData],
+    rect_lookup: &HashMap<String, egui::Rect>,
+    state: &ThreadState,
+) {
+    let reply_targets = &state.reply_to;
+    for layout in layouts {
+        for parent in &layout.post.parent_post_ids {
+            let (parent_rect, child_rect) =
+                match (rect_lookup.get(parent), rect_lookup.get(&layout.post.id)) {
+                    (Some(p), Some(c)) => (p, c),
+                    _ => continue,
+                };
+
+            let start = anchor_bottom(parent_rect);
+            let end = anchor_top(child_rect);
+            let is_reply_edge = reply_targets
+                .iter()
+                .any(|id| id == parent || id == &layout.post.id);
+            let sel = state.selected_post.as_ref();
+            let color = if is_reply_edge {
+                Color32::from_rgb(255, 190, 92)
+            } else if sel == Some(&layout.post.id) || sel == Some(parent) {
+                Color32::from_rgb(110, 190, 255)
+            } else {
+                Color32::from_rgb(90, 110, 170)
+            };
+
+            painter.line_segment(
+                [start, end],
+                egui::Stroke::new(if is_reply_edge { 3.4 } else { 2.0 }, color),
+            );
+
+            draw_arrow(painter, start, end, color);
+        }
+    }
+}
+
+fn anchor_top(rect: &egui::Rect) -> Pos2 {
+    pos_with_offset(rect.center_top(), 0.0, -6.0)
+}
+
+fn anchor_bottom(rect: &egui::Rect) -> Pos2 {
+    pos_with_offset(rect.center_bottom(), 0.0, 6.0)
+}
+
+fn pos_with_offset(mut pos: Pos2, dx: f32, dy: f32) -> Pos2 {
+    pos.x += dx;
+    pos.y += dy;
+    pos
+}
+
+fn draw_arrow(painter: &egui::Painter, start: Pos2, end: Pos2, color: Color32) {
+    let dir = (end - start).normalized();
+    let normal = egui::Vec2::new(-dir.y, dir.x);
+    let arrow_size = 8.0;
+    let arrow_tip = end;
+    let arrow_left = egui::pos2(
+        end.x - dir.x * arrow_size + normal.x * arrow_size * 0.5,
+        end.y - dir.y * arrow_size + normal.y * arrow_size * 0.5,
+    );
+    let arrow_right = egui::pos2(
+        end.x - dir.x * arrow_size - normal.x * arrow_size * 0.5,
+        end.y - dir.y * arrow_size - normal.y * arrow_size * 0.5,
+    );
+    painter.add(egui::Shape::convex_polygon(
+        vec![arrow_tip, arrow_left, arrow_right],
+        color,
+        egui::Stroke::NONE,
+    ));
 }
 
 fn estimate_node_height(ui: &egui::Ui, post: &PostView, has_preview: bool) -> f32 {

@@ -192,19 +192,32 @@ fn extract_references(html: Option<&str>, id_map: &HashMap<u64, String>) -> Vec<
     let Some(content) = html else {
         return Vec::new();
     };
+    let normalized = content
+        .replace("&gt;", ">")
+        .replace("&#62;", ">")
+        .replace("&nbsp;", " ");
     let re = Regex::new(r">>\s*(\d+)").unwrap();
     let mut refs = Vec::new();
-    for capture in re.captures_iter(content) {
+    for capture in re.captures_iter(&normalized) {
         if let Some(matched) = capture.get(1) {
             if let Ok(ref_no) = matched.as_str().parse::<u64>() {
                 if let Some(mapped) = id_map.get(&ref_no) {
                     refs.push(mapped.clone());
+                } else {
+                    log::debug!("Reference >>{} not yet mapped", ref_no);
                 }
             }
         }
     }
     refs.sort();
     refs.dedup();
+    if !refs.is_empty() {
+        log::debug!(
+            "Resolved references {:?} from raw reply snippet: {:?}",
+            refs,
+            content
+        );
+    }
     refs
 }
 
