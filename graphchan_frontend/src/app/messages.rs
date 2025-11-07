@@ -74,6 +74,7 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                                 state.attachments.clear();
                                 state.attachments_errors.clear();
                                 state.attachments_loading.clear();
+                                state.reply_to.clear();
                             }
                             Err(err) => {
                                 state.error = Some(err.to_string());
@@ -110,6 +111,7 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                             graph_zoom: 1.0,
                             graph_offset: egui::vec2(0.0, 0.0),
                             graph_dragging: false,
+                            reply_to: Vec::new(),
                         };
                         for post in &details.posts {
                             state
@@ -131,6 +133,7 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                 }
             }
             AppMessage::PostCreated { thread_id, result } => {
+                let mut attachment_target: Option<String> = None;
                 if let ViewState::Thread(state) = &mut app.view {
                     if state.summary.id == thread_id {
                         state.new_post_sending = false;
@@ -153,14 +156,18 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                                         dragging: false,
                                     },
                                 );
-                                app.spawn_load_attachments_for_post(&thread_id, &post.id);
+                                attachment_target = Some(post.id.clone());
                                 app.info_banner = Some("Post published".into());
+                                state.reply_to.clear();
                             }
                             Err(err) => {
                                 state.new_post_error = Some(err.to_string());
                             }
                         }
                     }
+                }
+                if let Some(post_id) = attachment_target {
+                    app.spawn_load_attachments_for_post(&thread_id, &post_id);
                 }
             }
             AppMessage::PostAttachmentsLoaded {

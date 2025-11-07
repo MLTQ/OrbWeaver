@@ -28,6 +28,7 @@ impl GraphchanApp {
             graph_zoom: 1.0,
             graph_offset: egui::vec2(0.0, 0.0),
             graph_dragging: false,
+            reply_to: Vec::new(),
         });
         self.spawn_load_thread(&thread_id);
     }
@@ -82,7 +83,7 @@ impl GraphchanApp {
                     state.graph_dragging = false;
                 }
             }
-            graph::render_graph(ui, state);
+            graph::render_graph(self, ui, state);
             return go_back;
         }
 
@@ -156,6 +157,22 @@ impl GraphchanApp {
         ui.collapsing("Reply", |ui| {
             if let Some(err) = &state.new_post_error {
                 ui.colored_label(Color32::LIGHT_RED, err);
+            }
+            if !state.reply_to.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!(
+                        "Replying to {}",
+                        state
+                            .reply_to
+                            .iter()
+                            .map(|id| format!("#{id}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )));
+                    if ui.button("Clear").clicked() {
+                        state.reply_to.clear();
+                    }
+                });
             }
             ui.add(
                 egui::TextEdit::multiline(&mut state.new_post_body)

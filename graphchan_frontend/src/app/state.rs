@@ -42,6 +42,7 @@ pub struct ThreadState {
     pub graph_zoom: f32,
     pub graph_offset: egui::Vec2,
     pub graph_dragging: bool,
+    pub reply_to: Vec<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

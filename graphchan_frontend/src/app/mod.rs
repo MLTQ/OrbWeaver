@@ -114,6 +114,7 @@ impl GraphchanApp {
         let mut payload = CreatePostInput::default();
         payload.thread_id = thread_id.clone();
         payload.body = body;
+        payload.parent_post_ids = thread_state.reply_to.clone();
         thread_state.new_post_sending = true;
         thread_state.new_post_error = None;
         tasks::create_post(self.api.clone(), self.tx.clone(), thread_id, payload);
@@ -165,6 +166,19 @@ impl GraphchanApp {
     fn spawn_download_image(&mut self, file_id: &str, url: &str) {
         self.image_loading.insert(file_id.to_string());
         tasks::download_image(self.tx.clone(), file_id.to_string(), url.to_string());
+    }
+
+    fn set_reply_target(state: &mut ThreadState, post_id: &str) {
+        state.reply_to.clear();
+        state.reply_to.push(post_id.to_string());
+    }
+
+    fn quote_post(state: &mut ThreadState, post_id: &str) {
+        Self::set_reply_target(state, post_id);
+        let quote_line = format!(">>{post_id}\n");
+        if !state.new_post_body.starts_with(&quote_line) {
+            state.new_post_body = format!("{quote_line}{}", state.new_post_body);
+        }
     }
 }
 
@@ -256,6 +270,7 @@ impl eframe::App for GraphchanApp {
                         graph_zoom: 1.0,
                         graph_offset: egui::vec2(0.0, 0.0),
                         graph_dragging: false,
+                        reply_to: Vec::new(),
                     },
                 )
             } else {
