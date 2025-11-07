@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, Color32, FontId, Margin, RichText};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -56,15 +56,48 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
 
     let available = ui.available_size();
     let (rect, response) = ui.allocate_at_least(available, egui::Sense::click_and_drag());
-    let painter = ui.painter_at(rect);
+    let canvas = ui.painter_at(rect);
+    canvas.rect_filled(rect, 0.0, Color32::from_rgb(12, 13, 20));
+    let dot_spacing = 28.0;
+    let dot_color = Color32::from_rgba_premultiplied(70, 72, 95, 90);
+    let mut x = rect.left();
+    while x < rect.right() {
+        let mut y = rect.top();
+        while y < rect.bottom() {
+            canvas.circle_filled(egui::pos2(x, y), 1.0, dot_color);
+            y += dot_spacing;
+        }
+        x += dot_spacing;
+    }
 
-    if response.hovered() {
-        let scroll = ui.input(|i| i.raw_scroll_delta.y);
-        if scroll != 0.0 {
-            state.graph_zoom *= 1.0 + scroll * 0.001;
-            state.graph_zoom = state.graph_zoom.clamp(0.2, 3.0);
+    let edge_painter = ui.painter_at(rect);
+
+    if let Some(pointer_pos) = ui.ctx().pointer_hover_pos() {
+        if rect.contains(pointer_pos) {
+            let scroll = ui.input(|i| i.raw_scroll_delta.y);
+            if scroll != 0.0 {
+                let old_zoom = state.graph_zoom;
+                let zoom_factor = (1.0 + scroll * 0.001).clamp(0.5, 3.5);
+                let target_zoom = (old_zoom * zoom_factor).clamp(0.2, 4.0);
+
+                let rect_size = rect.size();
+                let anchor = pointer_pos;
+                let world_x = ((anchor.x - rect.left() - state.graph_offset.x)
+                    / (rect_size.x * old_zoom))
+                    .clamp(0.0, 1.0);
+                let world_y = ((anchor.y - rect.top() - state.graph_offset.y)
+                    / (rect_size.y * old_zoom))
+                    .clamp(0.0, 1.0);
+
+                state.graph_zoom = target_zoom;
+                state.graph_offset.x =
+                    anchor.x - rect.left() - world_x * rect_size.x * state.graph_zoom;
+                state.graph_offset.y =
+                    anchor.y - rect.top() - world_y * rect_size.y * state.graph_zoom;
+            }
         }
     }
+
     if response.dragged_by(egui::PointerButton::Secondary) {
         state.graph_offset += response.drag_delta();
     }
@@ -99,14 +132,14 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
                 let color = if is_reply_edge {
                     Color32::from_rgb(255, 190, 92)
                 } else if sel == Some(&post.id) || sel == Some(parent) {
-                    Color32::from_rgb(120, 200, 255)
+                    Color32::from_rgb(110, 190, 255)
                 } else {
-                    Color32::from_rgb(90, 90, 110)
+                    Color32::from_rgb(80, 98, 150)
                 };
-                painter.line_segment(
+                edge_painter.line_segment(
                     [pa, pb],
                     egui::Stroke {
-                        width: if is_reply_edge { 3.0 } else { 1.5 },
+                        width: if is_reply_edge { 3.4 } else { 2.0 },
                         color,
                     },
                 );
@@ -127,34 +160,21 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
 
     for post in posts.iter() {
         if let Some(node) = state.graph_nodes.get_mut(&post.id) {
-            let has_preview = state
-                .attachments
-                .get(&post.id)
+            let attachments = state.attachments.get(&post.id).cloned();
+            let card_width = 320.0;
+            let has_preview = attachments
+                .as_ref()
                 .map(|files| files.iter().any(is_image))
                 .unwrap_or(false);
-            let card_width = 280.0;
-            let card_height = if has_preview { 230.0 } else { 180.0 };
+            let card_height = estimate_node_height(ui, post, has_preview);
             node.size = egui::vec2(card_width, card_height);
 
             let top_left = world_to_screen(node.pos);
             let size = node.size * state.graph_zoom;
             let rect_node = egui::Rect::from_min_size(top_left, size);
             let drag_id = ui.make_persistent_id(format!("graph_node_drag_{}", post.id));
-            let drag_response = ui.interact(rect_node, drag_id, egui::Sense::click_and_drag());
-            let hovered = drag_response.hovered();
-
-            if drag_response.dragged_by(egui::PointerButton::Primary) {
-                if let Some(current) = state.graph_nodes.get_mut(&post.id) {
-                    current.dragging = true;
-                    state.graph_dragging = true;
-                }
-            }
-            if drag_response.drag_stopped() {
-                if let Some(current) = state.graph_nodes.get_mut(&post.id) {
-                    current.dragging = false;
-                    state.graph_dragging = false;
-                }
-            }
+            let mut drag_response = ui.interact(rect_node, drag_id, egui::Sense::drag());
+            let hovered = rect_node.contains(response.hover_pos().unwrap_or_default());
 
             if state.graph_dragging {
                 if let Some(pos) = response.hover_pos() {
@@ -192,48 +212,65 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
                 Color32::from_rgb(80, 90, 130)
             };
 
-            ui.allocate_ui_at_rect(rect_node, |ui| {
-                ui.set_clip_rect(rect_node);
-                egui::Frame::none()
-                    .fill(fill_color)
-                    .stroke(egui::Stroke::new(1.5, stroke_color))
-                    .rounding(egui::Rounding::same(10.0))
-                    .inner_margin(egui::Margin::same(10.0))
-                    .show(ui, |ui| {
-                        ui.vertical(|ui| {
-                            render_node_header(ui, state, post);
+            let card_response = ui
+                .allocate_ui_at_rect(rect_node, |ui| {
+                    ui.set_clip_rect(rect_node);
+                    egui::Frame::none()
+                        .fill(fill_color)
+                        .stroke(egui::Stroke::new(1.5, stroke_color))
+                        .rounding(egui::Rounding::same(10.0))
+                        .inner_margin(Margin::same(10.0))
+                        .show(ui, |ui| {
+                            ui.vertical(|ui| {
+                                render_node_header(ui, state, post);
 
-                            if !post.parent_post_ids.is_empty() {
-                                ui.add_space(4.0);
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.label(RichText::new("Replying to:").size(11.0));
-                                    for parent in &post.parent_post_ids {
-                                        if ui.link(format!("#{parent}")).clicked() {
-                                            state.selected_post = Some(parent.clone());
+                                if !post.parent_post_ids.is_empty() {
+                                    ui.add_space(4.0);
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(RichText::new("Replying to:").size(11.0));
+                                        for parent in &post.parent_post_ids {
+                                            if ui.link(format!("#{parent}")).clicked() {
+                                                state.selected_post = Some(parent.clone());
+                                            }
                                         }
-                                    }
-                                });
-                            }
+                                    });
+                                }
 
-                            ui.add_space(6.0);
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&post.body)
-                                        .size(13.0)
-                                        .color(Color32::from_rgb(220, 220, 230)),
-                                )
-                                .wrap(true),
-                            );
+                                ui.add_space(6.0);
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&post.body)
+                                            .size(13.0)
+                                            .color(Color32::from_rgb(220, 220, 230)),
+                                    )
+                                    .wrap(true),
+                                );
 
-                            if let Some(files) = state.attachments.get(&post.id) {
-                                render_node_attachments(app, ui, files, &api_base);
-                            }
+                                if let Some(files) = attachments.as_ref() {
+                                    render_node_attachments(app, ui, files, &api_base);
+                                }
 
-                            ui.add_space(6.0);
-                            render_node_actions(ui, state, post);
+                                ui.add_space(6.0);
+                                render_node_actions(ui, state, post);
+                            });
                         });
-                    });
-            });
+                })
+                .response;
+
+            drag_response = drag_response.union(card_response);
+
+            if drag_response.drag_started() {
+                if let Some(current) = state.graph_nodes.get_mut(&post.id) {
+                    current.dragging = true;
+                    state.graph_dragging = true;
+                }
+            }
+            if drag_response.drag_stopped() {
+                if let Some(current) = state.graph_nodes.get_mut(&post.id) {
+                    current.dragging = false;
+                }
+                state.graph_dragging = false;
+            }
         }
     }
 
@@ -360,6 +397,24 @@ enum ImagePreview {
     Loading,
     Error(String),
     None,
+}
+
+fn estimate_node_height(ui: &egui::Ui, post: &PostView, has_preview: bool) -> f32 {
+    let text_width = 320.0 - 20.0;
+    let text_height = ui.fonts(|fonts| {
+        let body = post.body.clone();
+        let galley = fonts.layout(body, FontId::proportional(13.0), Color32::WHITE, text_width);
+        galley.size().y
+    });
+
+    let mut height = 70.0 + text_height; // header + body
+    if !post.parent_post_ids.is_empty() {
+        height += 28.0;
+    }
+    if has_preview {
+        height += 120.0;
+    }
+    height + 36.0 // actions + padding
 }
 
 fn step_graph_layout(nodes: &mut HashMap<String, GraphNode>, posts: &[PostView]) {
