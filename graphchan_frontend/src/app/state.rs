@@ -37,6 +37,7 @@ pub struct ThreadState {
     pub attachments_loading: HashSet<String>,
     pub attachments_errors: HashMap<String, String>,
     pub display_mode: ThreadDisplayMode,
+    pub last_layout_mode: Option<ThreadDisplayMode>,
     pub graph_nodes: HashMap<String, GraphNode>,
     pub selected_post: Option<String>,
     pub graph_zoom: f32,
@@ -49,6 +50,7 @@ pub struct ThreadState {
 pub enum ThreadDisplayMode {
     List,
     Graph,
+    Chronological,
 }
 
 pub struct GraphNode {

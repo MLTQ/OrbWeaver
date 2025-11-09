@@ -265,6 +265,7 @@ impl eframe::App for GraphchanApp {
                         attachments_loading: HashSet::new(),
                         attachments_errors: HashMap::new(),
                         display_mode: ThreadDisplayMode::List,
+                        last_layout_mode: None,
                         graph_nodes: HashMap::new(),
                         selected_post: None,
                         graph_zoom: 1.0,

@@ -6,7 +6,7 @@ use crate::models::ThreadSummary;
 
 use super::super::state::{ThreadDisplayMode, ThreadState, ViewState};
 use super::super::{format_timestamp, GraphchanApp};
-use super::graph;
+use super::{chronological, graph};
 
 impl GraphchanApp {
     pub(crate) fn open_thread(&mut self, summary: ThreadSummary) {
@@ -23,6 +23,7 @@ impl GraphchanApp {
             attachments_loading: HashSet::new(),
             attachments_errors: HashMap::new(),
             display_mode: ThreadDisplayMode::List,
+            last_layout_mode: None,
             graph_nodes: HashMap::new(),
             selected_post: None,
             graph_zoom: 1.0,
@@ -72,7 +73,14 @@ impl GraphchanApp {
         ui.horizontal(|ui| {
             ui.selectable_value(&mut state.display_mode, ThreadDisplayMode::List, "Posts");
             ui.selectable_value(&mut state.display_mode, ThreadDisplayMode::Graph, "Graph");
+            ui.selectable_value(&mut state.display_mode, ThreadDisplayMode::Chronological, "Timeline");
         });
+
+        // Clear layout if mode changed
+        if state.last_layout_mode != Some(state.display_mode) {
+            state.graph_nodes.clear();
+            state.last_layout_mode = Some(state.display_mode);
+        }
 
         if state.display_mode == ThreadDisplayMode::Graph {
             if state.graph_nodes.is_empty() {
@@ -84,6 +92,18 @@ impl GraphchanApp {
                 }
             }
             graph::render_graph(self, ui, state);
+            return go_back;
+        }
+
+        if state.display_mode == ThreadDisplayMode::Chronological {
+            if state.graph_nodes.is_empty() {
+                if let Some(details) = &state.details {
+                    state.graph_nodes = chronological::build_chronological_layout(&details.posts);
+                    state.graph_zoom = 1.0;
+                    state.graph_offset = egui::vec2(0.0, 0.0);
+                }
+            }
+            chronological::render_chronological(self, ui, state);
             return go_back;
         }
 

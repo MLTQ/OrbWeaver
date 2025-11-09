@@ -106,6 +106,7 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                             attachments_loading: HashSet::new(),
                             attachments_errors: HashMap::new(),
                             display_mode: ThreadDisplayMode::List,
+                            last_layout_mode: None,
                             graph_nodes: build_initial_graph(&details.posts),
                             selected_post: None,
                             graph_zoom: 1.0,

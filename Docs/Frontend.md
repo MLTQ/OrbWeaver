@@ -46,6 +46,7 @@ graphchan_frontend/
 - Richer attachment handling (thumbnails, download progress, inline previews).
 - Pagination/search and better sorting for the catalog.
 - Graph/DAG layout experiments (ported from the legacy `p2pchan` implementation).
+  - Visible reply edges now render between posts in graph mode (one edge per post for now; multi-parent rendering still WIP).
 - Improved error reporting (toast notifications, retry affordances).
 - Packaging scripts to coordinate backend & frontend launch for operators.
 

@@ -344,7 +344,7 @@ fn render_node_attachments(
     }
 }
 
-fn image_preview(
+pub(super) fn image_preview(
     app: &mut GraphchanApp,
     ui: &egui::Ui,
     file: &FileResponse,
@@ -391,7 +391,7 @@ fn is_image(file: &FileResponse) -> bool {
             .unwrap_or(false)
 }
 
-enum ImagePreview {
+pub(super) enum ImagePreview {
     Ready(egui::TextureHandle),
     Loading,
     Error(String),

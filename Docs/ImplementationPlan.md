@@ -64,6 +64,7 @@
 - Added documentation (`Docs/Architecture.md`, `Docs/NetworkingPlan.md`, `Docs/ImplementationPlan.md`) capturing current design decisions and roadmap.
 - Unit tests (`cargo test`) pass; REST integration harness exists (ignored pending network sync).
 - **Frontend**: Fixed build errors, egui 0.27 API compatibility, and borrow checker issues in graphchan_frontend.
+- **Frontend**: Graph view now renders per-post reply edges over a dotted canvas background (currently limited to one parent edge per post while importer/back-end fixes roll out).
 
 ## Next Actions
 1. **Frontend Enhancements**:
