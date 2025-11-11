@@ -63,7 +63,7 @@ pub async fn serve_http(
         .route("/files/:id", get(download_file))
         .route("/peers", get(list_peers).post(add_peer))
         .route("/peers/self", get(get_self_peer))
-        .layer(DefaultBodyLimit::max(50 * 1024 * 1024))  // 50MB limit
+        .layer(DefaultBodyLimit::max(50 * 1024 * 1024)) // 50MB limit
         .with_state(state.clone());
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.api_port));

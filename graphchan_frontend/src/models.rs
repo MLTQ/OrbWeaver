@@ -41,6 +41,9 @@ pub struct CreateThreadInput {
     pub creator_peer_id: Option<String>,
     #[serde(default)]
     pub pinned: Option<bool>,
+    /// Optional timestamp for imported threads. If None, backend uses current time.
+    #[serde(default)]
+    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -51,6 +54,9 @@ pub struct CreatePostInput {
     pub body: String,
     #[serde(default)]
     pub parent_post_ids: Vec<String>,
+    /// Optional timestamp for imported posts. If None, backend uses current time.
+    #[serde(default)]
+    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -11,7 +11,8 @@ impl GraphchanApp {
         file: &FileResponse,
         api_base: &str,
     ) {
-        let download_url = format!("{}/files/{}", api_base, file.id);
+        let download_url =
+            super::super::resolve_download_url(api_base, file.download_url.as_deref(), &file.id);
         let name = file.original_name.as_deref().unwrap_or("attachment");
         let mime = file.mime.as_deref().unwrap_or("");
 
@@ -51,7 +52,7 @@ impl GraphchanApp {
                 }
             } else if let Some(err) = self.image_errors.get(&file.id) {
                 ui.colored_label(Color32::LIGHT_RED, format!("Image failed: {err}"));
-                ui.hyperlink_to(name, download_url);
+                ui.hyperlink_to(name, &download_url);
             } else {
                 if !self.image_loading.contains(&file.id) {
                     self.spawn_download_image(&file.id, &download_url);

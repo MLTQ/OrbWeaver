@@ -152,7 +152,6 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                                     GraphNode {
                                         pos: egui::pos2(0.5, 0.1),
                                         vel: egui::vec2(0.0, 0.0),
-                                        id: post.id.clone(),
                                         size: egui::vec2(220.0, 140.0),
                                         dragging: false,
                                     },
@@ -176,7 +175,7 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                 post_id,
                 result,
             } => {
-                let mut downloads: Vec<String> = Vec::new();
+                let mut downloads: Vec<(String, String)> = Vec::new();
                 let mut base_url: Option<String> = None;
 
                 if let ViewState::Thread(state) = &mut app.view {
@@ -193,14 +192,22 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                                             || app.image_textures.contains_key(&file.id)
                                             || app.image_errors.contains_key(&file.id);
                                         if mime.starts_with("image/") && !already_have {
-                                            downloads.push(file.id.clone());
+                                            let base_ref = base_url.get_or_insert_with(|| {
+                                                app.api.base_url().to_string()
+                                            });
+                                            let url = super::resolve_download_url(
+                                                base_ref,
+                                                file.download_url.as_deref(),
+                                                &file.id,
+                                            );
+                                            downloads.push((file.id.clone(), url));
                                         }
                                     }
                                 }
                             }
                             state.attachments.insert(post_id.clone(), files);
                             state.attachments_errors.remove(&post_id);
-                            base_url = Some(app.api.base_url().to_string());
+                            base_url.get_or_insert_with(|| app.api.base_url().to_string());
                         }
                         Err(err) => {
                             state
@@ -210,9 +217,8 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                     }
                 }
 
-                if let Some(base_url) = base_url {
-                    for file_id in downloads {
-                        let url = format!("{}/files/{}", base_url, file_id);
+                if base_url.is_some() {
+                    for (file_id, url) in downloads {
                         app.spawn_download_image(&file_id, &url);
                     }
                 }
@@ -229,7 +235,7 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                         app.spawn_load_threads();
                     }
                     Err(err) => {
-                        app.importer.error = Some(err.to_string());
+                        app.importer.error = Some(format!("{err:#}"));
                     }
                 }
             }
@@ -243,6 +249,8 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                         app.image_errors.insert(file_id, e);
                     }
                 }
+                // Download completed, process next item in queue
+                app.on_download_complete();
             }
         }
     }

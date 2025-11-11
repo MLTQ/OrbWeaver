@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use chrono::{DateTime, Utc};
@@ -19,6 +19,9 @@ use state::{
     CreateThreadState, ImporterState, LoadedImage, ThreadDisplayMode, ThreadState, ViewState,
 };
 
+// Maximum number of concurrent image downloads to prevent overwhelming the backend
+const MAX_CONCURRENT_DOWNLOADS: usize = 20;
+
 pub struct GraphchanApp {
     api: ApiClient,
     tx: Sender<AppMessage>,
@@ -38,6 +41,27 @@ pub struct GraphchanApp {
     image_pending: HashMap<String, LoadedImage>,
     image_errors: HashMap<String, String>,
     image_viewers: HashMap<String, bool>,
+    // Download queue for rate limiting
+    download_queue: VecDeque<(String, String)>, // (file_id, url)
+    active_downloads: usize,
+}
+
+pub(crate) fn resolve_download_url(
+    base_url: &str,
+    download_url: Option<&str>,
+    file_id: &str,
+) -> String {
+    if let Some(url) = download_url {
+        if url.starts_with("http://") || url.starts_with("https://") {
+            url.to_string()
+        } else if url.starts_with('/') {
+            format!("{base_url}{url}")
+        } else {
+            format!("{base_url}/{url}")
+        }
+    } else {
+        format!("{base_url}/files/{file_id}")
+    }
 }
 
 impl GraphchanApp {
@@ -69,6 +93,8 @@ impl GraphchanApp {
             image_pending: HashMap::new(),
             image_errors: HashMap::new(),
             image_viewers: HashMap::new(),
+            download_queue: VecDeque::new(),
+            active_downloads: 0,
         };
         app.spawn_load_threads();
         app
@@ -164,8 +190,34 @@ impl GraphchanApp {
     }
 
     fn spawn_download_image(&mut self, file_id: &str, url: &str) {
+        // Mark as loading
         self.image_loading.insert(file_id.to_string());
-        tasks::download_image(self.tx.clone(), file_id.to_string(), url.to_string());
+        
+        // Add to queue
+        self.download_queue.push_back((file_id.to_string(), url.to_string()));
+        
+        // Process queue
+        self.process_download_queue();
+    }
+    
+    fn process_download_queue(&mut self) {
+        // Start downloads up to the limit
+        while self.active_downloads < MAX_CONCURRENT_DOWNLOADS {
+            if let Some((file_id, url)) = self.download_queue.pop_front() {
+                self.active_downloads += 1;
+                tasks::download_image(self.tx.clone(), file_id, url);
+            } else {
+                break;
+            }
+        }
+    }
+    
+    fn on_download_complete(&mut self) {
+        // Decrement counter and process next item in queue
+        if self.active_downloads > 0 {
+            self.active_downloads -= 1;
+        }
+        self.process_download_queue();
     }
 
     fn set_reply_target(state: &mut ThreadState, post_id: &str) {

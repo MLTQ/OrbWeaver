@@ -1,10 +1,9 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use graphchan_backend::bootstrap;
 use graphchan_backend::cli;
 use graphchan_backend::config::GraphchanConfig;
-use graphchan_backend::network;
-use iroh_blobs::store::fs::FsStore;
+use graphchan_backend::node::GraphchanNode;
+use graphchan_backend::telemetry;
 
 #[derive(Parser)]
 #[command(author, version, about = "Graphchan backend daemon and CLI")]
@@ -23,57 +22,30 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    init_tracing();
+    telemetry::init_tracing();
 
     let args = Args::parse();
 
     let config = GraphchanConfig::from_env()?;
-    let bootstrap = bootstrap::initialize(&config).await?;
-    let blob_store = FsStore::load(&config.paths.blobs_dir).await?;
-    let network = network::NetworkHandle::start(
-        &config.paths,
-        &config.network,
-        blob_store.clone(),
-        bootstrap.database.clone(),
-    )
-    .await?;
+    let node = GraphchanNode::start(config).await?;
     tracing::info!(
-        directories_created = ?bootstrap.directories_created,
-        database_initialized = bootstrap.database_initialized,
-        gpg_fingerprint = %bootstrap.identity.gpg_fingerprint,
-        iroh_peer_id = %bootstrap.identity.iroh_peer_id,
+        gpg_fingerprint = %node.identity().gpg_fingerprint,
+        iroh_peer_id = %node.identity().iroh_peer_id,
         "bootstrap complete"
     );
 
     match args.command.unwrap_or(Command::Cli) {
-        Command::Serve => {
-            cli::run_server(
-                config,
-                bootstrap.identity.clone(),
-                bootstrap.database.clone(),
-                network,
-                blob_store.clone(),
-            )
-            .await
-        }
+        Command::Serve => node.run_http_server().await,
         Command::Cli => {
+            let snapshot = node.snapshot();
             cli::run_cli(
-                config,
-                bootstrap.identity.clone(),
-                bootstrap.database.clone(),
-                network,
-                blob_store,
+                snapshot.config,
+                snapshot.identity,
+                snapshot.database,
+                snapshot.network,
+                snapshot.blobs,
             )
             .await
         }
     }
-}
-
-fn init_tracing() {
-    let env_filter = std::env::var("RUST_LOG")
-        .unwrap_or_else(|_| "graphchan_backend=info,tower_http=info".into());
-    let subscriber = tracing_subscriber::FmtSubscriber::builder()
-        .with_env_filter(env_filter)
-        .finish();
-    let _ = tracing::subscriber::set_global_default(subscriber);
 }

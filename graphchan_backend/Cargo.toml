@@ -32,4 +32,4 @@ futures-util = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
-reqwest = { version = "0.12", features = ["json", "multipart"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls-webpki-roots"] }

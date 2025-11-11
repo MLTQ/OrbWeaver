@@ -15,6 +15,15 @@ Key goals:
 - **Domain services** (`ThreadService`, `PeerService`, `FileService`) provide validated business logic on top of the repositories; the file service now streams uploads into the on-disk `FsStore` while keeping SQLite metadata in sync.
 - **HTTP API** is implemented with Axum and currently exposes `/health`, thread CRUD helpers, file upload/download endpoints, and peer management (including friendcode registration).
 - **Networking** spins up an Iroh router (custom relay optional) that serves both the Graphchan gossip protocol and `/iroh-bytes/4`, tracks live QUIC connections, and broadcasts thread/file events to connected peers.
+- **Desktop bundle** ships as the new `graphchan_desktop` crate. It starts a reusable `GraphchanNode`, launches the embedded HTTP server on a Tokio runtime, points the egui client at that local URL, and keeps the API open for other tools.
+
+## Desktop App Mode
+`graphchan_desktop` embeds both crates. On startup it:
+1. Loads `GraphchanConfig`, bootstraps via `GraphchanNode`, and starts the HTTP + Iroh services.
+2. Sets `GRAPHCHAN_API_URL` to the bound localhost port so the egui frontend automatically talks to the embedded backend.
+3. Keeps the REST API exposed for other clients on the same machine (curl, future GUIs, etc.).
+
+Shutting down the window aborts the Axum task and calls `NetworkHandle::shutdown`, so each desktop session cleans up its QUIC endpoint before exit. Operators can still run the backend headless; the desktop binary simply provides a “batteries included” option built on the same services.
 
 ## Module Responsibilities
 - `config`: Discovers filesystem layout via `GraphchanPaths` (derived from `current_exe().parent()`), loads port + network hints from environment (`GRAPHCHAN_API_PORT`, `GRAPHCHAN_PUBLIC_ADDRS`, `GRAPHCHAN_RELAY_URL`).
@@ -25,8 +34,10 @@ Key goals:
 - `files`: Streams uploads into the `FsStore`, mirrors bytes under `files/uploads/`, records metadata (including blob hash and ticket) in SQLite, and prepares streaming downloads from disk.
 - `peers`: Wraps friendcode registration and keeps peer rows up to date, including synthesizing the local peer view from persisted identity data.
 - `network`: Boots the Iroh router with Graphchan and blob protocols, maintains accepted/outgoing connections, and publishes JSON-framed envelopes over unidirectional streams; ingest applies updates and persists blob tickets.
+- `node`: Provides `GraphchanNode::start` and `NodeSnapshot` helpers so binaries can bootstrap the backend once and share the resulting handles (config, identity, database, network, blob store).
 - `api`: Defines the Axum router, request handlers, and error mapping; wires in services and the `NetworkHandle`.
 - `cli`: Owns the top-level async runtime and currently delegates to the HTTP server.
+- `graphchan_desktop`: Embeds the backend + frontend, runs the REST server on a background runtime, exports the API port to the UI via `GRAPHCHAN_API_URL`, and shuts the node down when the window closes.
 - `utils`: Holds shared helpers (`now_utc_iso`, constants) used across modules.
 
 ## HTTP API Surface

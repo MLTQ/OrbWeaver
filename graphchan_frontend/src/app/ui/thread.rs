@@ -73,7 +73,11 @@ impl GraphchanApp {
         ui.horizontal(|ui| {
             ui.selectable_value(&mut state.display_mode, ThreadDisplayMode::List, "Posts");
             ui.selectable_value(&mut state.display_mode, ThreadDisplayMode::Graph, "Graph");
-            ui.selectable_value(&mut state.display_mode, ThreadDisplayMode::Chronological, "Timeline");
+            ui.selectable_value(
+                &mut state.display_mode,
+                ThreadDisplayMode::Chronological,
+                "Timeline",
+            );
         });
 
         // Clear layout if mode changed

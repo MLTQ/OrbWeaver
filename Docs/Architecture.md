@@ -24,6 +24,13 @@ graphchan_backend/
 ```
 All paths are resolved via `GraphchanPaths`, derived from `current_exe().parent()`. Launching the binary from different directories produces isolated nodes that only discover each other over the network.
 
+## Execution Modes
+- `graphchan_desktop` – Bundled GUI that boots a `GraphchanNode`, serves the REST API on the configured port, and launches the egui frontend pointed at that local URL.
+- `graphchan_backend serve` – Headless REST daemon for remote/front-end clients.
+- `graphchan_backend cli` – Interactive shell for friendcodes, posting, and manual file transfer.
+
+All three binaries share the same runtime directories, so copying any executable to a new folder yields an isolated node.
+
 ## Module Layout
 - `bootstrap`: Creates runtime directories, opens the database, applies migrations, and ensures the local identity exists. Inserts/updates the corresponding rows in `node_identity` and `peers`.
 - `config`: Loads configuration from the environment (`GRAPHCHAN_API_PORT`, `GRAPHCHAN_PUBLIC_ADDRS`, `GRAPHCHAN_RELAY_URL`) and materialises the filesystem layout.
@@ -33,8 +40,10 @@ All paths are resolved via `GraphchanPaths`, derived from `current_exe().parent(
 - `files`: Streams uploads into the local `FsStore`, keeps path metadata in SQLite, mirrors bytes under `files/uploads/`, and persists blob tickets/checksums for redistribution.
 - `peers`: Wraps friendcode registration, maintains peer metadata, and synthesises the local peer record on demand.
 - `network`: Starts an Iroh router that hosts both the Graphchan gossip protocol and the `/iroh-bytes/4` blobs protocol, tracks live connections, serialises outbound gossip events, and helps dial friendcodes.
+- `node`: Wraps bootstrap + network start-up (`GraphchanNode`) so other binaries (CLI, REST daemon, desktop bundle) can reuse the same initialisation pipeline without duplicating code.
 - `api`: Defines the Axum router and handlers for health, thread/post/file operations, and peer management. Emits networking events after local mutations.
 - `cli`: Hosts the interactive shell and the HTTP server entrypoint. The shell lets operators manage friendcodes, inspect threads, post messages, and transfer attachments (`upload`, `download`) without a REST client. Online/offline status is inferred from active Iroh connections.
+- `graphchan_desktop` (workspace crate): Spawns a `GraphchanNode`, launches the REST server on a background Tokio runtime, sets `GRAPHCHAN_API_URL` to the embedded port, and then runs the egui UI so the bundled binary “just works” while still exposing the HTTP API to other clients.
 - `utils`: Houses shared helpers such as time utilities.
 
 ## Identity & Provisioning Flow
@@ -82,6 +91,12 @@ Handlers construct services on demand, perform validation, persist through repos
 4. Handler calls `NetworkHandle::publish_thread_snapshot`, which queues a gossip event for connected peers.
 
 File uploads follow the same pattern with an added blob stage: bytes are written under `files/uploads/`, imported into the `FsStore`, metadata (including blob hash and ticket placeholder) is inserted, and a `FileAvailable` gossip message carrying a `BlobTicket` is queued. Peers missing the blob redeem the ticket via `/iroh-bytes/4`; legacy nodes still fall back to the `FileRequest`/`FileChunk` flow. Attachments returned by `/posts/{id}/files` now include a `ticket` field and a `present` flag so callers can decide whether to download or wait for replication.
+
+## Desktop Bundle & Portability
+- The workspace now ships a `graphchan_desktop` binary that links both crates. It bootstraps a `GraphchanNode` via the shared `node` module, spawns the Axum/iroh services on a dedicated Tokio runtime, and sets `GRAPHCHAN_API_URL` to the bound localhost port before launching the egui UI.
+- Because the backend still derives `GraphchanPaths` from `current_exe().parent()`, copying the desktop binary to a new directory continues to create isolated `data/`, `files/`, `blobs/`, and `keys/` trees—multiple instances on the same machine behave like separate peers.
+- Operators who prefer headless deployments can continue running `cargo run --bin graphchan_backend -- serve` (REST) or `-- cli`; the desktop app simply layers the GUI on top of the exact same API surface, so third-party clients remain fully supported.
+- When the GUI exits, the desktop launcher aborts the Axum server task and calls `NetworkHandle::shutdown()` to tear down the embedded router cleanly, ensuring no stray QUIC endpoints stay bound between sessions.
 
 ## Known Gaps / Future Work
 1. **Gossip robustness** – Add deduplication, retries/backoff, and telemetry around ingest failures.

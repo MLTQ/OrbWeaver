@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "graphchan_backend",
+    "graphchan_frontend",
+    "graphchan_desktop"
+]
+resolver = "2"

@@ -17,10 +17,12 @@ struct FourChanThreadResponse {
 #[derive(Deserialize)]
 struct FourChanPost {
     no: u64,
-    time: Option<i64>,
+    #[serde(rename = "time")]
+    time: Option<i64>, // Unix timestamp in seconds
     com: Option<String>,
     sub: Option<String>,
-    name: Option<String>,
+    #[serde(rename = "name")]
+    _name: Option<String>,
     #[serde(default)]
     tim: Option<u64>,
     #[serde(default)]
@@ -28,7 +30,8 @@ struct FourChanPost {
     #[serde(default)]
     filename: Option<String>,
     #[serde(default)]
-    fsize: Option<u64>,
+    #[serde(rename = "fsize")]
+    _fsize: Option<u64>,
 }
 
 pub fn import_fourchan_thread(api: &ApiClient, url: &str) -> Result<String> {
@@ -59,6 +62,13 @@ pub fn import_fourchan_thread(api: &ApiClient, url: &str) -> Result<String> {
     let first_body = clean_body(first_post.com.clone());
     if !first_body.is_empty() {
         thread_input.body = Some(first_body.clone());
+    }
+    
+    // Set timestamp from 4chan post
+    if let Some(unix_time) = first_post.time {
+        use chrono::{DateTime, Utc};
+        let dt = DateTime::from_timestamp(unix_time, 0).unwrap_or_else(|| Utc::now());
+        thread_input.created_at = Some(dt.to_rfc3339());
     }
 
     let details = api
@@ -101,6 +111,13 @@ pub fn import_fourchan_thread(api: &ApiClient, url: &str) -> Result<String> {
         };
 
         payload.parent_post_ids = extract_references(post.com.as_deref(), &id_map);
+        
+        // Convert Unix timestamp to ISO format
+        if let Some(unix_time) = post.time {
+            use chrono::{DateTime, Utc};
+            let dt = DateTime::from_timestamp(unix_time, 0).unwrap_or_else(|| Utc::now());
+            payload.created_at = Some(dt.to_rfc3339());
+        }
 
         let created = api
             .create_post(&graph_thread_id, &payload)
@@ -161,15 +178,12 @@ fn upload_4chan_image(
             .mime_str(mime)?,
     );
 
-    // Upload to backend
+    // Upload to backend (reuse existing client to avoid file descriptor exhaustion)
     let upload_url = format!("{}/posts/{}/files", api.base_url(), post_id);
-    let upload_client = Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .context("failed to build upload client")?;
 
-    upload_client
+    client
         .post(&upload_url)
+        .timeout(std::time::Duration::from_secs(30))
         .multipart(form)
         .send()
         .context("failed to upload file")?

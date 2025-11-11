@@ -59,6 +59,7 @@ pub struct FileChunk {
 pub enum NetworkEvent {
     Broadcast(EventPayload),
     Direct {
+        #[allow(dead_code)]
         peer_id: String,
         payload: EventPayload,
     },
@@ -85,7 +86,10 @@ pub async fn run_event_loop(
                     tracing::warn!(error = ?err, topic = %topic_name, "failed to broadcast event");
                 }
             }
-            NetworkEvent::Direct { peer_id: _, payload } => {
+            NetworkEvent::Direct {
+                peer_id: _,
+                payload,
+            } => {
                 // iroh-gossip doesn't support direct messaging, so broadcast instead
                 let topic_name = topic_for_payload(&payload);
                 if let Err(err) = broadcast_to_topic(&gossip, &topics, &topic_name, payload).await {
@@ -105,12 +109,12 @@ async fn broadcast_to_topic(
     payload: EventPayload,
 ) -> Result<()> {
     let topic_id = TopicId::from_bytes(*blake3::hash(topic_name.as_bytes()).as_bytes());
-    
+
     // Ensure we're subscribed to this topic and get a mutable reference
     let guard = topics.read().await;
     let needs_subscribe = !guard.contains_key(topic_name);
     drop(guard);
-    
+
     if needs_subscribe {
         let mut guard = topics.write().await;
         if !guard.contains_key(topic_name) {
@@ -122,13 +126,13 @@ async fn broadcast_to_topic(
 
     let envelope = envelope_for(payload);
     let bytes = serde_json::to_vec(&envelope)?;
-    
+
     // Get mutable access to broadcast
     let mut guard = topics.write().await;
     if let Some(topic) = guard.get_mut(topic_name) {
         topic.broadcast(Bytes::from(bytes)).await?;
     }
-    
+
     Ok(())
 }
 
@@ -139,19 +143,22 @@ pub async fn run_gossip_receiver_loop(
     // Subscribe to a global topic for general updates
     let global_topic_id = TopicId::from_bytes(*blake3::hash(b"graphchan-global").as_bytes());
     let mut receiver = gossip.subscribe(global_topic_id, vec![]).await?;
-    
+
     tracing::info!("gossip receiver loop started");
-    
+
     while let Some(event_result) = receiver.next().await {
         match event_result {
             Ok(iroh_gossip::api::Event::Received(message)) => {
                 match serde_json::from_slice::<EventEnvelope>(&message.content) {
                     Ok(envelope) => {
                         let peer_id = Some(message.delivered_from.to_string());
-                        if let Err(err) = inbound_tx.send(InboundGossip {
-                            peer_id,
-                            payload: envelope.payload,
-                        }).await {
+                        if let Err(err) = inbound_tx
+                            .send(InboundGossip {
+                                peer_id,
+                                payload: envelope.payload,
+                            })
+                            .await
+                        {
                             tracing::warn!(error = ?err, "failed to forward inbound gossip");
                             break;
                         }
@@ -176,7 +183,7 @@ pub async fn run_gossip_receiver_loop(
             }
         }
     }
-    
+
     tracing::info!("gossip receiver loop ended");
     Ok(())
 }

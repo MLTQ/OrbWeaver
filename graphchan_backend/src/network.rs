@@ -192,20 +192,23 @@ impl NetworkHandle {
     pub async fn connect_friendcode(&self, payload: &FriendCodePayload) -> Result<()> {
         let addr = build_endpoint_addr(payload)?;
         let peer_id = addr.id;
-        
+
         // Join the global gossip topic with this peer as a bootstrap node
         let global_topic_id = TopicId::from_bytes(*blake3::hash(b"graphchan-global").as_bytes());
-        
+
         // Subscribe with this peer as bootstrap if not already subscribed
         let mut guard = self.topics.write().await;
         if !guard.contains_key("graphchan-global") {
-            let topic = self.gossip.subscribe(global_topic_id, vec![peer_id]).await?;
+            let topic = self
+                .gossip
+                .subscribe(global_topic_id, vec![peer_id])
+                .await?;
             guard.insert("graphchan-global".to_string(), topic);
             tracing::info!(peer = %peer_id.fmt_short(), "subscribed to global topic with peer as bootstrap");
         } else {
             tracing::info!(peer = %peer_id.fmt_short(), "already subscribed to global topic");
         }
-        
+
         Ok(())
     }
 

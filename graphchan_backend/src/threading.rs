@@ -51,7 +51,7 @@ impl ThreadService {
             anyhow::bail!("thread title may not be empty");
         }
         let thread_id = Uuid::new_v4().to_string();
-        let created_at = now_utc_iso();
+        let created_at = input.created_at.unwrap_or_else(now_utc_iso);
         let thread_record = ThreadRecord {
             id: thread_id.clone(),
             title: input.title,
@@ -94,7 +94,7 @@ impl ThreadService {
             thread_id: input.thread_id.clone(),
             author_peer_id: input.author_peer_id.clone(),
             body: input.body,
-            created_at: now_utc_iso(),
+            created_at: input.created_at.unwrap_or_else(now_utc_iso),
             updated_at: None,
         };
 
@@ -153,6 +153,9 @@ pub struct CreateThreadInput {
     pub body: Option<String>,
     pub creator_peer_id: Option<String>,
     pub pinned: Option<bool>,
+    /// Optional timestamp for imported threads. If None, uses current time.
+    #[serde(default)]
+    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,6 +165,9 @@ pub struct CreatePostInput {
     pub body: String,
     #[serde(default)]
     pub parent_post_ids: Vec<String>,
+    /// Optional timestamp for imported posts. If None, uses current time.
+    #[serde(default)]
+    pub created_at: Option<String>,
 }
 
 impl ThreadSummary {
@@ -212,6 +218,7 @@ mod tests {
                 body: Some("Hello".into()),
                 creator_peer_id: None,
                 pinned: None,
+                created_at: None,
             })
             .expect("create thread");
         assert_eq!(details.thread.title, "Example");
@@ -228,6 +235,7 @@ mod tests {
                 body: None,
                 creator_peer_id: None,
                 pinned: None,
+                created_at: None,
             })
             .expect("create thread");
 
@@ -237,6 +245,7 @@ mod tests {
                 author_peer_id: None,
                 body: "Reply".into(),
                 parent_post_ids: vec![],
+                created_at: None,
             })
             .expect("create post");
         assert_eq!(post.body, "Reply");

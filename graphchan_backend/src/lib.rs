@@ -6,6 +6,8 @@ pub mod database;
 pub mod files;
 pub mod identity;
 pub mod network;
+pub mod node;
 pub mod peers;
+pub mod telemetry;
 pub mod threading;
 pub mod utils;

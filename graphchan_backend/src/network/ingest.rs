@@ -350,7 +350,14 @@ mod tests {
         let ingest_paths = paths.clone();
         let ingest_publisher = publisher_tx.clone();
         let handle = tokio::spawn(async move {
-            run_ingest_loop(ingest_db, ingest_paths, ingest_publisher, inbound_rx, blob_store).await;
+            run_ingest_loop(
+                ingest_db,
+                ingest_paths,
+                ingest_publisher,
+                inbound_rx,
+                blob_store,
+            )
+            .await;
         });
 
         let secret = SecretKey::from_bytes(&[9u8; 32]);

@@ -352,7 +352,12 @@ mod tests {
             .unwrap();
 
             let blob_store = FsStore::load(&paths.blobs_dir).await.expect("blob store");
-            let service = FileService::new(db.clone(), paths.clone(), FileConfig::default(), blob_store.clone());
+            let service = FileService::new(
+                db.clone(),
+                paths.clone(),
+                FileConfig::default(),
+                blob_store.clone(),
+            );
 
             let file = service
                 .save_post_file(SaveFileInput {
@@ -370,7 +375,11 @@ mod tests {
 
             let hash_for_ticket: Hash = blob_hex.parse().expect("hash");
             let secret = SecretKey::from_bytes(&[7u8; 32]);
-            let ticket = BlobTicket::new(EndpointAddr::new(secret.public()), hash_for_ticket, BlobFormat::Raw);
+            let ticket = BlobTicket::new(
+                EndpointAddr::new(secret.public()),
+                hash_for_ticket,
+                BlobFormat::Raw,
+            );
             let ticket_string = ticket.to_string();
 
             service

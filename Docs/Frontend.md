@@ -30,9 +30,10 @@ graphchan_frontend/
 - File APIs are wrapped in the client but not surfaced yet in the UI; the groundwork allows future attachment previews and downloads with minimal changes.
 
 ## Build & Run
-1. Ensure the backend is running locally (`cargo run --bin graphchan_backend`).
-2. From `graphchan_frontend/`, run `cargo run` to launch the GUI.
-3. Use the toolbar to adjust the API base URL if the backend is listening elsewhere.
+Two ways to start the UI:
+
+1. **Desktop bundle (recommended)** – `cargo run --bin graphchan_desktop`. This starts the backend and GUI inside one process, automatically points the HTTP client at `http://127.0.0.1:{GRAPHCHAN_API_PORT}`, and still exposes the REST API for other tooling.
+2. **Headless backend + standalone frontend** – run `cargo run --bin graphchan_backend -- serve` (or `-- cli`) and separately `cargo run -p graphchan_frontend`. Paste the daemon’s URL into the “API Base URL” field to connect to remote peers or other machines.
 
 ## Roadmap
 ### Completed

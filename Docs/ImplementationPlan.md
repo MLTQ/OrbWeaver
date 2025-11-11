@@ -65,6 +65,7 @@
 - Unit tests (`cargo test`) pass; REST integration harness exists (ignored pending network sync).
 - **Frontend**: Fixed build errors, egui 0.27 API compatibility, and borrow checker issues in graphchan_frontend.
 - **Frontend**: Graph view now renders per-post reply edges over a dotted canvas background (currently limited to one parent edge per post while importer/back-end fixes roll out).
+- **Desktop bundle**: Introduced the `graphchan_desktop` crate which spins up a `GraphchanNode`, serves the REST API locally, and launches the egui UI against that embedded backend so users can run a single portable executable without manual configuration.
 
 ## Next Actions
 1. **Frontend Enhancements**:

@@ -372,6 +372,7 @@ impl CliSession {
             body: body.clone(),
             creator_peer_id: Some(self.identity.gpg_fingerprint.clone()),
             pinned: Some(false),
+            created_at: None, // Use current time for interactive posts
         };
         let details = self.thread_service.create_thread(input)?;
         println!("Created thread {}", details.thread.id);
@@ -393,6 +394,7 @@ impl CliSession {
             author_peer_id: Some(self.identity.gpg_fingerprint.clone()),
             body,
             parent_post_ids: vec![],
+            created_at: None, // Use current time for interactive posts
         };
         let post = self.thread_service.create_post(input)?;
         println!("Posted message {}", post.id);

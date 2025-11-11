@@ -1,0 +1,11 @@
+[package]
+name = "graphchan_desktop"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+tracing = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+graphchan_backend = { path = "../graphchan_backend" }
+graphchan_frontend = { path = "../graphchan_frontend" }

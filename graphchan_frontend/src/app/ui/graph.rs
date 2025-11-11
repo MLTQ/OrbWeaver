@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use eframe::egui::{self, Color32, FontId, Margin, Pos2, RichText};
@@ -11,7 +12,7 @@ use crate::models::{FileResponse, PostView};
 use super::super::state::{GraphNode, ThreadState};
 use super::super::{format_timestamp, GraphchanApp};
 
-static mut START_TIME: Option<Instant> = None;
+static START_TIME: OnceLock<Instant> = OnceLock::new();
 
 struct NodeLayoutData {
     post: PostView,
@@ -30,7 +31,6 @@ pub(crate) fn build_initial_graph(posts: &[PostView]) -> HashMap<String, GraphNo
             GraphNode {
                 pos: egui::pos2(x, y),
                 vel: egui::vec2(0.0, 0.0),
-                id: p.id.clone(),
                 size: egui::vec2(220.0, 140.0),
                 dragging: false,
             },
@@ -54,15 +54,7 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
         );
     }
 
-    let sim_active = unsafe {
-        if START_TIME.is_none() {
-            START_TIME = Some(Instant::now());
-        }
-        START_TIME
-            .as_ref()
-            .map(|t| t.elapsed().as_secs_f32() < 1.0)
-            .unwrap_or(false)
-    };
+    let sim_active = START_TIME.get_or_init(Instant::now).elapsed().as_secs_f32() < 1.0;
 
     if sim_active && !state.graph_dragging {
         for _ in 0..2 {
@@ -372,10 +364,8 @@ pub(super) fn image_preview(
     }
 
     if !app.image_loading.contains(&file.id) {
-        let url = file
-            .download_url
-            .clone()
-            .unwrap_or_else(|| format!("{api_base}/files/{}", file.id));
+        let url =
+            super::super::resolve_download_url(api_base, file.download_url.as_deref(), &file.id);
         app.spawn_download_image(&file.id, &url);
     }
 

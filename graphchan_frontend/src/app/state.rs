@@ -56,7 +56,6 @@ pub enum ThreadDisplayMode {
 pub struct GraphNode {
     pub pos: egui::Pos2,
     pub vel: egui::Vec2,
-    pub id: String,
     pub size: egui::Vec2,
     pub dragging: bool,
 }
