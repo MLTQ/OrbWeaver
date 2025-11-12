@@ -92,6 +92,9 @@ pub fn load_attachments(
 
 pub fn download_image(tx: Sender<AppMessage>, file_id: String, url: String) {
     thread::spawn(move || {
+        // Log the URL being requested for debugging
+        log::info!("Downloading image from URL: {}", url);
+        
         let result = (|| {
             let resp = HTTP_CLIENT.get(&url).send().map_err(|e| e.to_string())?;
             let bytes = resp.bytes().map_err(|e| e.to_string())?;

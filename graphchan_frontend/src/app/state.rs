@@ -44,6 +44,8 @@ pub struct ThreadState {
     pub graph_offset: egui::Vec2,
     pub graph_dragging: bool,
     pub reply_to: Vec<String>,
+    pub time_bin_seconds: i64, // Time bin size in seconds for chronological view
+    pub locked_hover_post: Option<String>, // "Locked" hover for tracing conversations
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

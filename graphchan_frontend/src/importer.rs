@@ -151,6 +151,10 @@ fn upload_4chan_image(
     let image_url = format!("https://i.4cdn.org/{}/{}{}", board, tim, ext);
 
     log::info!("Downloading image: {}", image_url);
+    
+    // Add delay to avoid hitting 4chan's rate limit (429 errors)
+    // 4chan allows ~1 request per second per IP
+    std::thread::sleep(std::time::Duration::from_millis(1200));
 
     let response = client
         .get(&image_url)
