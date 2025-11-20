@@ -333,7 +333,7 @@ fn render_node(
     state: &mut ThreadState,
     layout: NodeLayoutData,
     api_base: &str,
-    _viewport: egui::Rect,
+    viewport: egui::Rect,
     zoom: f32,
 ) {
     let rect_node = layout.rect;
@@ -387,9 +387,7 @@ fn render_node(
                         ui.horizontal_wrapped(|ui| {
                             ui.label(RichText::new("↩ Replying to:").size(11.0 * zoom).color(Color32::GRAY));
                             for parent in &layout.post.parent_post_ids {
-                                if ui.link(RichText::new(format!("#{}", parent)).size(11.0 * zoom)).clicked() {
-                                    state.selected_post = Some(parent.clone());
-                                }
+                                render_post_link(ui, state, parent, zoom, viewport);
                             }
                         });
                     }
@@ -424,9 +422,7 @@ fn render_node(
                             // Don't set max_width - let frame's inner_margin handle spacing
                             ui.label(RichText::new("↪ Replies:").size(11.0 * zoom).color(Color32::GRAY));
                             for child_id in children {
-                                if ui.link(RichText::new(format!("#{}", child_id)).size(11.0 * zoom)).clicked() {
-                                    state.selected_post = Some(child_id);
-                                }
+                                render_post_link(ui, state, &child_id, zoom, viewport);
                             }
                         });
                     }
@@ -444,6 +440,54 @@ fn render_node(
             state.locked_hover_post = Some(layout.post.id.clone());
         }
     }
+}
+
+fn render_post_link(
+    ui: &mut egui::Ui,
+    state: &mut ThreadState,
+    target_id: &str,
+    zoom: f32,
+    viewport: egui::Rect,
+) {
+    let short_id = if target_id.len() > 8 { &target_id[..8] } else { target_id };
+    let link = ui.link(RichText::new(format!(">>{}", short_id)).size(11.0 * zoom));
+    
+    if link.clicked() {
+        state.selected_post = Some(target_id.to_string());
+        
+        // Center view on target
+        if let Some(node) = state.graph_nodes.get(target_id) {
+            let center = viewport.center();
+            let target_x = node.pos.x * zoom;
+            let target_y = node.pos.y * zoom;
+            
+            // Center on the node (approximating size as half card width)
+            let half_width = (CARD_WIDTH * zoom) / 2.0;
+            let half_height = (100.0 * zoom) / 2.0; 
+            
+            state.graph_offset.x = (center.x - viewport.left()) - (target_x + half_width);
+            state.graph_offset.y = (center.y - viewport.top()) - (target_y + half_height);
+        }
+    }
+    
+    link.on_hover_ui(|ui| {
+        if let Some(details) = &state.details {
+            if let Some(post) = details.posts.iter().find(|p| p.id == target_id) {
+                ui.set_max_width(300.0);
+                ui.horizontal(|ui| {
+                    let author = post.author_peer_id.as_deref().unwrap_or("Anon");
+                    ui.label(RichText::new(author).strong());
+                    ui.label(RichText::new(format_timestamp(&post.created_at)).color(Color32::GRAY));
+                });
+                ui.separator();
+                let preview_len = post.body.len().min(200);
+                let preview = &post.body[..preview_len];
+                ui.label(format!("{}{}", preview, if post.body.len() > 200 { "..." } else { "" }));
+            } else {
+                ui.label("Post not found");
+            }
+        }
+    });
 }
 
 fn render_node_header(ui: &mut egui::Ui, state: &mut ThreadState, post: &PostView, zoom: f32) {
