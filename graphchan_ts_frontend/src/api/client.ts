@@ -4,6 +4,7 @@ import {
     type CreateThreadInput,
     type FileView,
     type HealthResponse,
+    type ImportResponse,
     type PeerView,
     type PostView,
     type ThreadDetails,
@@ -39,14 +40,14 @@ export const api = {
     },
 
     getThread: async (id: string) => {
-        const { data } = await client.get<ThreadDetails>(`/ threads / ${id} `);
+        const { data } = await client.get<ThreadDetails>(`/threads/${id}`);
         return data;
     },
 
     // Posts
     createPost: async (threadId: string, input: CreatePostInput) => {
         const { data } = await client.post<{ post: PostView }>(
-            `/ threads / ${threadId}/posts`,
+            `/threads/${threadId}/posts`,
             input
         );
         return data.post;
@@ -80,6 +81,11 @@ export const api = {
 
     addPeer: async (friendcode: string) => {
         const { data } = await client.post<PeerView>('/peers', { friendcode });
+        return data;
+    },
+
+    importThread: async (url: string) => {
+        const { data } = await client.post<ImportResponse>('/import', { url });
         return data;
     },
 

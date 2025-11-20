@@ -5,6 +5,7 @@ pub mod config;
 pub mod database;
 pub mod files;
 pub mod identity;
+pub mod importer;
 pub mod network;
 pub mod node;
 pub mod peers;

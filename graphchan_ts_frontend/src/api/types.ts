@@ -84,3 +84,7 @@ export interface PeerView {
 export interface AddPeerRequest {
   friendcode: string;
 }
+
+export interface ImportResponse {
+  id: string;
+}

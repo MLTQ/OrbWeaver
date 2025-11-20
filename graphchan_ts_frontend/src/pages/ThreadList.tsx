@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Hash, MessageSquare, Plus, Search } from 'lucide-react';
+import { Download, Hash, MessageSquare, Plus, Search } from 'lucide-react';
 import { api } from '../api/client';
 import { type ThreadSummary } from '../api/types';
 import { formatDistanceToNow } from 'date-fns';
@@ -47,10 +47,16 @@ export const ThreadList: React.FC = () => {
                         className="search-input"
                     />
                 </div>
-                <Link to="/threads/new" className="btn btn-large">
-                    <Plus size={18} />
-                    <span>NEW THREAD</span>
-                </Link>
+                <div className="action-buttons">
+                    <Link to="/import" className="btn btn-secondary">
+                        <Download size={18} />
+                        <span>IMPORT</span>
+                    </Link>
+                    <Link to="/threads/new" className="btn btn-large">
+                        <Plus size={18} />
+                        <span>NEW THREAD</span>
+                    </Link>
+                </div>
             </div>
 
             <div className="threads-grid">

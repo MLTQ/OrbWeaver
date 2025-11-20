@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
-import { Activity, Globe, Hash, LayoutGrid, Users } from 'lucide-react';
+import { Activity, Download, Globe, Hash, LayoutGrid, Users } from 'lucide-react';
 import { api } from '../api/client';
 import { type HealthResponse } from '../api/types';
 import './Layout.css';
@@ -27,6 +27,7 @@ export const Layout: React.FC = () => {
         { path: '/', label: 'DASHBOARD', icon: LayoutGrid },
         { path: '/threads', label: 'THREADS', icon: Hash },
         { path: '/graph', label: 'GRAPH VIEW', icon: Activity },
+        { path: '/import', label: 'IMPORT', icon: Download },
         { path: '/peers', label: 'NETWORK', icon: Globe },
         { path: '/identity', label: 'IDENTITY', icon: Users },
     ];

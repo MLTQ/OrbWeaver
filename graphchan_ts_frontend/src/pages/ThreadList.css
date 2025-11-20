@@ -64,6 +64,45 @@
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
+.action-buttons {
+    display: flex;
+    gap: 1rem;
+}
+
+.btn-secondary {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-bright);
+    border: 1px solid var(--border-dim);
+    padding: 0.75rem 1.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+    text-decoration: none;
+    transition: all 0.2s ease;
+}
+
+.btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.2);
+    border-color: var(--text-dim);
+}
+
+.btn-large {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: var(--primary);
+    color: #000;
+    border: none;
+    padding: 0.75rem 1.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    text-decoration: none;
+    transition: all 0.2s ease;
+    box-shadow: 0 0 15px rgba(255, 51, 102, 0.3);
+}
+
 .card-top {
     display: flex;
     align-items: center;

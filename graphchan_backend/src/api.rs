@@ -64,6 +64,7 @@ pub async fn serve_http(
         .route("/files/:id", get(download_file))
         .route("/peers", get(list_peers).post(add_peer))
         .route("/peers/self", get(get_self_peer))
+        .route("/import", post(import_thread_handler))
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024)) // 50MB limit
         .layer(
             CorsLayer::new()
@@ -351,6 +352,26 @@ async fn add_peer(
         }
         Err(err) => Err(ApiError::Internal(err)),
     }
+}
+
+async fn import_thread_handler(
+    State(state): State<AppState>,
+    Json(request): Json<ImportRequest>,
+) -> Result<(StatusCode, Json<ImportResponse>), ApiError> {
+    match crate::importer::import_fourchan_thread(&state, &request.url).await {
+        Ok(id) => Ok((StatusCode::CREATED, Json(ImportResponse { id }))),
+        Err(err) => Err(ApiError::Internal(err)),
+    }
+}
+
+#[derive(Deserialize)]
+struct ImportRequest {
+    url: String,
+}
+
+#[derive(Serialize)]
+struct ImportResponse {
+    id: String,
 }
 
 #[derive(Serialize)]

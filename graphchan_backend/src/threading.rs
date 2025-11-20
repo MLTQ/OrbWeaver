@@ -147,7 +147,7 @@ pub struct ThreadDetails {
     pub posts: Vec<PostView>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CreateThreadInput {
     pub title: String,
     pub body: Option<String>,
@@ -158,7 +158,7 @@ pub struct CreateThreadInput {
     pub created_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CreatePostInput {
     pub thread_id: String,
     pub author_peer_id: Option<String>,
