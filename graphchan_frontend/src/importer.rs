@@ -38,10 +38,7 @@ pub fn import_fourchan_thread(api: &ApiClient, url: &str) -> Result<String> {
     let (board, thread_id) = parse_thread_url(url)?;
     let api_url = format!("https://a.4cdn.org/{}/thread/{}.json", board, thread_id);
 
-    let client = Client::builder()
-        .user_agent("GraphchanFrontend/0.1")
-        .build()
-        .context("failed to build HTTP client")?;
+    let client = crate::api::get_shared_client().context("failed to get shared HTTP client")?;
 
     let response = client
         .get(api_url)

@@ -1,3 +1,4 @@
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -9,6 +10,23 @@ use crate::models::{
     ThreadSummary,
 };
 
+static SHARED_CLIENT: OnceLock<Client> = OnceLock::new();
+
+pub fn get_shared_client() -> Result<&'static Client> {
+    if let Some(client) = SHARED_CLIENT.get() {
+        return Ok(client);
+    }
+
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent("GraphchanFrontend/0.1")
+        .build()
+        .context("failed to build HTTP client")?;
+
+    let _ = SHARED_CLIENT.set(client);
+    Ok(SHARED_CLIENT.get().unwrap())
+}
+
 #[derive(Clone)]
 pub struct ApiClient {
     base_url: String,
@@ -18,10 +36,7 @@ pub struct ApiClient {
 impl ApiClient {
     pub fn new(base_url: impl Into<String>) -> Result<Self> {
         let base = sanitize_base_url(base_url.into())?;
-        let client = Client::builder()
-            .timeout(Duration::from_secs(15))
-            .build()
-            .context("failed to build HTTP client")?;
+        let client = get_shared_client()?.clone();
         Ok(Self {
             base_url: base,
             client,

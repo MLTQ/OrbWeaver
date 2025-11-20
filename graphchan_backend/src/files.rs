@@ -132,9 +132,13 @@ impl FileService {
     }
 
     pub async fn prepare_download(&self, id: &str) -> Result<Option<FileDownload>> {
-        let record = self
-            .database
-            .with_repositories(|repos| repos.files().get(id))?;
+        let db = self.database.clone();
+        let id = id.to_string();
+        let record = tokio::task::spawn_blocking(move || {
+            db.with_repositories(|repos| repos.files().get(&id))
+        })
+        .await??;
+
         let Some(record) = record else {
             return Ok(None);
         };

@@ -10,7 +10,7 @@ use super::super::state::{GraphNode, ThreadState};
 use super::super::{format_timestamp, GraphchanApp};
 
 /// Configuration for chronological layout
-const BIN_SECONDS: i64 = 10; // Group posts into 10-second bins
+
 const CARD_WIDTH: f32 = 720.0; // Match 4chan width for familiarity
 const CARD_HORIZONTAL_SPACING: f32 = 50.0; // More space between cards
 const MIN_BIN_VERTICAL_SPACING: f32 = 50.0; // Minimum spacing between bins
@@ -30,7 +30,7 @@ struct NodeLayoutData {
 }
 
 /// Build chronological layout positions for posts
-pub fn build_chronological_layout(posts: &[PostView]) -> HashMap<String, GraphNode> {
+pub fn build_chronological_layout(posts: &[PostView], bin_seconds: i64) -> HashMap<String, GraphNode> {
     if posts.is_empty() {
         return HashMap::new();
     }
@@ -52,8 +52,8 @@ pub fn build_chronological_layout(posts: &[PostView]) -> HashMap<String, GraphNo
         .collect();
     timestamped_posts.sort_by_key(|(dt, _)| *dt);
 
-    // Group into time bins
-    let bins = create_time_bins(&timestamped_posts);
+    // Group into time bins using the provided bin size
+    let bins = create_time_bins(&timestamped_posts, bin_seconds);
     log::debug!(
         "Created {} time bins from {} posts",
         bins.len(),
@@ -65,41 +65,35 @@ pub fn build_chronological_layout(posts: &[PostView]) -> HashMap<String, GraphNo
         log::debug!("  Bin {}: {} posts at {}", idx, bin.post_ids.len(), bin.timestamp);
     }
 
-    // Assign positions with fixed but generous spacing
+    // Assign positions - posts stack horizontally within each bin
     let mut nodes = HashMap::new();
     let mut current_y = TOP_MARGIN;
     
     for (_bin_idx, bin) in bins.iter().enumerate() {
-        // Calculate how many rows this bin needs
-        let posts_per_row = 1; // One post per row for now to prevent overlap
-        let num_rows = bin.post_ids.len();
-        
+        // Stack posts horizontally (left to right) within this time bin
         for (idx, post_id) in bin.post_ids.iter().enumerate() {
-            let row_in_bin = idx / posts_per_row;
-            let pos_in_row = idx % posts_per_row;
-            
-            let x = LEFT_MARGIN + (pos_in_row as f32) * (CARD_WIDTH + CARD_HORIZONTAL_SPACING);
-            let y = current_y + (row_in_bin as f32) * 300.0; // Fixed generous spacing
+            let x = LEFT_MARGIN + (idx as f32) * (CARD_WIDTH + CARD_HORIZONTAL_SPACING);
+            let y = current_y;
             
             nodes.insert(
                 post_id.clone(),
                 GraphNode {
                     pos: egui::pos2(x, y),
                     vel: egui::vec2(0.0, 0.0),
-                    size: egui::vec2(CARD_WIDTH, 250.0), // Larger default height
+                    size: egui::vec2(CARD_WIDTH, 250.0),
                     dragging: false,
                 },
             );
         }
         
-        // Move to next bin with generous spacing
-        current_y += (num_rows as f32) * 300.0 + MIN_BIN_VERTICAL_SPACING;
+        // Move to next bin (generous vertical spacing for next time bin)
+        current_y += 300.0 + MIN_BIN_VERTICAL_SPACING;
     }
 
     nodes
 }
 
-fn create_time_bins(timestamped_posts: &[(DateTime<Utc>, &PostView)]) -> Vec<ChronoBin> {
+fn create_time_bins(timestamped_posts: &[(DateTime<Utc>, &PostView)], bin_seconds: i64) -> Vec<ChronoBin> {
     if timestamped_posts.is_empty() {
         return Vec::new();
     }
@@ -108,7 +102,7 @@ fn create_time_bins(timestamped_posts: &[(DateTime<Utc>, &PostView)]) -> Vec<Chr
     let mut current_bin: Option<ChronoBin> = None;
 
     for (timestamp, post) in timestamped_posts {
-        let bin_timestamp = round_down_to_bin_seconds(*timestamp, BIN_SECONDS);
+        let bin_timestamp = round_down_to_bin_seconds(*timestamp, bin_seconds);
         log::debug!("Post {} binned to {}", post.id, bin_timestamp);
 
         match &mut current_bin {
@@ -168,7 +162,7 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
 
     // Build layout if not already done or if we just switched to this mode
     if state.graph_nodes.is_empty() {
-        state.graph_nodes = build_chronological_layout(&posts);
+        state.graph_nodes = build_chronological_layout(&posts, state.time_bin_seconds);
     }
 
     let available = ui.available_size();
@@ -261,6 +255,29 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
         
         ui.separator();
         
+        // Time bin size slider
+        ui.label("Time Bin:");
+        let mut bin_minutes = (state.time_bin_seconds / 60) as f32;
+        let mut rebuild_layout = false;
+        if ui.add(egui::Slider::new(&mut bin_minutes, 1.0..=120.0)
+            .suffix(" min")
+            .logarithmic(true))
+            .changed() 
+        {
+            let new_bin_seconds = (bin_minutes * 60.0) as i64;
+            if new_bin_seconds != state.time_bin_seconds {
+                state.time_bin_seconds = new_bin_seconds;
+                rebuild_layout = true;
+            }
+        }
+        
+        if rebuild_layout {
+            let posts = state.details.as_ref().map(|d| d.posts.clone()).unwrap_or_default();
+            state.graph_nodes = build_chronological_layout(&posts, state.time_bin_seconds);
+        }
+        
+        ui.separator();
+        
         // Zoom controls
         ui.label("Zoom:");
         if ui.button("−").clicked() {
@@ -289,10 +306,12 @@ fn render_node(
     let selected = state.selected_post.as_ref() == Some(&layout.post.id);
     let reply_target = state.reply_to.iter().any(|id| id == &layout.post.id);
     
-    // Check if mouse is hovering over this node
-    let hovered = ui.ctx().pointer_hover_pos()
+    // Check if mouse is hovering OR if this post is locked as hovered
+    let naturally_hovered = ui.ctx().pointer_hover_pos()
         .map(|pos| rect_node.contains(pos))
         .unwrap_or(false);
+    let locked_hover = state.locked_hover_post.as_ref() == Some(&layout.post.id);
+    let hovered = naturally_hovered || locked_hover;
 
     let fill_color = if reply_target {
         Color32::from_rgb(40, 52, 85)
@@ -381,9 +400,15 @@ fn render_node(
             })
     }).response;
 
-    // Handle click to select/highlight
+    // Handle click to select and toggle locked hover
     if response.clicked() {
         state.selected_post = Some(layout.post.id.clone());
+        // Toggle locked hover - if already locked on this post, unlock it
+        if state.locked_hover_post.as_ref() == Some(&layout.post.id) {
+            state.locked_hover_post = None;
+        } else {
+            state.locked_hover_post = Some(layout.post.id.clone());
+        }
     }
 }
 

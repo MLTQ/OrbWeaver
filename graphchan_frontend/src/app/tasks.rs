@@ -1,8 +1,6 @@
 use std::sync::mpsc::Sender;
 use std::thread;
-
 use log::error;
-use reqwest::blocking::Client;
 
 use crate::api::ApiClient;
 use crate::importer;
@@ -11,13 +9,7 @@ use crate::models::{CreatePostInput, CreateThreadInput};
 use super::messages::AppMessage;
 use super::state::LoadedImage;
 
-// Shared HTTP client to avoid file descriptor exhaustion
-lazy_static::lazy_static! {
-    static ref HTTP_CLIENT: Client = Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .expect("failed to create HTTP client");
-}
+// Shared HTTP client logic moved to api.rs
 
 pub fn load_threads(client: ApiClient, tx: Sender<AppMessage>) {
     thread::spawn(move || {
@@ -96,7 +88,8 @@ pub fn download_image(tx: Sender<AppMessage>, file_id: String, url: String) {
         log::info!("Downloading image from URL: {}", url);
         
         let result = (|| {
-            let resp = HTTP_CLIENT.get(&url).send().map_err(|e| e.to_string())?;
+            let client = crate::api::get_shared_client().map_err(|e| e.to_string())?;
+            let resp = client.get(&url).send().map_err(|e| e.to_string())?;
             let bytes = resp.bytes().map_err(|e| e.to_string())?;
             let dyn_img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
             let rgba = dyn_img.to_rgba8();

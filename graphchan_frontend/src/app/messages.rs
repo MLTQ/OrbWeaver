@@ -113,6 +113,8 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                             graph_offset: egui::vec2(0.0, 0.0),
                             graph_dragging: false,
                             reply_to: Vec::new(),
+                            time_bin_seconds: 60, // Default to 1 minute bins
+                            locked_hover_post: None,
                         };
                         for post in &details.posts {
                             state

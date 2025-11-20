@@ -30,6 +30,8 @@ impl GraphchanApp {
             graph_offset: egui::vec2(0.0, 0.0),
             graph_dragging: false,
             reply_to: Vec::new(),
+            time_bin_seconds: 60, // Default to 1 minute bins
+            locked_hover_post: None,
         });
         self.spawn_load_thread(&thread_id);
     }
@@ -102,7 +104,7 @@ impl GraphchanApp {
         if state.display_mode == ThreadDisplayMode::Chronological {
             if state.graph_nodes.is_empty() {
                 if let Some(details) = &state.details {
-                    state.graph_nodes = chronological::build_chronological_layout(&details.posts);
+                    state.graph_nodes = chronological::build_chronological_layout(&details.posts, state.time_bin_seconds);
                     state.graph_zoom = 1.0;
                     state.graph_offset = egui::vec2(0.0, 0.0);
                 }

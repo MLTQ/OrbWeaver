@@ -25,6 +25,7 @@ use std::net::SocketAddr;
 use tokio::fs::File as TokioFile;
 use tokio::net::TcpListener;
 use tokio_util::io::ReaderStream;
+use tower_http::cors::{Any, CorsLayer};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -64,6 +65,12 @@ pub async fn serve_http(
         .route("/peers", get(list_peers).post(add_peer))
         .route("/peers/self", get(get_self_peer))
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024)) // 50MB limit
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        )
         .with_state(state.clone());
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.api_port));

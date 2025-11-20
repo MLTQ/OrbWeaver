@@ -324,6 +324,8 @@ impl eframe::App for GraphchanApp {
                         graph_offset: egui::vec2(0.0, 0.0),
                         graph_dragging: false,
                         reply_to: Vec::new(),
+                        time_bin_seconds: 60,
+                        locked_hover_post: None,
                     },
                 )
             } else {

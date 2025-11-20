@@ -1,0 +1,114 @@
+.post-container {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    padding: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 0.5rem;
+}
+
+.post-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.post-author {
+    color: var(--accent-success);
+    font-weight: bold;
+}
+
+.post-id {
+    font-family: var(--font-mono);
+    cursor: pointer;
+}
+
+.post-id:hover {
+    color: var(--accent-primary);
+}
+
+.post-actions {
+    margin-left: auto;
+}
+
+.action-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 2px;
+}
+
+.action-btn:hover {
+    color: var(--accent-primary);
+}
+
+.post-content {
+    padding-top: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.post-files {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+
+.file-attachment {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    max-width: 300px;
+}
+
+.file-info {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+}
+
+.file-link {
+    color: var(--accent-secondary);
+    text-decoration: none;
+}
+
+.file-link:hover {
+    text-decoration: underline;
+}
+
+.file-preview img,
+.file-preview video {
+    max-width: 100%;
+    max-height: 300px;
+    border: 1px solid var(--border-color);
+    display: block;
+}
+
+.file-generic {
+    width: 100px;
+    height: 100px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+}
+
+.post-body {
+    font-size: 0.9rem;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text-primary);
+}
+
+.quote-line {
+    color: #789922;
+    /* Traditional greentext color */
+}
