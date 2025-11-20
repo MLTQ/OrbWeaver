@@ -188,8 +188,6 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
     // Draw time axis on the left
     draw_time_axis(&canvas, &posts, state, rect);
 
-
-
     // Handle zoom with Scroll Wheel, Ctrl + Scroll, or Pinch
     let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
     let zoom_delta = ui.input(|i| i.zoom_delta());
@@ -226,35 +224,79 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
         state.graph_offset += response.drag_delta();
     }
 
-    // Build layout data for rendering
-    let mut layouts = Vec::new();
-    let api_base = app.api.base_url().to_string();
-
-    for post in posts.iter() {
-        if let Some(node) = state.graph_nodes.get_mut(&post.id) {
-            let attachments = state.attachments.get(&post.id).cloned();
-            let has_preview = attachments
-                .as_ref()
-                .map(|files| files.iter().any(is_image))
-                .unwrap_or(false);
-
-            let card_height = estimate_node_height(ui, post, has_preview, state.graph_zoom);
-            node.size = egui::vec2(CARD_WIDTH, card_height);
-
-            // Apply zoom and offset to position
-            let top_left = egui::pos2(
-                rect.left() + state.graph_offset.x + node.pos.x * state.graph_zoom,
-                rect.top() + state.graph_offset.y + node.pos.y * state.graph_zoom,
-            );
-            
-            let scaled_size = node.size * state.graph_zoom;
-            let rect_node = egui::Rect::from_min_size(top_left, scaled_size);
-            layouts.push(NodeLayoutData {
-                post: post.clone(),
-                rect: rect_node,
-                attachments,
-            });
+    // Pre-calculate children for all posts
+    let mut children_map: HashMap<String, Vec<String>> = HashMap::new();
+    for post in &posts {
+        for parent_id in &post.parent_post_ids {
+            children_map.entry(parent_id.clone()).or_default().push(post.id.clone());
         }
+    }
+
+    // Dynamic Layout Calculation
+    // We recalculate positions every frame to ensure no overlaps regardless of content size
+    let mut layouts = Vec::new();
+    
+    // Parse timestamps and sort posts by time (oldest first)
+    let mut timestamped_posts: Vec<(DateTime<Utc>, &PostView)> = posts
+        .iter()
+        .filter_map(|p| match DateTime::parse_from_rfc3339(&p.created_at) {
+            Ok(dt) => Some((dt.with_timezone(&Utc), p)),
+            Err(_) => None,
+        })
+        .collect();
+    timestamped_posts.sort_by_key(|(dt, _)| *dt);
+
+    let bins = create_time_bins(&timestamped_posts, state.time_bin_seconds);
+    
+    let mut current_y = TOP_MARGIN;
+    
+    for bin in bins {
+        let mut max_height_in_bin: f32 = 0.0;
+        
+        for (idx, post_id) in bin.post_ids.iter().enumerate() {
+            if let Some(post) = posts.iter().find(|p| &p.id == post_id) {
+                let attachments = state.attachments.get(&post.id).cloned();
+                let has_preview = attachments
+                    .as_ref()
+                    .map(|files| files.iter().any(is_image))
+                    .unwrap_or(false);
+                let has_children = children_map.contains_key(&post.id);
+
+                // Calculate unzoomed height
+                let unzoomed_height = estimate_node_height(ui, post, has_preview, has_children, 1.0);
+                max_height_in_bin = max_height_in_bin.max(unzoomed_height);
+
+                let x = LEFT_MARGIN + (idx as f32) * (CARD_WIDTH + CARD_HORIZONTAL_SPACING);
+                let y = current_y;
+
+                // Update stored node position (for reference/persistence if needed)
+                state.graph_nodes.insert(
+                    post.id.clone(),
+                    GraphNode {
+                        pos: egui::pos2(x, y),
+                        vel: egui::vec2(0.0, 0.0),
+                        size: egui::vec2(CARD_WIDTH, unzoomed_height),
+                        dragging: false,
+                    },
+                );
+
+                // Create layout data
+                let top_left = egui::pos2(
+                    rect.left() + state.graph_offset.x + x * state.graph_zoom,
+                    rect.top() + state.graph_offset.y + y * state.graph_zoom,
+                );
+                let scaled_size = egui::vec2(CARD_WIDTH, unzoomed_height) * state.graph_zoom;
+                let rect_node = egui::Rect::from_min_size(top_left, scaled_size);
+
+                layouts.push(NodeLayoutData {
+                    post: post.clone(),
+                    rect: rect_node,
+                    attachments,
+                });
+            }
+        }
+        
+        current_y += max_height_in_bin + MIN_BIN_VERTICAL_SPACING;
     }
 
     // Build lookup for edge routing
@@ -270,14 +312,23 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
             .map(|layout| layout.post.id.clone())
     });
 
-    // Draw orthogonal edges
+    // Draw orthogonal edges (clipped to viewport)
     let edge_painter = ui.painter().with_clip_rect(rect);
     draw_orthogonal_edges(&edge_painter, &layouts, &rect_lookup, state, hovered_post.as_ref());
 
     // Render nodes
+    // IMPORTANT: Clip all node rendering to the viewport to prevent overlap with header
+    let original_clip = ui.clip_rect();
+    ui.set_clip_rect(rect.intersect(original_clip));
+    
+    let api_base = app.api.base_url().to_string();
     for layout in layouts {
-        render_node(app, ui, state, layout, &api_base, rect, state.graph_zoom);
+        let children = children_map.get(&layout.post.id).cloned().unwrap_or_default();
+        render_node(app, ui, state, layout, &api_base, rect, state.graph_zoom, children);
     }
+    
+    // Restore clip rect
+    ui.set_clip_rect(original_clip);
 
     ui.separator();
     ui.horizontal(|ui| {
@@ -291,22 +342,12 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
         // Time bin size slider
         ui.label("Time Bin:");
         let mut bin_minutes = (state.time_bin_seconds / 60) as f32;
-        let mut rebuild_layout = false;
         if ui.add(egui::Slider::new(&mut bin_minutes, 1.0..=120.0)
             .suffix(" min")
             .logarithmic(true))
             .changed() 
         {
-            let new_bin_seconds = (bin_minutes * 60.0) as i64;
-            if new_bin_seconds != state.time_bin_seconds {
-                state.time_bin_seconds = new_bin_seconds;
-                rebuild_layout = true;
-            }
-        }
-        
-        if rebuild_layout {
-            let posts = state.details.as_ref().map(|d| d.posts.clone()).unwrap_or_default();
-            state.graph_nodes = build_chronological_layout(&posts, state.time_bin_seconds);
+            state.time_bin_seconds = (bin_minutes * 60.0) as i64;
         }
         
         ui.separator();
@@ -335,6 +376,7 @@ fn render_node(
     api_base: &str,
     viewport: egui::Rect,
     zoom: f32,
+    children: Vec<String>,
 ) {
     let rect_node = layout.rect;
     let selected = state.selected_post.as_ref() == Some(&layout.post.id);
@@ -375,7 +417,10 @@ fn render_node(
             .rounding(egui::Rounding::same(10.0 * zoom))
             .inner_margin(Margin::same(10.0 * zoom))
             .show(ui, |ui| {
-                ui.set_clip_rect(rect_node);
+                // Clip to the intersection of the node rect and the viewport (CentralPanel)
+                // This prevents drawing over the TopBottomPanel
+                ui.set_clip_rect(rect_node.intersect(viewport));
+                
                 ui.vertical(|ui| {
                     // Don't set max_width - let frame's inner_margin handle spacing
                     
@@ -403,18 +448,6 @@ fn render_node(
 
                     ui.add_space(6.0 * zoom);
                     render_node_actions(ui, state, &layout.post, zoom);
-                    
-                    // Show outgoing edges (posts that reply to this one)
-                    // We need to find these by scanning all posts
-                    let children: Vec<String> = state.details
-                        .as_ref()
-                        .map(|d| {
-                            d.posts.iter()
-                                .filter(|p| p.parent_post_ids.contains(&layout.post.id))
-                                .map(|p| p.id.clone())
-                                .collect()
-                        })
-                        .unwrap_or_default();
                     
                     if !children.is_empty() {
                         ui.add_space(4.0 * zoom);
@@ -544,7 +577,8 @@ fn render_node_attachments(
                 ui.add(
                     egui::Image::from_texture(&tex)
                         .maintain_aspect_ratio(true)
-                        .max_width(120.0 * zoom),
+                        .max_width(120.0 * zoom)
+                        .max_height(120.0 * zoom),
                 );
             }
             ImagePreview::Loading => {
@@ -572,7 +606,7 @@ fn is_image(file: &FileResponse) -> bool {
             .unwrap_or(false)
 }
 
-fn estimate_node_height(ui: &egui::Ui, post: &PostView, has_preview: bool, zoom: f32) -> f32 {
+fn estimate_node_height(ui: &egui::Ui, post: &PostView, has_preview: bool, has_children: bool, zoom: f32) -> f32 {
     use eframe::egui::FontId;
 
     let text_width = (CARD_WIDTH - 20.0) * zoom;
@@ -582,14 +616,25 @@ fn estimate_node_height(ui: &egui::Ui, post: &PostView, has_preview: bool, zoom:
         galley.size().y
     });
 
-    let mut height = (70.0 * zoom) + text_height;
+    // Base padding (header + footer spacing)
+    let mut height = (50.0 * zoom) + text_height;
+    
+    // Header height approx
+    height += 25.0 * zoom;
+
     if !post.parent_post_ids.is_empty() {
-        height += 28.0 * zoom;
+        height += 20.0 * zoom; // "Replying to:" line
     }
+    
     if has_preview {
-        height += 120.0 * zoom;
+        height += 126.0 * zoom; // Image (120) + padding (6)
     }
-    height + (36.0 * zoom)
+    
+    if has_children {
+        height += 20.0 * zoom; // "Replies:" line
+    }
+    
+    height + (20.0 * zoom) // Bottom padding
 }
 
 /// Draw orthogonal (Manhattan-style) edges between posts
