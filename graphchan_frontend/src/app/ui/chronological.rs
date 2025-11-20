@@ -165,8 +165,23 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
         state.graph_nodes = build_chronological_layout(&posts, state.time_bin_seconds);
     }
 
-    let available = ui.available_size();
-    let (rect, response) = ui.allocate_at_least(available, egui::Sense::click_and_drag());
+    // Calculate layout rects
+    let available_rect = ui.available_rect_before_wrap();
+    let control_height = 40.0;
+    
+    let canvas_rect = egui::Rect::from_min_max(
+        available_rect.min,
+        egui::Pos2::new(available_rect.max.x, available_rect.max.y - control_height)
+    );
+    
+    let control_rect = egui::Rect::from_min_max(
+        egui::Pos2::new(available_rect.min.x, available_rect.max.y - control_height),
+        available_rect.max
+    );
+
+    // 1. Render Canvas
+    let response = ui.allocate_rect(canvas_rect, egui::Sense::click_and_drag());
+    let rect = canvas_rect; // Use the allocated rect
     let canvas = ui.painter().with_clip_rect(rect);
 
     // Background
@@ -330,41 +345,59 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
     // Restore clip rect
     ui.set_clip_rect(original_clip);
 
-    ui.separator();
-    ui.horizontal(|ui| {
-        ui.label(format!(
-            "Chronological View | Nodes: {}",
-            state.graph_nodes.len()
-        ));
-        
-        ui.separator();
-        
-        // Time bin size slider
-        ui.label("Time Bin:");
-        let mut bin_minutes = (state.time_bin_seconds / 60) as f32;
-        if ui.add(egui::Slider::new(&mut bin_minutes, 1.0..=120.0)
-            .suffix(" min")
-            .logarithmic(true))
-            .changed() 
-        {
-            state.time_bin_seconds = (bin_minutes * 60.0) as i64;
-        }
-        
-        ui.separator();
-        
-        // Zoom controls
-        ui.label("Zoom:");
-        if ui.button("−").clicked() {
-            state.graph_zoom = (state.graph_zoom * 0.8).max(0.2);
-        }
-        ui.label(format!("{:.1}x", state.graph_zoom));
-        if ui.button("+").clicked() {
-            state.graph_zoom = (state.graph_zoom * 1.25).min(4.0);
-        }
-        if ui.button("Reset").clicked() {
-            state.graph_zoom = 1.0;
-            state.graph_offset = egui::vec2(0.0, 0.0);
-        }
+    // Render Controls in the reserved bottom area
+    ui.allocate_ui_at_rect(control_rect, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(format!(
+                "Chronological View | Nodes: {}",
+                state.graph_nodes.len()
+            ));
+            
+            ui.separator();
+            
+            // Time bin size slider
+            ui.label("Time Bin:");
+            let mut bin_minutes = (state.time_bin_seconds / 60) as f32;
+            let mut rebuild_layout = false;
+            if ui.add(egui::Slider::new(&mut bin_minutes, 1.0..=1440.0)
+                .logarithmic(true)
+                .custom_formatter(|n, _| {
+                    if n < 60.0 {
+                        format!("{:.0} min", n)
+                    } else {
+                        format!("{:.1} hr", n / 60.0)
+                    }
+                }))
+                .changed() 
+            {
+                let new_bin_seconds = (bin_minutes * 60.0) as i64;
+                if new_bin_seconds != state.time_bin_seconds {
+                    state.time_bin_seconds = new_bin_seconds;
+                    rebuild_layout = true;
+                }
+            }
+            
+            if rebuild_layout {
+                let posts = state.details.as_ref().map(|d| d.posts.clone()).unwrap_or_default();
+                state.graph_nodes = build_chronological_layout(&posts, state.time_bin_seconds);
+            }
+            
+            ui.separator();
+            
+            // Zoom controls
+            ui.label("Zoom:");
+            if ui.button("−").clicked() {
+                state.graph_zoom = (state.graph_zoom * 0.8).max(0.2);
+            }
+            ui.label(format!("{:.1}x", state.graph_zoom));
+            if ui.button("+").clicked() {
+                state.graph_zoom = (state.graph_zoom * 1.25).min(4.0);
+            }
+            if ui.button("Reset").clicked() {
+                state.graph_zoom = 1.0;
+                state.graph_offset = egui::vec2(0.0, 0.0);
+            }
+        });
     });
 }
 
