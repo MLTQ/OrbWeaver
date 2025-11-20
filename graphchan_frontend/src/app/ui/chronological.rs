@@ -16,7 +16,7 @@ const CARD_HORIZONTAL_SPACING: f32 = 50.0; // More space between cards
 const MIN_BIN_VERTICAL_SPACING: f32 = 50.0; // Minimum spacing between bins
 const LEFT_MARGIN: f32 = 120.0; // Leave room for time axis
 const TOP_MARGIN: f32 = 50.0;
-const EDGE_CLEARANCE: f32 = 15.0; // Space to route around cards
+
 
 struct ChronoBin {
     timestamp: DateTime<Utc>,
@@ -593,6 +593,16 @@ fn estimate_node_height(ui: &egui::Ui, post: &PostView, has_preview: bool, zoom:
 }
 
 /// Draw orthogonal (Manhattan-style) edges between posts
+struct EdgeToDraw {
+    start_y: f32,
+    end_y: f32,
+    parent_rect: egui::Rect,
+    child_rect: egui::Rect,
+    color: Color32,
+    width: f32,
+    child_id: String,
+}
+
 fn draw_orthogonal_edges(
     painter: &egui::Painter,
     layouts: &[NodeLayoutData],
@@ -602,11 +612,16 @@ fn draw_orthogonal_edges(
 ) {
     let reply_targets = &state.reply_to;
 
+
+
+    let mut edges = Vec::new();
+
+    // 1. Collect all edges
     for layout in layouts {
         for parent_id in &layout.post.parent_post_ids {
             let (parent_rect, child_rect) =
                 match (rect_lookup.get(parent_id), rect_lookup.get(&layout.post.id)) {
-                    (Some(p), Some(c)) => (p, c),
+                    (Some(p), Some(c)) => (*p, *c),
                     _ => continue,
                 };
 
@@ -614,7 +629,6 @@ fn draw_orthogonal_edges(
                 .iter()
                 .any(|id| id == parent_id || id == &layout.post.id);
             
-            // Highlight if hovering over either end of this edge
             let is_hovered = hovered_post.map_or(false, |hovered| {
                 hovered == parent_id || hovered == &layout.post.id
             });
@@ -623,75 +637,91 @@ fn draw_orthogonal_edges(
             let color = if is_reply_edge {
                 Color32::from_rgb(255, 190, 92)
             } else if is_hovered {
-                Color32::from_rgb(150, 180, 255)  // Bright blue on hover
+                Color32::from_rgb(150, 180, 255)
             } else if sel == Some(&layout.post.id) || sel == Some(parent_id) {
                 Color32::from_rgb(110, 190, 255)
             } else {
                 Color32::from_rgb(90, 110, 170)
             };
 
-            let stroke_width = if is_reply_edge { 3.4 } else if is_hovered { 3.0 } else { 2.0 };
+            let width = (if is_reply_edge { 3.4 } else if is_hovered { 3.0 } else { 2.0 }) * state.graph_zoom;
 
-            draw_manhattan_path(painter, parent_rect, child_rect, color, stroke_width);
+            edges.push(EdgeToDraw {
+                start_y: parent_rect.bottom(),
+                end_y: child_rect.top(),
+                parent_rect,
+                child_rect,
+                color,
+                width,
+                child_id: layout.post.id.clone(), // Store for sorting
+            });
         }
     }
-}
 
-/// Draw a Manhattan/orthogonal path between two rects
-fn draw_manhattan_path(
-    painter: &egui::Painter,
-    parent_rect: &egui::Rect,
-    child_rect: &egui::Rect,
-    color: Color32,
-    stroke_width: f32,
-) {
-    let start = anchor_bottom(parent_rect);
-    let end = anchor_top(child_rect);
+    // 2. Sort edges by start_y (top to bottom), then by child_id for stability
+    edges.sort_by(|a, b| {
+        a.start_y
+            .partial_cmp(&b.start_y)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.child_id.cmp(&b.child_id))
+    });
 
-    // Simple case: child is directly below parent
-    if child_rect.top() > parent_rect.bottom() + 10.0 {
-        // Check if horizontally aligned enough for straight line
-        let horizontal_distance = (child_rect.center().x - parent_rect.center().x).abs();
+    // 3. Assign lanes (greedy interval coloring)
+    // lanes[i] stores the y-coordinate where lane i becomes free
+    let mut lanes: Vec<f32> = Vec::new();
+    let lane_spacing = 12.0 * state.graph_zoom;
+    let base_offset = 20.0 * state.graph_zoom;
 
-        if horizontal_distance < 50.0 {
-            // Straight down
-            let points = vec![start, end];
-            painter.add(egui::Shape::line(
-                points,
-                egui::Stroke::new(stroke_width, color),
-            ));
-            draw_arrow(painter, start, end, color);
-        } else {
-            // S-curve down
-            let mid_y = (start.y + end.y) / 2.0;
-            let waypoint1 = Pos2::new(start.x, mid_y);
-            let waypoint2 = Pos2::new(end.x, mid_y);
-
-            let points = vec![start, waypoint1, waypoint2, end];
-            painter.add(egui::Shape::line(
-                points,
-                egui::Stroke::new(stroke_width, color),
-            ));
-            draw_arrow(painter, waypoint2, end, color);
+    for edge in edges {
+        // Find first free lane
+        let mut lane_index = 0;
+        let mut found = false;
+        for (i, free_y) in lanes.iter_mut().enumerate() {
+            if *free_y < edge.start_y {
+                *free_y = edge.end_y;
+                lane_index = i;
+                found = true;
+                break;
+            }
         }
-    } else {
-        // Complex case: child is above or at same level as parent - route around
-        let clearance_up = parent_rect.top() - EDGE_CLEARANCE;
-        let clearance_right = parent_rect.right() + EDGE_CLEARANCE;
+        if !found {
+            lane_index = lanes.len();
+            lanes.push(edge.end_y);
+        }
 
-        let waypoint1 = Pos2::new(start.x, clearance_up);
-        let waypoint2 = Pos2::new(clearance_right, clearance_up);
-        let waypoint3 = Pos2::new(clearance_right, end.y - EDGE_CLEARANCE);
-        let waypoint4 = Pos2::new(end.x, end.y - EDGE_CLEARANCE);
+        // 4. Draw edge using lane
+        // Route to the LEFT of the parent/child
+        // X coordinate for this lane
+        let lane_x = edge.parent_rect.left() - base_offset - (lane_index as f32 * lane_spacing);
+        
+        let start = anchor_bottom(&edge.parent_rect);
+        let end = anchor_top(&edge.child_rect);
+        
+        let corner_radius = 8.0 * state.graph_zoom;
 
-        let points = vec![start, waypoint1, waypoint2, waypoint3, waypoint4, end];
+        // Path points
+        let p1 = egui::pos2(start.x, start.y + corner_radius);
+        let p2 = egui::pos2(lane_x, start.y + corner_radius);
+        let p3 = egui::pos2(lane_x, end.y - corner_radius);
+        let p4 = egui::pos2(end.x, end.y - corner_radius);
+
+        // Draw path
+        let points = vec![start, p1, p2, p3, p4, end];
+        
+        // Simplify if points are close (e.g. straight down)
+        // But here we are forcing a lane detour, so we always have these points.
+        // Unless lane_x is actually between parent and child? No, we forced it left.
+        
         painter.add(egui::Shape::line(
             points,
-            egui::Stroke::new(stroke_width, color),
+            egui::Stroke::new(edge.width, edge.color),
         ));
-        draw_arrow(painter, waypoint4, end, color);
+        
+        draw_arrow(painter, p4, end, edge.color);
     }
 }
+
+
 
 fn anchor_top(rect: &egui::Rect) -> Pos2 {
     Pos2::new(rect.center().x, rect.top() - 6.0)
