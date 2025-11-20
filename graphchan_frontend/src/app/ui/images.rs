@@ -77,18 +77,14 @@ impl GraphchanApp {
         for (id, open) in self.image_viewers.iter_mut() {
             egui::Window::new(format!("Image {}", id))
                 .open(open)
+                .default_size([512.0, 512.0])
                 .resizable(true)
                 .show(ctx, |ui| {
                     if let Some(tex) = self.image_textures.get(id) {
-                        let avail = ui.available_size();
-                        let mut size = tex.size_vec2();
-                        let max_w = (avail.x - 16.0).max(200.0);
-                        if size.x > max_w {
-                            let scale = max_w / size.x;
-                            size.x *= scale;
-                            size.y *= scale;
-                        }
-                        ui.image(tex);
+                        ui.add(
+                            egui::Image::from_texture(tex)
+                                .shrink_to_fit()
+                        );
                     } else {
                         ui.label("Loading image...");
                     }

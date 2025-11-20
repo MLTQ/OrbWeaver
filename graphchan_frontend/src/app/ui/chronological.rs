@@ -592,12 +592,21 @@ fn render_node_attachments(
         match image_preview(app, ui, file, api_base) {
             ImagePreview::Ready(tex) => {
                 ui.add_space(6.0 * zoom);
-                ui.add(
+                let resp = ui.add(
                     egui::Image::from_texture(&tex)
                         .maintain_aspect_ratio(true)
                         .max_width(120.0 * zoom)
-                        .max_height(120.0 * zoom),
+                        .max_height(120.0 * zoom)
+                        .sense(egui::Sense::click()),
                 );
+                
+                if resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                
+                if resp.clicked() {
+                    app.image_viewers.insert(file.id.clone(), true);
+                }
             }
             ImagePreview::Loading => {
                 ui.add_space(6.0 * zoom);
