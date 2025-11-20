@@ -410,11 +410,20 @@ fn render_node(
         Color32::from_rgb(80, 90, 130)
     };
 
+    // Paint the background and stroke explicitly to match rect_node
+    // This ensures the visual box matches the edge connection points exactly,
+    // even if the content inside is smaller than the estimated height.
+    let rounding = egui::Rounding::same(10.0 * zoom);
+    ui.painter().rect(
+        rect_node,
+        rounding,
+        fill_color,
+        egui::Stroke::new(stroke_width, stroke_color),
+    );
+
     let response = ui.allocate_ui_at_rect(rect_node, |ui| {
+        // Use a transparent frame just for padding/margins
         egui::Frame::none()
-            .fill(fill_color)
-            .stroke(egui::Stroke::new(stroke_width, stroke_color))
-            .rounding(egui::Rounding::same(10.0 * zoom))
             .inner_margin(Margin::same(10.0 * zoom))
             .show(ui, |ui| {
                 // Clip to the intersection of the node rect and the viewport (CentralPanel)
