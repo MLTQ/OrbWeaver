@@ -431,43 +431,52 @@ fn render_node(
                 ui.set_clip_rect(rect_node.intersect(viewport));
                 
                 ui.vertical(|ui| {
-                    // Don't set max_width - let frame's inner_margin handle spacing
-                    
-                    render_node_header(ui, state, &layout.post, zoom);
+                    // Use bottom_up layout to anchor replies to the bottom
+                    ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                        if !children.is_empty() {
+                            // Padding from bottom edge
+                            ui.add_space(4.0 * zoom);
+                            
+                            ui.horizontal_wrapped(|ui| {
+                                // Don't set max_width - let frame's inner_margin handle spacing
+                                ui.label(RichText::new("↪ Replies:").size(11.0 * zoom).color(Color32::GRAY));
+                                for child_id in children {
+                                    render_post_link(ui, state, &child_id, zoom, viewport);
+                                }
+                            });
+                            
+                            // Spacing between content and replies
+                            ui.add_space(4.0 * zoom);
+                        }
 
-                    // Show incoming edges (posts this replies to)
-                    if !layout.post.parent_post_ids.is_empty() {
-                        ui.add_space(4.0 * zoom);
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new("↩ Replying to:").size(11.0 * zoom).color(Color32::GRAY));
-                            for parent in &layout.post.parent_post_ids {
-                                render_post_link(ui, state, parent, zoom, viewport);
+                        // Render the rest of the content top-down in the remaining space
+                        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                            render_node_header(ui, state, &layout.post, zoom);
+
+                            // Show incoming edges (posts this replies to)
+                            if !layout.post.parent_post_ids.is_empty() {
+                                ui.add_space(4.0 * zoom);
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(RichText::new("↩ Replying to:").size(11.0 * zoom).color(Color32::GRAY));
+                                    for parent in &layout.post.parent_post_ids {
+                                        render_post_link(ui, state, parent, zoom, viewport);
+                                    }
+                                });
                             }
+
+                            ui.add_space(6.0 * zoom);
+                            ui.label(
+                                egui::RichText::new(&layout.post.body)
+                                    .size(13.0 * zoom)
+                                    .color(Color32::from_rgb(220, 220, 230)),
+                            );
+
+                            render_node_attachments(app, ui, layout.attachments.as_ref(), api_base, zoom);
+
+                            ui.add_space(6.0 * zoom);
+                            render_node_actions(ui, state, &layout.post, zoom);
                         });
-                    }
-
-                    ui.add_space(6.0 * zoom);
-                    ui.label(
-                        egui::RichText::new(&layout.post.body)
-                            .size(13.0 * zoom)
-                            .color(Color32::from_rgb(220, 220, 230)),
-                    );
-
-                    render_node_attachments(app, ui, layout.attachments.as_ref(), api_base, zoom);
-
-                    ui.add_space(6.0 * zoom);
-                    render_node_actions(ui, state, &layout.post, zoom);
-                    
-                    if !children.is_empty() {
-                        ui.add_space(4.0 * zoom);
-                        ui.horizontal_wrapped(|ui| {
-                            // Don't set max_width - let frame's inner_margin handle spacing
-                            ui.label(RichText::new("↪ Replies:").size(11.0 * zoom).color(Color32::GRAY));
-                            for child_id in children {
-                                render_post_link(ui, state, &child_id, zoom, viewport);
-                            }
-                        });
-                    }
+                    });
                 });
             })
     }).response;
