@@ -5,6 +5,7 @@ import { api } from '../api/client';
 import { type ThreadDetails, type CreatePostInput } from '../api/types';
 import { Post } from '../components/Post';
 import { ThreadGraph } from '../components/ThreadGraph';
+import { ThreadTimeline } from '../components/ThreadTimeline';
 import './ThreadView.css';
 
 type ViewMode = 'LIST' | 'GRAPH' | 'TIMELINE';
@@ -136,8 +137,14 @@ export const ThreadView: React.FC = () => {
       )}
 
       {viewMode === 'TIMELINE' && (
-        <div className="timeline-placeholder p-8 text-center border border-[var(--border-color)] bg-[var(--bg-secondary)]">
-          TIMELINE PROJECTION NOT YET CALIBRATED
+        <div className="timeline-view-wrapper">
+          <ThreadTimeline
+            posts={thread.posts}
+            onPostClick={(postId) => {
+              // Optional: scroll to post or show details
+              console.log('Clicked timeline post:', postId);
+            }}
+          />
         </div>
       )}
 

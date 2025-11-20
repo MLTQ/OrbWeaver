@@ -188,6 +188,39 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
     // Draw time axis on the left
     draw_time_axis(&canvas, &posts, state, rect);
 
+
+
+    // Handle zoom with Scroll Wheel, Ctrl + Scroll, or Pinch
+    let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
+    let zoom_delta = ui.input(|i| i.zoom_delta());
+    
+    let mut total_zoom_factor = 1.0;
+    
+    // Standard scroll wheel zoom
+    if scroll_delta != 0.0 {
+        total_zoom_factor *= 1.0 + scroll_delta * 0.001;
+    }
+    
+    // Pinch or Ctrl+Scroll zoom
+    if zoom_delta != 1.0 {
+        total_zoom_factor *= zoom_delta;
+    }
+
+    if total_zoom_factor != 1.0 {
+        let old_zoom = state.graph_zoom;
+        state.graph_zoom = (state.graph_zoom * total_zoom_factor).clamp(0.2, 4.0);
+        
+        // Zoom towards mouse cursor if hovered
+        if let Some(pointer_pos) = ui.ctx().pointer_hover_pos() {
+            if rect.contains(pointer_pos) {
+                // Adjust offset to keep the point under the cursor stationary
+                let pointer_rel = pointer_pos - rect.min;
+                let zoom_ratio = state.graph_zoom / old_zoom;
+                state.graph_offset = pointer_rel - (pointer_rel - state.graph_offset) * zoom_ratio;
+            }
+        }
+    }
+
     // Handle panning with right-click drag
     if response.dragged_by(egui::PointerButton::Secondary) {
         state.graph_offset += response.drag_delta();
@@ -205,7 +238,7 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
                 .map(|files| files.iter().any(is_image))
                 .unwrap_or(false);
 
-            let card_height = estimate_node_height(ui, post, has_preview);
+            let card_height = estimate_node_height(ui, post, has_preview, state.graph_zoom);
             node.size = egui::vec2(CARD_WIDTH, card_height);
 
             // Apply zoom and offset to position
@@ -243,7 +276,7 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
 
     // Render nodes
     for layout in layouts {
-        render_node(app, ui, state, layout, &api_base, rect);
+        render_node(app, ui, state, layout, &api_base, rect, state.graph_zoom);
     }
 
     ui.separator();
@@ -301,6 +334,7 @@ fn render_node(
     layout: NodeLayoutData,
     api_base: &str,
     _viewport: egui::Rect,
+    zoom: f32,
 ) {
     let rect_node = layout.rect;
     let selected = state.selected_post.as_ref() == Some(&layout.post.id);
@@ -323,7 +357,7 @@ fn render_node(
         Color32::from_rgb(30, 30, 38)
     };
 
-    let stroke_width = if hovered { 2.5 } else { 1.5 };
+    let stroke_width = (if hovered { 2.5 } else { 1.5 }) * zoom;
     let stroke_color = if reply_target {
         Color32::from_rgb(255, 190, 92)
     } else if selected {
@@ -338,39 +372,39 @@ fn render_node(
         egui::Frame::none()
             .fill(fill_color)
             .stroke(egui::Stroke::new(stroke_width, stroke_color))
-            .rounding(egui::Rounding::same(10.0))
-            .inner_margin(Margin::same(10.0))
+            .rounding(egui::Rounding::same(10.0 * zoom))
+            .inner_margin(Margin::same(10.0 * zoom))
             .show(ui, |ui| {
                 ui.set_clip_rect(rect_node);
                 ui.vertical(|ui| {
                     // Don't set max_width - let frame's inner_margin handle spacing
                     
-                    render_node_header(ui, state, &layout.post);
+                    render_node_header(ui, state, &layout.post, zoom);
 
                     // Show incoming edges (posts this replies to)
                     if !layout.post.parent_post_ids.is_empty() {
-                        ui.add_space(4.0);
+                        ui.add_space(4.0 * zoom);
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new("↩ Replying to:").size(11.0).color(Color32::GRAY));
+                            ui.label(RichText::new("↩ Replying to:").size(11.0 * zoom).color(Color32::GRAY));
                             for parent in &layout.post.parent_post_ids {
-                                if ui.link(RichText::new(format!("#{}", parent)).size(11.0)).clicked() {
+                                if ui.link(RichText::new(format!("#{}", parent)).size(11.0 * zoom)).clicked() {
                                     state.selected_post = Some(parent.clone());
                                 }
                             }
                         });
                     }
 
-                    ui.add_space(6.0);
+                    ui.add_space(6.0 * zoom);
                     ui.label(
                         egui::RichText::new(&layout.post.body)
-                            .size(13.0)
+                            .size(13.0 * zoom)
                             .color(Color32::from_rgb(220, 220, 230)),
                     );
 
-                    render_node_attachments(app, ui, layout.attachments.as_ref(), api_base);
+                    render_node_attachments(app, ui, layout.attachments.as_ref(), api_base, zoom);
 
-                    ui.add_space(6.0);
-                    render_node_actions(ui, state, &layout.post);
+                    ui.add_space(6.0 * zoom);
+                    render_node_actions(ui, state, &layout.post, zoom);
                     
                     // Show outgoing edges (posts that reply to this one)
                     // We need to find these by scanning all posts
@@ -385,12 +419,12 @@ fn render_node(
                         .unwrap_or_default();
                     
                     if !children.is_empty() {
-                        ui.add_space(4.0);
+                        ui.add_space(4.0 * zoom);
                         ui.horizontal_wrapped(|ui| {
                             // Don't set max_width - let frame's inner_margin handle spacing
-                            ui.label(RichText::new("↪ Replies:").size(11.0).color(Color32::GRAY));
+                            ui.label(RichText::new("↪ Replies:").size(11.0 * zoom).color(Color32::GRAY));
                             for child_id in children {
-                                if ui.link(RichText::new(format!("#{}", child_id)).size(11.0)).clicked() {
+                                if ui.link(RichText::new(format!("#{}", child_id)).size(11.0 * zoom)).clicked() {
                                     state.selected_post = Some(child_id);
                                 }
                             }
@@ -412,33 +446,34 @@ fn render_node(
     }
 }
 
-fn render_node_header(ui: &mut egui::Ui, state: &mut ThreadState, post: &PostView) {
+fn render_node_header(ui: &mut egui::Ui, state: &mut ThreadState, post: &PostView, zoom: f32) {
     ui.horizontal(|ui| {
         if ui
-            .button(RichText::new(format!("#{}", post.id)).monospace().size(11.0))
+            .button(RichText::new(format!("#{}", post.id)).monospace().size(11.0 * zoom))
             .clicked()
         {
             state.selected_post = Some(post.id.clone());
         }
         let author = post.author_peer_id.as_deref().unwrap_or("Anon");
-        ui.label(RichText::new(author).strong().size(12.0));
+        ui.label(RichText::new(author).strong().size(12.0 * zoom));
         
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
                 RichText::new(format_timestamp(&post.created_at))
                     .color(Color32::from_rgb(200, 200, 210))
-                    .size(10.0),
+                    .size(10.0 * zoom),
             );
         });
     });
 }
 
-fn render_node_actions(ui: &mut egui::Ui, state: &mut ThreadState, post: &PostView) {
+fn render_node_actions(ui: &mut egui::Ui, state: &mut ThreadState, post: &PostView, zoom: f32) {
     ui.horizontal(|ui| {
-        if ui.button("↩ Reply").clicked() {
+        // Scale buttons by scaling their text
+        if ui.button(RichText::new("↩ Reply").size(13.0 * zoom)).clicked() {
             GraphchanApp::set_reply_target(state, &post.id);
         }
-        if ui.button("❝ Quote").clicked() {
+        if ui.button(RichText::new("❝ Quote").size(13.0 * zoom)).clicked() {
             GraphchanApp::quote_post(state, &post.id);
         }
     });
@@ -449,6 +484,7 @@ fn render_node_attachments(
     ui: &mut egui::Ui,
     attachments: Option<&Vec<FileResponse>>,
     api_base: &str,
+    zoom: f32,
 ) {
     use super::graph::{image_preview, ImagePreview};
 
@@ -460,23 +496,23 @@ fn render_node_attachments(
     if let Some(file) = files.iter().find(|f| is_image(f)) {
         match image_preview(app, ui, file, api_base) {
             ImagePreview::Ready(tex) => {
-                ui.add_space(6.0);
+                ui.add_space(6.0 * zoom);
                 ui.add(
                     egui::Image::from_texture(&tex)
                         .maintain_aspect_ratio(true)
-                        .max_width(120.0),
+                        .max_width(120.0 * zoom),
                 );
             }
             ImagePreview::Loading => {
-                ui.add_space(6.0);
+                ui.add_space(6.0 * zoom);
                 ui.horizontal(|ui| {
-                    ui.add(egui::Spinner::new());
-                    ui.label("Fetching image…");
+                    ui.add(egui::Spinner::new().size(16.0 * zoom));
+                    ui.label(RichText::new("Fetching image…").size(12.0 * zoom));
                 });
             }
             ImagePreview::Error(err) => {
-                ui.add_space(6.0);
-                ui.colored_label(Color32::LIGHT_RED, format!("Image failed: {err}"));
+                ui.add_space(6.0 * zoom);
+                ui.colored_label(Color32::LIGHT_RED, RichText::new(format!("Image failed: {err}")).size(12.0 * zoom));
             }
             ImagePreview::None => {}
         }
@@ -492,24 +528,24 @@ fn is_image(file: &FileResponse) -> bool {
             .unwrap_or(false)
 }
 
-fn estimate_node_height(ui: &egui::Ui, post: &PostView, has_preview: bool) -> f32 {
+fn estimate_node_height(ui: &egui::Ui, post: &PostView, has_preview: bool, zoom: f32) -> f32 {
     use eframe::egui::FontId;
 
-    let text_width = CARD_WIDTH - 20.0;
+    let text_width = (CARD_WIDTH - 20.0) * zoom;
     let text_height = ui.fonts(|fonts| {
         let body = post.body.clone();
-        let galley = fonts.layout(body, FontId::proportional(13.0), Color32::WHITE, text_width);
+        let galley = fonts.layout(body, FontId::proportional(13.0 * zoom), Color32::WHITE, text_width);
         galley.size().y
     });
 
-    let mut height = 70.0 + text_height;
+    let mut height = (70.0 * zoom) + text_height;
     if !post.parent_post_ids.is_empty() {
-        height += 28.0;
+        height += 28.0 * zoom;
     }
     if has_preview {
-        height += 120.0;
+        height += 120.0 * zoom;
     }
-    height + 36.0
+    height + (36.0 * zoom)
 }
 
 /// Draw orthogonal (Manhattan-style) edges between posts

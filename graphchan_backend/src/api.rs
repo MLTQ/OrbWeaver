@@ -34,6 +34,7 @@ pub struct AppState {
     pub database: Database,
     pub network: NetworkHandle,
     pub blobs: FsStore,
+    pub http_client: reqwest::Client,
 }
 
 pub async fn serve_http(
@@ -43,12 +44,19 @@ pub async fn serve_http(
     network: NetworkHandle,
     blobs: FsStore,
 ) -> Result<()> {
+    let http_client = reqwest::Client::builder()
+        .user_agent("Graphchan/0.1.0")
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("failed to build shared HTTP client")?;
+
     let state = AppState {
         config: config.clone(),
         identity,
         database,
         network,
         blobs,
+        http_client,
     };
 
     // Increase body limit to 50MB for file uploads (4chan images can be large)
@@ -294,11 +302,28 @@ async fn download_file(
     let mut response = Response::new(body);
     let headers = response.headers_mut();
 
-    let content_type = download
+    let mut content_type = download
         .metadata
         .mime
         .clone()
         .unwrap_or_else(|| "application/octet-stream".into());
+
+    // If generic or missing, try to guess from extension
+    if content_type == "application/octet-stream" {
+        if let Some(name) = &download.metadata.original_name {
+            if let Some(ext) = std::path::Path::new(name).extension().and_then(|e| e.to_str()) {
+                let mime = match ext.to_lowercase().as_str() {
+                    "jpg" | "jpeg" => "image/jpeg",
+                    "png" => "image/png",
+                    "gif" => "image/gif",
+                    "webm" => "video/webm",
+                    _ => "application/octet-stream",
+                };
+                content_type = mime.to_string();
+            }
+        }
+    }
+
     if let Ok(value) = HeaderValue::from_str(&content_type) {
         headers.insert(CONTENT_TYPE, value);
     }

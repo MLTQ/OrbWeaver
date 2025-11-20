@@ -4,7 +4,6 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use html2text::from_read;
 use regex::Regex;
-use reqwest::Client;
 use serde::Deserialize;
 use tokio::time::sleep;
 
@@ -42,12 +41,7 @@ pub async fn import_fourchan_thread(state: &AppState, url: &str) -> Result<Strin
     let (board, thread_id) = parse_thread_url(url)?;
     let api_url = format!("https://a.4cdn.org/{}/thread/{}.json", board, thread_id);
 
-    let client = Client::builder()
-        .user_agent("Graphchan/0.1.0")
-        .build()
-        .context("failed to build HTTP client")?;
-
-    let response = client
+    let response = state.http_client
         .get(&api_url)
         .send()
         .await
@@ -100,7 +94,7 @@ pub async fn import_fourchan_thread(state: &AppState, url: &str) -> Result<Strin
                 .clone()
                 .unwrap_or_else(|| format!("{}", tim));
             if let Err(e) =
-                download_and_save_image(&file_service, &state, &board, tim, ext, &filename, &created_op.id, &client).await
+                download_and_save_image(&file_service, &state, &board, tim, ext, &filename, &created_op.id).await
             {
                 tracing::warn!("Failed to upload OP image: {}", e);
             }
@@ -141,7 +135,7 @@ pub async fn import_fourchan_thread(state: &AppState, url: &str) -> Result<Strin
         if let (Some(tim), Some(ext)) = (post.tim, post.ext.as_ref()) {
             let filename = post.filename.clone().unwrap_or_else(|| format!("{}", tim));
             if let Err(e) =
-                download_and_save_image(&file_service, &state, &board, tim, ext, &filename, &created.id, &client).await
+                download_and_save_image(&file_service, &state, &board, tim, ext, &filename, &created.id).await
             {
                 tracing::warn!("Failed to upload image for post {}: {}", post.no, e);
             }
@@ -159,7 +153,6 @@ async fn download_and_save_image(
     ext: &str,
     filename: &str,
     post_id: &str,
-    client: &Client,
 ) -> Result<()> {
     // 4chan image URL format: https://i.4cdn.org/{board}/{tim}{ext}
     let image_url = format!("https://i.4cdn.org/{}/{}{}", board, tim, ext);
@@ -167,15 +160,24 @@ async fn download_and_save_image(
     tracing::info!("Downloading image: {}", image_url);
     
     // Add delay to avoid hitting 4chan's rate limit (429 errors)
-    sleep(Duration::from_millis(1200)).await;
+    // Increased to 1500ms to be safer
+    sleep(Duration::from_millis(1500)).await;
 
-    let response = client
+    let response = state.http_client
         .get(&image_url)
         .send()
         .await
         .context("failed to fetch image")?
         .error_for_status()
         .context("image download failed")?;
+
+    if let Some(ct) = response.headers().get(reqwest::header::CONTENT_TYPE) {
+        if let Ok(ct_str) = ct.to_str() {
+            if ct_str.contains("text/html") {
+                anyhow::bail!("received HTML instead of image (likely Cloudflare or 404)");
+            }
+        }
+    }
 
     let bytes = response.bytes().await.context("failed to read image bytes")?;
 

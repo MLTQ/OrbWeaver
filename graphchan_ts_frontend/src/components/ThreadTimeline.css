@@ -1,0 +1,136 @@
+.timeline-container {
+    display: flex;
+    flex-direction: column;
+    height: 600px;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--border-dim);
+    position: relative;
+    overflow: hidden;
+}
+
+.timeline-controls {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem;
+    background: rgba(0, 0, 0, 0.5);
+    border-bottom: 1px solid var(--border-dim);
+    z-index: 10;
+}
+
+.zoom-btn {
+    background: transparent;
+    border: 1px solid var(--primary);
+    color: var(--primary);
+    padding: 0.5rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+.zoom-btn:hover {
+    background: var(--primary);
+    color: #000;
+}
+
+.zoom-level {
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text-dim);
+    min-width: 3rem;
+    text-align: center;
+}
+
+.timeline-scroll-area {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    position: relative;
+    padding: 2rem;
+}
+
+.timeline-track {
+    position: relative;
+    width: 100%;
+    min-height: 100%;
+}
+
+.timeline-line {
+    position: absolute;
+    left: 20px;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--border-dim);
+}
+
+.timeline-node {
+    position: absolute;
+    left: 0;
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    width: 100%;
+    cursor: pointer;
+    transition: opacity 0.2s ease;
+}
+
+.timeline-node:hover {
+    z-index: 5;
+}
+
+.timeline-node:hover .node-dot {
+    background: var(--accent);
+    box-shadow: 0 0 10px var(--accent);
+}
+
+.timeline-node:hover .node-content {
+    border-color: var(--accent);
+    background: rgba(0, 0, 0, 0.9);
+}
+
+.node-dot {
+    width: 12px;
+    height: 12px;
+    background: var(--primary);
+    border-radius: 50%;
+    margin-left: 15px;
+    /* Center on the 2px line at left: 20px */
+    margin-top: 4px;
+    flex-shrink: 0;
+    transition: all 0.2s ease;
+}
+
+.node-content {
+    background: rgba(0, 0, 0, 0.6);
+    border: 1px solid var(--border-dim);
+    padding: 0.5rem;
+    border-radius: 4px;
+    max-width: 80%;
+    backdrop-filter: blur(4px);
+}
+
+.node-time {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    margin-bottom: 0.25rem;
+}
+
+.node-preview {
+    display: flex;
+    gap: 0.5rem;
+    font-size: 0.9rem;
+}
+
+.node-id {
+    color: var(--accent);
+    font-weight: bold;
+}
+
+.node-text {
+    color: var(--text-bright);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
