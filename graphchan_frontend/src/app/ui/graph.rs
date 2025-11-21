@@ -42,6 +42,7 @@ pub(crate) fn build_initial_graph(posts: &[PostView]) -> HashMap<String, GraphNo
                 vel: egui::vec2(0.0, 0.0),
                 size: egui::vec2(320.0, 100.0), // Smaller default height
                 dragging: false,
+                pinned: Some(&p.id) == op_id.as_ref(),
             },
         );
     }
@@ -113,12 +114,12 @@ fn step_graph_layout(nodes: &mut HashMap<String, GraphNode>, posts: &[PostView],
             };
             
             if let Some(node) = nodes.get_mut(&ids[i]) {
-                if ids[i] != thread_id {
+                if !node.pinned {
                     node.vel -= dir * force;
                 }
             }
             if let Some(node) = nodes.get_mut(&ids[j]) {
-                if ids[j] != thread_id {
+                if !node.pinned {
                     node.vel += dir * force;
                 }
             }
@@ -138,22 +139,25 @@ fn step_graph_layout(nodes: &mut HashMap<String, GraphNode>, posts: &[PostView],
         // Spring attraction
         let force = attraction * (dist - desired);
         
-        if a != thread_id {
+        if a != thread_id { // Keep thread_id check for edges? No, use pinned.
             if let Some(node) = nodes.get_mut(&a) {
-                node.vel += dir * force;
+                if !node.pinned {
+                    node.vel += dir * force;
+                }
             }
         }
         if b != thread_id {
             if let Some(node) = nodes.get_mut(&b) {
-                node.vel -= dir * force;
+                if !node.pinned {
+                    node.vel -= dir * force;
+                }
             }
         }
     }
 
     // 2. Update Positions
-    for (id, node) in nodes.iter_mut() {
-        if id == thread_id {
-            node.pos = egui::pos2(0.0, 0.0);
+    for (_id, node) in nodes.iter_mut() {
+        if node.pinned {
             node.vel = egui::vec2(0.0, 0.0);
             continue;
         }
@@ -421,6 +425,35 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
                                     }
                                 });
                             }
+
+                            // Pin Button
+                            ui.add_space(2.0 * state.graph_zoom);
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                                let is_pinned = state.graph_nodes.get(&layout.post.id).map(|n| n.pinned).unwrap_or(false);
+                                let text = if is_pinned { "📌" } else { "📍" };
+                                let btn = egui::Button::new(egui::RichText::new(text).size(14.0 * state.graph_zoom))
+                                    .frame(false);
+                                let resp = ui.add(btn.sense(egui::Sense::click_and_drag()));
+                                
+                                if resp.clicked() {
+                                    if let Some(node) = state.graph_nodes.get_mut(&layout.post.id) {
+                                        node.pinned = !node.pinned;
+                                    }
+                                }
+                                
+                                if resp.drag_started() {
+                                    if let Some(node) = state.graph_nodes.get_mut(&layout.post.id) {
+                                        node.dragging = true;
+                                    }
+                                    state.graph_dragging = true;
+                                }
+                                if resp.drag_stopped() {
+                                    if let Some(node) = state.graph_nodes.get_mut(&layout.post.id) {
+                                        node.dragging = false;
+                                    }
+                                    state.graph_dragging = false;
+                                }
+                            });
                         });
                     });
             })

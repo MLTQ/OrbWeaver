@@ -64,6 +64,7 @@ pub struct GraphNode {
     pub vel: egui::Vec2,
     pub size: egui::Vec2,
     pub dragging: bool,
+    pub pinned: bool,
 }
 
 #[derive(Clone)]

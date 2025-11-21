@@ -82,6 +82,7 @@ pub fn build_chronological_layout(posts: &[PostView], bin_seconds: i64) -> HashM
                     vel: egui::vec2(0.0, 0.0),
                     size: egui::vec2(CARD_WIDTH, 250.0),
                     dragging: false,
+                    pinned: false,
                 },
             );
         }
@@ -292,6 +293,7 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
                         vel: egui::vec2(0.0, 0.0),
                         size: egui::vec2(CARD_WIDTH, unzoomed_height),
                         dragging: false,
+                        pinned: false,
                     },
                 );
 

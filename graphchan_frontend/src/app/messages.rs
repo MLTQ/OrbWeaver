@@ -164,6 +164,7 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                                         vel: egui::vec2(0.0, 0.0),
                                         size: egui::vec2(220.0, 140.0),
                                         dragging: false,
+                                        pinned: false,
                                     },
                                 );
                                 attachment_target = Some(post.id.clone());
