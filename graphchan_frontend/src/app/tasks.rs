@@ -44,12 +44,34 @@ pub fn create_post(
     tx: Sender<AppMessage>,
     thread_id: String,
     payload: CreatePostInput,
+    attachments: Vec<std::path::PathBuf>,
 ) {
     thread::spawn(move || {
+        // 1. Create Post
         let result = client.create_post(&thread_id, &payload);
-        let message = AppMessage::PostCreated { thread_id, result };
-        if tx.send(message).is_err() {
-            error!("failed to send PostCreated message");
+        match result {
+            Ok(post) => {
+                let post_id = post.id.clone();
+                // 2. Upload Attachments
+                for path in attachments {
+                    if let Err(e) = client.upload_file(&post_id, &path) {
+                        error!("Failed to upload attachment {:?}: {}", path, e);
+                        // We continue trying to upload others even if one fails
+                    }
+                }
+                
+                // 3. Send Success Message
+                let message = AppMessage::PostCreated { thread_id, result: Ok(post) };
+                if tx.send(message).is_err() {
+                    error!("failed to send PostCreated message");
+                }
+            }
+            Err(e) => {
+                let message = AppMessage::PostCreated { thread_id, result: Err(e) };
+                if tx.send(message).is_err() {
+                    error!("failed to send PostCreated message");
+                }
+            }
         }
     });
 }

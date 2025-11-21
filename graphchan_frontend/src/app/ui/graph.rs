@@ -222,6 +222,8 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
             step_graph_layout(&mut state.graph_nodes, &posts, scale, &thread_id, state.repulsion_force);
         }
         ui.ctx().request_repaint(); // Keep animating
+    } else if state.graph_dragging {
+        ui.ctx().request_repaint(); // Keep animating during drag
     }
 
     let available = ui.available_size();
@@ -337,7 +339,7 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
         let hovered = rect_node.contains(response.hover_pos().unwrap_or_default());
 
         if state.graph_dragging {
-            if let Some(pos) = response.hover_pos() {
+            if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
                 if let Some(node) = state.graph_nodes.get_mut(&layout.post.id) {
                     if node.dragging {
                         let world_pos = screen_to_world(pos);
@@ -544,7 +546,9 @@ fn render_node_actions(ui: &mut egui::Ui, state: &mut ThreadState, post: &PostVi
     ui.horizontal(|ui| {
         let btn_text_size = 12.0 * zoom;
         if ui.add(egui::Button::new(egui::RichText::new("↩ Reply").size(btn_text_size))).clicked() {
-            state.reply_to = vec![post.id.clone()];
+            if !state.reply_to.contains(&post.id) {
+                state.reply_to.push(post.id.clone());
+            }
         }
         if ui.add(egui::Button::new(egui::RichText::new("📋 Quote").size(btn_text_size))).clicked() {
             state.new_post_body.push_str(&format!(">>{}\n", post.id));

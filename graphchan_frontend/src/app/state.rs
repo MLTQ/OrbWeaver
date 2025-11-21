@@ -50,6 +50,7 @@ pub struct ThreadState {
     pub locked_hover_post: Option<String>, // "Locked" hover for tracing conversations
     pub repulsion_force: f32,
     pub sim_paused: bool,
+    pub draft_attachments: Vec<std::path::PathBuf>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

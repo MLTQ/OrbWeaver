@@ -141,9 +141,10 @@ impl GraphchanApp {
         payload.thread_id = thread_id.clone();
         payload.body = body;
         payload.parent_post_ids = thread_state.reply_to.clone();
+        let attachments = thread_state.draft_attachments.clone();
         thread_state.new_post_sending = true;
         thread_state.new_post_error = None;
-        tasks::create_post(self.api.clone(), self.tx.clone(), thread_id, payload);
+        tasks::create_post(self.api.clone(), self.tx.clone(), thread_id, payload, attachments);
     }
 
     fn spawn_import_fourchan(&mut self) {
@@ -330,6 +331,7 @@ impl eframe::App for GraphchanApp {
                         locked_hover_post: None,
                         repulsion_force: 500.0,
                         sim_paused: false,
+                        draft_attachments: Vec::new(),
                     },
                 )
             } else {

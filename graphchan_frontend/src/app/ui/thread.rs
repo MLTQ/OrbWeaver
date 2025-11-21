@@ -36,6 +36,7 @@ impl GraphchanApp {
             locked_hover_post: None,
             repulsion_force: 500.0,
             sim_paused: false,
+            draft_attachments: Vec::new(),
         });
         self.spawn_load_thread(&thread_id);
     }
@@ -104,10 +105,7 @@ impl GraphchanApp {
                 }
             }
             graph::render_graph(self, ui, state);
-            return go_back;
-        }
-
-        if state.display_mode == ThreadDisplayMode::Chronological {
+        } else if state.display_mode == ThreadDisplayMode::Chronological {
             if state.graph_nodes.is_empty() {
                 if let Some(details) = &state.details {
                     state.graph_nodes = chronological::build_chronological_layout(&details.posts, state.time_bin_seconds);
@@ -116,10 +114,8 @@ impl GraphchanApp {
                 }
             }
             chronological::render_chronological(self, ui, state);
-            return go_back;
-        }
-
-        if let Some(details) = &state.details {
+        } else if state.display_mode == ThreadDisplayMode::List {
+            if let Some(details) = &state.details {
             let posts_clone = details.posts.clone();
             let thread_id = state.summary.id.clone();
             let attachments = &state.attachments;
@@ -184,50 +180,110 @@ impl GraphchanApp {
                     }
                 });
         }
+    }
 
         ui.separator();
-        ui.collapsing("Reply", |ui| {
-            if let Some(err) = &state.new_post_error {
-                ui.colored_label(Color32::LIGHT_RED, err);
-            }
-            if !state.reply_to.is_empty() {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!(
-                        "Replying to {}",
-                        state
-                            .reply_to
-                            .iter()
-                            .map(|id| format!("#{id}"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )));
-                    if ui.button("Clear").clicked() {
-                        state.reply_to.clear();
-                    }
-                });
-            }
-            ui.add(
-                egui::TextEdit::multiline(&mut state.new_post_body)
-                    .desired_rows(4)
-                    .hint_text("Write a reply..."),
-            );
-            ui.horizontal(|ui| {
-                if state.new_post_sending {
-                    ui.add(egui::Spinner::new());
-                } else if ui.button("Post").clicked() {
-                    should_create_post = true;
-                }
-                if ui.button("Cancel").clicked() {
-                    state.new_post_body.clear();
-                    state.new_post_error = None;
-                }
-            });
-        });
+        ui.separator();
+        
+        // Floating composer is handled separately
+        if self.render_floating_composer(ui.ctx(), state) {
+            should_create_post = true;
+        }
 
         if should_create_post {
             self.spawn_create_post(state);
         }
 
         go_back
+    }
+
+    fn render_floating_composer(&mut self, ctx: &egui::Context, state: &mut ThreadState) -> bool {
+        let mut should_create = false;
+        
+        egui::Window::new("Draft Post")
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-10.0, -10.0))
+            .default_width(300.0)
+            .collapsible(true)
+            .resizable(true)
+            .show(ctx, |ui| {
+                if let Some(err) = &state.new_post_error {
+                    ui.colored_label(Color32::LIGHT_RED, err);
+                }
+                
+                // Reply targets
+                if !state.reply_to.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Replying to:");
+                        let mut to_remove = None;
+                        for (idx, id) in state.reply_to.iter().enumerate() {
+                            if ui.button(format!("❌ #{}", id)).clicked() {
+                                to_remove = Some(idx);
+                            }
+                        }
+                        if let Some(idx) = to_remove {
+                            state.reply_to.remove(idx);
+                        }
+                        if ui.button("Clear All").clicked() {
+                            state.reply_to.clear();
+                        }
+                    });
+                    ui.separator();
+                }
+
+                // Body
+                ui.add(
+                    egui::TextEdit::multiline(&mut state.new_post_body)
+                        .desired_rows(4)
+                        .hint_text("Write a reply..."),
+                );
+                
+                ui.separator();
+                
+                // Attachments
+                ui.label("Attachments:");
+                if !state.draft_attachments.is_empty() {
+                    let mut to_remove = None;
+                    for (idx, path) in state.draft_attachments.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            let name = path.file_name().map(|s| s.to_string_lossy()).unwrap_or_default();
+                            ui.label(name);
+                            if ui.button("❌").clicked() {
+                                to_remove = Some(idx);
+                            }
+                        });
+                    }
+                    if let Some(idx) = to_remove {
+                        state.draft_attachments.remove(idx);
+                    }
+                }
+                
+                if ui.button("📎 Add Attachment").clicked() {
+                    if let Some(path) = rfd::FileDialog::new().pick_file() {
+                        state.draft_attachments.push(path);
+                    }
+                }
+
+                ui.separator();
+
+                // Actions
+                ui.horizontal(|ui| {
+                    if state.new_post_sending {
+                        ui.add(egui::Spinner::new());
+                        ui.label("Sending...");
+                    } else {
+                        if ui.button("Post").clicked() {
+                            should_create = true;
+                        }
+                    }
+                    if ui.button("Clear Draft").clicked() {
+                        state.new_post_body.clear();
+                        state.new_post_error = None;
+                        state.reply_to.clear();
+                        state.draft_attachments.clear();
+                    }
+                });
+            });
+            
+        should_create
     }
 }

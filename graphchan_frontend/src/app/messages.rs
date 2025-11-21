@@ -79,6 +79,7 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                                 state.reply_to.clear();
                                 state.repulsion_force = 500.0;
                                 state.sim_paused = false;
+                                state.draft_attachments.clear();
                             }
                             Err(err) => {
                                 state.error = Some(err.to_string());
@@ -123,6 +124,7 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                             locked_hover_post: None,
                             repulsion_force: 500.0,
                             sim_paused: false,
+                            draft_attachments: Vec::new(),
                         };
                         for post in &details.posts {
                             state

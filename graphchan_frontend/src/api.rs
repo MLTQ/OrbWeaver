@@ -95,6 +95,19 @@ impl ApiClient {
         Ok(response.json()?)
     }
 
+    pub fn upload_file(&self, post_id: &str, path: &std::path::Path) -> Result<FileResponse> {
+        let url = self.url(&format!("/posts/{post_id}/files"))?;
+        let form = reqwest::blocking::multipart::Form::new()
+            .file("file", path)?;
+            
+        let response = self.client.post(url)
+            .multipart(form)
+            .send()?
+            .error_for_status()?;
+            
+        Ok(response.json()?)
+    }
+
     pub fn download_url(&self, file_id: &str) -> String {
         format!("{}/files/{}", self.base_url, file_id)
     }
