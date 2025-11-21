@@ -319,6 +319,8 @@ impl eframe::App for GraphchanApp {
                         display_mode: ThreadDisplayMode::List,
                         last_layout_mode: None,
                         graph_nodes: HashMap::new(),
+                        chronological_nodes: HashMap::new(),
+                        sim_start_time: None,
                         selected_post: None,
                         graph_zoom: 1.0,
                         graph_offset: egui::vec2(0.0, 0.0),

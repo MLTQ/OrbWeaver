@@ -161,8 +161,8 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
     };
 
     // Build layout if not already done or if we just switched to this mode
-    if state.graph_nodes.is_empty() {
-        state.graph_nodes = build_chronological_layout(&posts, state.time_bin_seconds);
+    if state.chronological_nodes.is_empty() || state.chronological_nodes.len() != posts.len() {
+        state.chronological_nodes = build_chronological_layout(&posts, state.time_bin_seconds);
     }
 
     // Calculate layout rects
@@ -350,7 +350,7 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
         ui.horizontal(|ui| {
             ui.label(format!(
                 "Chronological View | Nodes: {}",
-                state.graph_nodes.len()
+                state.chronological_nodes.len()
             ));
             
             ui.separator();
@@ -379,7 +379,7 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
             
             if rebuild_layout {
                 let posts = state.details.as_ref().map(|d| d.posts.clone()).unwrap_or_default();
-                state.graph_nodes = build_chronological_layout(&posts, state.time_bin_seconds);
+                state.chronological_nodes = build_chronological_layout(&posts, state.time_bin_seconds);
             }
             
             ui.separator();

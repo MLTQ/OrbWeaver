@@ -66,6 +66,8 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                                 post_ids = details.posts.iter().map(|p| p.id.clone()).collect();
                                 state.summary = details.thread.clone();
                                 state.graph_nodes = build_initial_graph(&details.posts);
+                                state.chronological_nodes = HashMap::new();
+                                state.sim_start_time = None;
                                 state.details = Some(details);
                                 state.graph_zoom = 1.0;
                                 state.graph_offset = egui::vec2(0.0, 0.0);
@@ -108,6 +110,8 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                             display_mode: ThreadDisplayMode::List,
                             last_layout_mode: None,
                             graph_nodes: build_initial_graph(&details.posts),
+                            chronological_nodes: HashMap::new(),
+                            sim_start_time: None,
                             selected_post: None,
                             graph_zoom: 1.0,
                             graph_offset: egui::vec2(0.0, 0.0),

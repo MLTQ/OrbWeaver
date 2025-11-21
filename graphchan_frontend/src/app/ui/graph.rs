@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::OnceLock;
+
 use std::time::Instant;
 
 use eframe::egui::{self, Color32, FontId, Margin, Pos2, RichText};
@@ -12,7 +12,7 @@ use crate::models::{FileResponse, PostView};
 use super::super::state::{GraphNode, ThreadState};
 use super::super::{format_timestamp, GraphchanApp};
 
-static START_TIME: OnceLock<Instant> = OnceLock::new();
+
 
 struct NodeLayoutData {
     post: PostView,
@@ -23,15 +23,24 @@ struct NodeLayoutData {
 pub(crate) fn build_initial_graph(posts: &[PostView]) -> HashMap<String, GraphNode> {
     let mut rng = StdRng::seed_from_u64(42);
     let mut nodes = HashMap::new();
+    
+    // Find OP (earliest post)
+    let op_id = posts.iter().min_by_key(|p| &p.created_at).map(|p| p.id.clone());
+
     for p in posts {
-        let x = rng.gen::<f32>() * 0.8 + 0.1;
-        let y = rng.gen::<f32>() * 0.8 + 0.1;
+        let (x, y) = if Some(&p.id) == op_id.as_ref() {
+            (0.0, 0.0)
+        } else {
+            // Spawn others around center
+            ((rng.gen::<f32>() - 0.5) * 10.0, (rng.gen::<f32>() - 0.5) * 10.0)
+        };
+
         nodes.insert(
             p.id.clone(),
             GraphNode {
                 pos: egui::pos2(x, y),
                 vel: egui::vec2(0.0, 0.0),
-                size: egui::vec2(220.0, 140.0),
+                size: egui::vec2(320.0, 100.0), // Smaller default height
                 dragging: false,
             },
         );
@@ -39,11 +48,190 @@ pub(crate) fn build_initial_graph(posts: &[PostView]) -> HashMap<String, GraphNo
     nodes
 }
 
+// ... (existing code) ...
+
+fn estimate_node_height(ui: &egui::Ui, post: &PostView, has_preview: bool) -> f32 {
+    let text_width = 320.0 - 20.0;
+    let text_height = ui.fonts(|fonts| {
+        let body = post.body.clone();
+        let galley = fonts.layout(body, FontId::proportional(13.0), Color32::WHITE, text_width);
+        galley.size().y
+    });
+
+    let mut height = 40.0 + text_height; // header + body (reduced base)
+    if !post.parent_post_ids.is_empty() {
+        height += 20.0;
+    }
+    // Add space for replies
+    height += 20.0; 
+    
+    if has_preview {
+        height += 120.0; // Image height
+    }
+    
+    height += 40.0; // Actions + padding. Reduced from 100.0 to match visual size better.
+    height
+}
+
+fn step_graph_layout(nodes: &mut HashMap<String, GraphNode>, posts: &[PostView], scale: f32, thread_id: &str) {
+    let repulsion = 0.5; // Reduced from 1.0
+    let attraction = 0.015; // Increased from 0.002 to keep things tighter
+    let damping = 0.80; // Increased damping for stability
+    let desired = 1.5; // Reduced desired distance
+    
+    let mut edges = Vec::new();
+    for post in posts {
+        for parent in &post.parent_post_ids {
+            if nodes.contains_key(parent) {
+                edges.push((parent.clone(), post.id.clone()));
+            }
+        }
+    }
+
+    let ids: Vec<String> = nodes.keys().cloned().collect();
+    
+    // 1. Apply Forces
+    for i in 0..ids.len() {
+        // Skip OP forces
+        if ids[i] == thread_id { continue; }
+        
+        for j in (i + 1)..ids.len() {
+            let (ai, aj) = {
+                let a = nodes.get(&ids[i]).unwrap();
+                let b = nodes.get(&ids[j]).unwrap();
+                (a.pos, b.pos)
+            };
+            let delta = aj - ai;
+            let dist_sq = delta.length_sq().max(0.0001);
+            
+            // Soft repulsion
+            let force = repulsion / dist_sq;
+            let dir = if dist_sq > 0.0 {
+                delta / dist_sq.sqrt()
+            } else {
+                egui::vec2(1.0, 0.0)
+            };
+            
+            if let Some(node) = nodes.get_mut(&ids[i]) {
+                if ids[i] != thread_id {
+                    node.vel -= dir * force;
+                }
+            }
+            if let Some(node) = nodes.get_mut(&ids[j]) {
+                if ids[j] != thread_id {
+                    node.vel += dir * force;
+                }
+            }
+        }
+    }
+
+    for (a, b) in edges {
+        let (pa, pb) = {
+            let na = nodes.get(&a).unwrap();
+            let nb = nodes.get(&b).unwrap();
+            (na.pos, nb.pos)
+        };
+        let delta = pb - pa;
+        let dist = delta.length().max(0.0001);
+        let dir = delta / dist;
+        
+        // Spring attraction
+        let force = attraction * (dist - desired);
+        
+        if a != thread_id {
+            if let Some(node) = nodes.get_mut(&a) {
+                node.vel += dir * force;
+            }
+        }
+        if b != thread_id {
+            if let Some(node) = nodes.get_mut(&b) {
+                node.vel -= dir * force;
+            }
+        }
+    }
+
+    // 2. Update Positions
+    for (id, node) in nodes.iter_mut() {
+        if id == thread_id {
+            node.pos = egui::pos2(0.0, 0.0);
+            node.vel = egui::vec2(0.0, 0.0);
+            continue;
+        }
+        
+        node.vel *= damping;
+        // Limit velocity to prevent explosions
+        if node.vel.length() > 1.0 {
+            node.vel = node.vel.normalized() * 1.0;
+        }
+        node.pos += node.vel;
+    }
+
+    // 3. Resolve Collisions (AABB)
+    // Run a few iterations to stabilize
+    for _ in 0..2 {
+        for i in 0..ids.len() {
+            for j in (i + 1)..ids.len() {
+                let (p1, s1, p2, s2) = {
+                    let n1 = nodes.get(&ids[i]).unwrap();
+                    let n2 = nodes.get(&ids[j]).unwrap();
+                    (n1.pos, n1.size / scale, n2.pos, n2.size / scale)
+                };
+                
+                // AABB Collision
+                // p1, p2 are centers
+                let half_s1 = s1 / 2.0;
+                let half_s2 = s2 / 2.0;
+                
+                let l1 = p1.x - half_s1.x;
+                let r1 = p1.x + half_s1.x;
+                let t1 = p1.y - half_s1.y;
+                let b1 = p1.y + half_s1.y;
+                
+                let l2 = p2.x - half_s2.x;
+                let r2 = p2.x + half_s2.x;
+                let t2 = p2.y - half_s2.y;
+                let b2 = p2.y + half_s2.y;
+                
+                // Check overlap
+                let overlap_x = (r1.min(r2) - l1.max(l2)).max(0.0);
+                let overlap_y = (b1.min(b2) - t1.max(t2)).max(0.0);
+                
+                if overlap_x > 0.0 && overlap_y > 0.0 {
+                    // Resolve along axis of least penetration
+                    let move_vec = if overlap_x < overlap_y {
+                        // Push horizontally
+                        let sign = if p1.x < p2.x { -1.0 } else { 1.0 };
+                        egui::vec2(overlap_x * sign * 0.55, 0.0) // 0.55 to ensure separation
+                    } else {
+                        // Push vertically
+                        let sign = if p1.y < p2.y { -1.0 } else { 1.0 };
+                        egui::vec2(0.0, overlap_y * sign * 0.55)
+                    };
+                    
+                    if ids[i] != thread_id {
+                        if let Some(n1) = nodes.get_mut(&ids[i]) {
+                            n1.pos += move_vec;
+                            n1.vel *= 0.5;
+                        }
+                    }
+                    if ids[j] != thread_id {
+                        if let Some(n2) = nodes.get_mut(&ids[j]) {
+                            n2.pos -= move_vec;
+                            n2.vel *= 0.5;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut ThreadState) {
     let posts = match &state.details {
         Some(d) => d.posts.clone(),
         None => return,
     };
+    let thread_id = state.summary.id.clone();
 
     for post in &posts {
         debug!(
@@ -54,103 +242,140 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
         );
     }
 
-    let sim_active = START_TIME.get_or_init(Instant::now).elapsed().as_secs_f32() < 1.0;
+    // Initialize graph if empty
+    if state.graph_nodes.is_empty() || state.graph_nodes.len() != posts.len() {
+        state.graph_nodes = build_initial_graph(&posts);
+        state.sim_start_time = Some(Instant::now());
+    }
+
+    // Update node sizes first so physics knows about them
+    for post in &posts {
+        if let Some(node) = state.graph_nodes.get_mut(&post.id) {
+            let attachments = state.attachments.get(&post.id).cloned();
+            let has_preview = attachments
+                .as_ref()
+                .map(|files| files.iter().any(is_image))
+                .unwrap_or(false);
+            let height = estimate_node_height(ui, post, has_preview);
+            node.size = egui::vec2(320.0, height);
+        }
+    }
+
+    let scale = 100.0; // 1 unit = 100 pixels
+
+    // Run simulation for a bit longer initially, or continuously if needed
+    let sim_active = state.sim_start_time
+        .get_or_insert_with(Instant::now)
+        .elapsed()
+        .as_secs_f32() < 5.0;
 
     if sim_active && !state.graph_dragging {
-        for _ in 0..2 {
-            step_graph_layout(&mut state.graph_nodes, &posts);
+        for _ in 0..10 { // Run more steps per frame for smoother/faster expansion
+            step_graph_layout(&mut state.graph_nodes, &posts, scale, &thread_id);
         }
+        ui.ctx().request_repaint(); // Keep animating
     }
 
     let available = ui.available_size();
     let (rect, response) = ui.allocate_at_least(available, egui::Sense::click_and_drag());
     let canvas = ui.painter().with_clip_rect(rect);
     canvas.rect_filled(rect, 0.0, Color32::from_rgb(12, 13, 20));
-    let dot_spacing = 28.0;
-    let dot_color = Color32::from_rgba_premultiplied(70, 72, 95, 90);
-    let mut x = rect.left();
-    while x < rect.right() {
-        let mut y = rect.top();
-        while y < rect.bottom() {
-            canvas.circle_filled(egui::pos2(x, y), 1.0, dot_color);
-            y += dot_spacing;
+    
+    // Grid pattern
+    let grid_size = 50.0 * state.graph_zoom;
+    let grid_color = Color32::from_rgba_premultiplied(70, 72, 95, 40);
+    // Calculate grid offset based on camera
+    let center = rect.center();
+    let offset = state.graph_offset;
+    let zoom = state.graph_zoom * scale; 
+    
+    // Draw grid
+    if grid_size > 5.0 {
+        let mut x = (center.x + offset.x) % grid_size;
+        if x < rect.left() { x += grid_size; }
+        while x < rect.right() {
+            canvas.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(1.0, grid_color));
+            x += grid_size;
         }
-        x += dot_spacing;
+        let mut y = (center.y + offset.y) % grid_size;
+        if y < rect.top() { y += grid_size; }
+        while y < rect.bottom() {
+            canvas.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], egui::Stroke::new(1.0, grid_color));
+            y += grid_size;
+        }
     }
 
     let edge_painter = ui.painter().with_clip_rect(rect);
 
+    // Handle Zoom
     if let Some(pointer_pos) = ui.ctx().pointer_hover_pos() {
         if rect.contains(pointer_pos) {
             let scroll = ui.input(|i| i.raw_scroll_delta.y);
             if scroll != 0.0 {
                 let old_zoom = state.graph_zoom;
                 let zoom_factor = (1.0 + scroll * 0.001).clamp(0.5, 3.5);
-                let target_zoom = (old_zoom * zoom_factor).clamp(0.2, 4.0);
-
-                let rect_size = rect.size();
-                let anchor = pointer_pos;
-                let world_x = ((anchor.x - rect.left() - state.graph_offset.x)
-                    / (rect_size.x * old_zoom))
-                    .clamp(0.0, 1.0);
-                let world_y = ((anchor.y - rect.top() - state.graph_offset.y)
-                    / (rect_size.y * old_zoom))
-                    .clamp(0.0, 1.0);
-
-                state.graph_zoom = target_zoom;
-                state.graph_offset.x =
-                    anchor.x - rect.left() - world_x * rect_size.x * state.graph_zoom;
-                state.graph_offset.y =
-                    anchor.y - rect.top() - world_y * rect_size.y * state.graph_zoom;
+                state.graph_zoom = (old_zoom * zoom_factor).clamp(0.1, 5.0);
+                
+                // Zoom towards mouse
+                let pointer_rel = pointer_pos - center - state.graph_offset;
+                let zoom_ratio = state.graph_zoom / old_zoom;
+                state.graph_offset += pointer_rel - pointer_rel * zoom_ratio;
             }
         }
     }
 
-    if response.dragged_by(egui::PointerButton::Secondary) {
+    if response.dragged_by(egui::PointerButton::Secondary) || response.dragged_by(egui::PointerButton::Middle) {
         state.graph_offset += response.drag_delta();
     }
 
-    let rect_left = rect.left();
-    let rect_top = rect.top();
-    let rect_width = rect.width();
-    let rect_height = rect.height();
-    let offset = state.graph_offset;
-    let zoom = state.graph_zoom;
-    let world_to_screen = |p: egui::Pos2| {
-        egui::pos2(
-            rect_left + offset.x + p.x * rect_width * zoom,
-            rect_top + offset.y + p.y * rect_height * zoom,
-        )
+    let world_to_screen = move |p: egui::Pos2| {
+        center + offset + egui::vec2(p.x * zoom, p.y * zoom)
     };
+    
+    let screen_to_world = move |p: egui::Pos2| {
+        let rel = p - center - offset;
+        egui::pos2(rel.x / zoom, rel.y / zoom)
+    };
+
+    // Compute replies map
+    let mut replies_map: HashMap<String, Vec<String>> = HashMap::new();
+    for post in &posts {
+        for parent in &post.parent_post_ids {
+            replies_map.entry(parent.clone()).or_default().push(post.id.clone());
+        }
+    }
+
+    // Draw edges first (behind nodes)
+    draw_edges(&edge_painter, &posts, state, &world_to_screen, state.graph_zoom, scale);
 
     let mut layouts = Vec::new();
     for post in posts.iter() {
         if let Some(node) = state.graph_nodes.get_mut(&post.id) {
             let attachments = state.attachments.get(&post.id).cloned();
-            let card_width = 320.0;
-            let has_preview = attachments
-                .as_ref()
-                .map(|files| files.iter().any(is_image))
-                .unwrap_or(false);
-            let card_height = estimate_node_height(ui, post, has_preview);
-            node.size = egui::vec2(card_width, card_height);
-            let top_left = world_to_screen(node.pos);
-            let size = node.size * state.graph_zoom;
+            let center_pos = world_to_screen(node.pos);
+            // Node pos is center, rect is top-left
+            let size = node.size * state.graph_zoom; 
+            
+            let top_left = center_pos - size / 2.0;
             let rect_node = egui::Rect::from_min_size(top_left, size);
-            layouts.push(NodeLayoutData {
-                post: post.clone(),
-                rect: rect_node,
-                attachments,
-            });
+            
+            // Only render if visible
+            if rect.intersects(rect_node) {
+                layouts.push(NodeLayoutData {
+                    post: post.clone(),
+                    rect: rect_node,
+                    attachments,
+                });
+            }
         }
     }
 
-    let rect_lookup: HashMap<String, egui::Rect> = layouts
-        .iter()
-        .map(|layout| (layout.post.id.clone(), layout.rect))
-        .collect();
+    // let rect_lookup: HashMap<String, egui::Rect> = layouts
+    //     .iter()
+    //     .map(|layout| (layout.post.id.clone(), layout.rect))
+    //     .collect();
 
-    draw_edges(&edge_painter, &layouts, &rect_lookup, state);
+    // draw_edges(&edge_painter, &layouts, &rect_lookup, state);
 
     let api_base = app.api.base_url().to_string();
 
@@ -164,13 +389,8 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
             if let Some(pos) = response.hover_pos() {
                 if let Some(node) = state.graph_nodes.get_mut(&layout.post.id) {
                     if node.dragging {
-                        let wx = ((pos.x - rect.left() - state.graph_offset.x)
-                            / (rect.width() * state.graph_zoom))
-                            .clamp(0.0, 1.0);
-                        let wy = ((pos.y - rect.top() - state.graph_offset.y)
-                            / (rect.height() * state.graph_zoom))
-                            .clamp(0.0, 1.0);
-                        node.pos = egui::pos2(wx, wy);
+                        let world_pos = screen_to_world(pos);
+                        node.pos = world_pos;
                     }
                 }
             }
@@ -198,33 +418,33 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
 
         let card_response = ui
             .allocate_ui_at_rect(rect_node, |ui| {
-                ui.set_clip_rect(rect_node);
+                // ui.set_clip_rect(rect_node); // REMOVED CLIPPING
                 egui::Frame::none()
                     .fill(fill_color)
-                    .stroke(egui::Stroke::new(1.5, stroke_color))
-                    .rounding(egui::Rounding::same(10.0))
-                    .inner_margin(Margin::same(10.0))
+                    .stroke(egui::Stroke::new(1.5 * state.graph_zoom, stroke_color))
+                    .rounding(egui::Rounding::same(10.0 * state.graph_zoom))
+                    .inner_margin(Margin::same(10.0 * state.graph_zoom))
                     .show(ui, |ui| {
                         ui.vertical(|ui| {
-                            render_node_header(ui, state, &layout.post);
+                            render_node_header(ui, state, &layout.post, state.graph_zoom);
 
                             if !layout.post.parent_post_ids.is_empty() {
-                                ui.add_space(4.0);
+                                ui.add_space(4.0 * state.graph_zoom);
                                 ui.horizontal_wrapped(|ui| {
-                                    ui.label(RichText::new("Replying to:").size(11.0));
+                                    ui.label(RichText::new("Replying to:").size(11.0 * state.graph_zoom));
                                     for parent in &layout.post.parent_post_ids {
-                                        if ui.link(format!("#{parent}")).clicked() {
+                                        if ui.add(egui::Link::new(RichText::new(format!("#{parent}")).size(11.0 * state.graph_zoom))).clicked() {
                                             state.selected_post = Some(parent.clone());
                                         }
                                     }
                                 });
                             }
 
-                            ui.add_space(6.0);
+                            ui.add_space(6.0 * state.graph_zoom);
                             ui.add(
                                 egui::Label::new(
                                     egui::RichText::new(&layout.post.body)
-                                        .size(13.0)
+                                        .size(13.0 * state.graph_zoom)
                                         .color(Color32::from_rgb(220, 220, 230)),
                                 )
                                 .wrap(true),
@@ -235,10 +455,25 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
                                 ui,
                                 layout.attachments.as_ref(),
                                 &api_base,
+                                state.graph_zoom,
                             );
 
-                            ui.add_space(6.0);
-                            render_node_actions(ui, state, &layout.post);
+                            ui.add_space(6.0 * state.graph_zoom);
+                            render_node_actions(ui, state, &layout.post, state.graph_zoom);
+                            
+                            // Render replies
+                            if let Some(replies) = replies_map.get(&layout.post.id) {
+                                ui.add_space(4.0 * state.graph_zoom);
+                                ui.separator();
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(RichText::new("Replies:").size(10.0 * state.graph_zoom).color(Color32::GRAY));
+                                    for reply_id in replies {
+                                        if ui.add(egui::Link::new(RichText::new(format!(">>{reply_id}")).size(10.0 * state.graph_zoom))).clicked() {
+                                            state.selected_post = Some(reply_id.clone());
+                                        }
+                                    }
+                                });
+                            }
                         });
                     });
             })
@@ -260,41 +495,65 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
         }
     }
 
-    ui.separator();
-    ui.label(format!(
-        "Zoom: {:.2} | Nodes: {}",
-        state.graph_zoom,
-        state.graph_nodes.len()
-    ));
+    // Controls overlay
+    let control_rect = egui::Rect::from_min_size(
+        rect.min + egui::vec2(10.0, rect.height() - 40.0),
+        egui::vec2(rect.width() - 20.0, 30.0)
+    );
+    
+    ui.allocate_ui_at_rect(control_rect, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(format!(
+                "Zoom: {:.2} | Nodes: {}",
+                state.graph_zoom,
+                state.graph_nodes.len()
+            ));
+            
+            ui.separator();
+            
+            if ui.button("Reset Layout").clicked() {
+                state.graph_nodes = build_initial_graph(&posts);
+                state.sim_start_time = Some(Instant::now());
+                state.graph_offset = egui::vec2(0.0, 0.0);
+                state.graph_zoom = 1.0;
+            }
+        });
+    });
 }
 
-fn render_node_header(ui: &mut egui::Ui, state: &mut ThreadState, post: &PostView) {
+fn render_node_header(ui: &mut egui::Ui, state: &mut ThreadState, post: &PostView, zoom: f32) {
     ui.horizontal(|ui| {
-        if ui
-            .button(RichText::new(format!("#{}", post.id)).monospace())
-            .clicked()
-        {
-            state.selected_post = Some(post.id.clone());
+        ui.label(
+            egui::RichText::new(format!("#{}", post.id))
+                .color(Color32::from_rgb(150, 160, 180))
+                .size(11.0 * zoom),
+        );
+        if let Some(name) = &post.author_peer_id {
+            ui.label(
+                egui::RichText::new(name)
+                    .color(Color32::from_rgb(100, 200, 100))
+                    .size(11.0 * zoom)
+                    .strong(),
+            );
         }
-        let author = post.author_peer_id.as_deref().unwrap_or("Anonymous");
-        ui.label(RichText::new(author).strong());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
-                RichText::new(format_timestamp(&post.created_at))
-                    .color(Color32::from_rgb(200, 200, 210))
-                    .size(11.0),
+                egui::RichText::new(format_timestamp(&post.created_at))
+                    .color(Color32::from_rgb(100, 100, 120))
+                    .size(10.0 * zoom),
             );
         });
     });
 }
 
-fn render_node_actions(ui: &mut egui::Ui, state: &mut ThreadState, post: &PostView) {
+fn render_node_actions(ui: &mut egui::Ui, state: &mut ThreadState, post: &PostView, zoom: f32) {
     ui.horizontal(|ui| {
-        if ui.button("↩ Reply").clicked() {
-            GraphchanApp::set_reply_target(state, &post.id);
+        let btn_text_size = 12.0 * zoom;
+        if ui.add(egui::Button::new(egui::RichText::new("↩ Reply").size(btn_text_size))).clicked() {
+            state.reply_to = vec![post.id.clone()];
         }
-        if ui.button("❝ Quote").clicked() {
-            GraphchanApp::quote_post(state, &post.id);
+        if ui.add(egui::Button::new(egui::RichText::new("📋 Quote").size(btn_text_size))).clicked() {
+            state.new_post_body.push_str(&format!(">>{}\n", post.id));
         }
     });
 }
@@ -304,34 +563,43 @@ fn render_node_attachments(
     ui: &mut egui::Ui,
     attachments: Option<&Vec<FileResponse>>,
     api_base: &str,
+    zoom: f32,
 ) {
-    let files = match attachments {
-        Some(list) => list,
-        None => return,
-    };
+    if let Some(files) = attachments {
+        for file in files {
+            if is_image(file) {
+                let url = format!("{}{}", api_base, file.path);
+                ui.add_space(4.0 * zoom);
+                
+                // Load texture if needed
+                if !app.image_textures.contains_key(&file.id) && !app.image_loading.contains(&file.id) {
+                    app.spawn_download_image(&file.id, &url);
+                }
 
-    if let Some(file) = files.iter().find(|f| is_image(f)) {
-        match image_preview(app, ui, file, api_base) {
-            ImagePreview::Ready(tex) => {
-                ui.add_space(6.0);
-                ui.add(
-                    egui::Image::from_texture(&tex)
-                        .maintain_aspect_ratio(true)
-                        .max_width(120.0),
+                if let Some(texture) = app.image_textures.get(&file.id) {
+                    let size = texture.size_vec2();
+                    let max_width = 300.0 * zoom;
+                    let scale = if size.x > max_width {
+                        max_width / size.x
+                    } else {
+                        1.0
+                    };
+                    let display_size = size * scale;
+                    
+                    let resp = ui.add(egui::Image::from_texture(texture).fit_to_exact_size(display_size).sense(egui::Sense::click()));
+                    if resp.clicked() {
+                        app.image_viewers.insert(file.id.clone(), true);
+                    }
+                } else {
+                    ui.label(egui::RichText::new("Loading image...").size(11.0 * zoom));
+                }
+            } else {
+                let name = file.original_name.as_deref().unwrap_or("file");
+                ui.hyperlink_to(
+                    egui::RichText::new(name).size(11.0 * zoom),
+                    format!("{}{}", api_base, file.path)
                 );
             }
-            ImagePreview::Loading => {
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.add(egui::Spinner::new());
-                    ui.label("Fetching image…");
-                });
-            }
-            ImagePreview::Error(err) => {
-                ui.add_space(6.0);
-                ui.colored_label(Color32::LIGHT_RED, format!("Image failed: {err}"));
-            }
-            ImagePreview::None => {}
         }
     }
 }
@@ -373,12 +641,12 @@ pub(super) fn image_preview(
 }
 
 fn is_image(file: &FileResponse) -> bool {
-    file.present
-        && file
-            .mime
-            .as_deref()
-            .map(|m| m.starts_with("image/"))
-            .unwrap_or(false)
+    let ext = std::path::Path::new(&file.path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp")
 }
 
 pub(super) enum ImagePreview {
@@ -390,49 +658,56 @@ pub(super) enum ImagePreview {
 
 fn draw_edges(
     painter: &egui::Painter,
-    layouts: &[NodeLayoutData],
-    rect_lookup: &HashMap<String, egui::Rect>,
+    posts: &[PostView],
     state: &ThreadState,
+    world_to_screen: impl Fn(egui::Pos2) -> egui::Pos2,
+    zoom: f32,
+    _scale: f32,
 ) {
     let reply_targets = &state.reply_to;
-    for layout in layouts {
-        for parent in &layout.post.parent_post_ids {
-            let (parent_rect, child_rect) =
-                match (rect_lookup.get(parent), rect_lookup.get(&layout.post.id)) {
-                    (Some(p), Some(c)) => (p, c),
-                    _ => continue,
-                };
+    let nodes = &state.graph_nodes;
 
-            let start = anchor_bottom(parent_rect);
-            let end = anchor_top(child_rect);
+    for post in posts {
+        for parent_id in &post.parent_post_ids {
+            let (parent_node, child_node) = match (nodes.get(parent_id), nodes.get(&post.id)) {
+                (Some(p), Some(c)) => (p, c),
+                _ => continue,
+            };
+
+            let p_pos = world_to_screen(parent_node.pos);
+            let c_pos = world_to_screen(child_node.pos);
+            
+            // Calculate anchor points based on size and zoom
+            let p_size = parent_node.size * zoom;
+            let c_size = child_node.size * zoom;
+            
+            let start = pos_with_offset(p_pos + egui::vec2(0.0, p_size.y / 2.0), 0.0, 6.0 * zoom);
+            let end = pos_with_offset(c_pos - egui::vec2(0.0, c_size.y / 2.0), 0.0, -6.0 * zoom);
+
             let is_reply_edge = reply_targets
                 .iter()
-                .any(|id| id == parent || id == &layout.post.id);
+                .any(|id| id == parent_id || id == &post.id);
             let sel = state.selected_post.as_ref();
             let color = if is_reply_edge {
                 Color32::from_rgb(255, 190, 92)
-            } else if sel == Some(&layout.post.id) || sel == Some(parent) {
+            } else if sel == Some(&post.id) || sel == Some(parent_id) {
                 Color32::from_rgb(110, 190, 255)
             } else {
                 Color32::from_rgb(90, 110, 170)
             };
 
+            // Only draw if at least one end is somewhat visible or they cross the screen
+            // For now, just draw everything, the clipper handles the actual geometry clipping usually
+            // But we can optimize if needed.
+            
             painter.line_segment(
                 [start, end],
-                egui::Stroke::new(if is_reply_edge { 3.4 } else { 2.0 }, color),
+                egui::Stroke::new(if is_reply_edge { 3.4 * zoom } else { 2.0 * zoom }, color),
             );
 
-            draw_arrow(painter, start, end, color);
+            draw_arrow(painter, start, end, color, zoom);
         }
     }
-}
-
-fn anchor_top(rect: &egui::Rect) -> Pos2 {
-    pos_with_offset(rect.center_top(), 0.0, -6.0)
-}
-
-fn anchor_bottom(rect: &egui::Rect) -> Pos2 {
-    pos_with_offset(rect.center_bottom(), 0.0, 6.0)
 }
 
 fn pos_with_offset(mut pos: Pos2, dx: f32, dy: f32) -> Pos2 {
@@ -441,10 +716,10 @@ fn pos_with_offset(mut pos: Pos2, dx: f32, dy: f32) -> Pos2 {
     pos
 }
 
-fn draw_arrow(painter: &egui::Painter, start: Pos2, end: Pos2, color: Color32) {
+fn draw_arrow(painter: &egui::Painter, start: Pos2, end: Pos2, color: Color32, zoom: f32) {
     let dir = (end - start).normalized();
     let normal = egui::Vec2::new(-dir.y, dir.x);
-    let arrow_size = 8.0;
+    let arrow_size = 8.0 * zoom;
     let arrow_tip = end;
     let arrow_left = egui::pos2(
         end.x - dir.x * arrow_size + normal.x * arrow_size * 0.5,
@@ -461,86 +736,4 @@ fn draw_arrow(painter: &egui::Painter, start: Pos2, end: Pos2, color: Color32) {
     ));
 }
 
-fn estimate_node_height(ui: &egui::Ui, post: &PostView, has_preview: bool) -> f32 {
-    let text_width = 320.0 - 20.0;
-    let text_height = ui.fonts(|fonts| {
-        let body = post.body.clone();
-        let galley = fonts.layout(body, FontId::proportional(13.0), Color32::WHITE, text_width);
-        galley.size().y
-    });
 
-    let mut height = 70.0 + text_height; // header + body
-    if !post.parent_post_ids.is_empty() {
-        height += 28.0;
-    }
-    if has_preview {
-        height += 120.0;
-    }
-    height + 36.0 // actions + padding
-}
-
-fn step_graph_layout(nodes: &mut HashMap<String, GraphNode>, posts: &[PostView]) {
-    let repulsion = 0.0008;
-    let attraction = 0.02;
-    let damping = 0.9;
-    let desired = 0.15;
-
-    let mut edges = Vec::new();
-    for post in posts {
-        for parent in &post.parent_post_ids {
-            if nodes.contains_key(parent) {
-                edges.push((parent.clone(), post.id.clone()));
-            }
-        }
-    }
-
-    let ids: Vec<String> = nodes.keys().cloned().collect();
-    for i in 0..ids.len() {
-        for j in (i + 1)..ids.len() {
-            let (ai, aj) = {
-                let a = nodes.get(&ids[i]).unwrap();
-                let b = nodes.get(&ids[j]).unwrap();
-                (a.pos, b.pos)
-            };
-            let delta = aj - ai;
-            let dist_sq = delta.length_sq().max(0.0001);
-            let force = repulsion / dist_sq;
-            let dir = if dist_sq > 0.0 {
-                delta / dist_sq.sqrt()
-            } else {
-                egui::vec2(0.0, 0.0)
-            };
-            if let Some(node) = nodes.get_mut(&ids[i]) {
-                node.vel -= dir * force;
-            }
-            if let Some(node) = nodes.get_mut(&ids[j]) {
-                node.vel += dir * force;
-            }
-        }
-    }
-
-    for (a, b) in edges {
-        let (pa, pb) = {
-            let na = nodes.get(&a).unwrap();
-            let nb = nodes.get(&b).unwrap();
-            (na.pos, nb.pos)
-        };
-        let delta = pb - pa;
-        let dist = delta.length().max(0.0001);
-        let dir = delta / dist;
-        let force = attraction * (dist - desired);
-        if let Some(node) = nodes.get_mut(&a) {
-            node.vel += dir * force;
-        }
-        if let Some(node) = nodes.get_mut(&b) {
-            node.vel -= dir * force;
-        }
-    }
-
-    for node in nodes.values_mut() {
-        node.vel *= damping;
-        node.pos += node.vel;
-        node.pos.x = node.pos.x.clamp(0.0, 1.0);
-        node.pos.y = node.pos.y.clamp(0.0, 1.0);
-    }
-}

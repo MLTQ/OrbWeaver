@@ -25,6 +25,8 @@ impl GraphchanApp {
             display_mode: ThreadDisplayMode::List,
             last_layout_mode: None,
             graph_nodes: HashMap::new(),
+            chronological_nodes: HashMap::new(),
+            sim_start_time: None,
             selected_post: None,
             graph_zoom: 1.0,
             graph_offset: egui::vec2(0.0, 0.0),
@@ -92,6 +94,8 @@ impl GraphchanApp {
             if state.graph_nodes.is_empty() {
                 if let Some(details) = &state.details {
                     state.graph_nodes = graph::build_initial_graph(&details.posts);
+                    state.chronological_nodes = HashMap::new();
+                    state.sim_start_time = None;
                     state.graph_zoom = 1.0;
                     state.graph_offset = egui::vec2(0.0, 0.0);
                     state.graph_dragging = false;
