@@ -48,6 +48,8 @@ pub struct ThreadState {
     pub reply_to: Vec<String>,
     pub time_bin_seconds: i64, // Time bin size in seconds for chronological view
     pub locked_hover_post: Option<String>, // "Locked" hover for tracing conversations
+    pub repulsion_force: f32,
+    pub sim_paused: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

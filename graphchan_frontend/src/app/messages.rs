@@ -77,6 +77,8 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                                 state.attachments_errors.clear();
                                 state.attachments_loading.clear();
                                 state.reply_to.clear();
+                                state.repulsion_force = 500.0;
+                                state.sim_paused = false;
                             }
                             Err(err) => {
                                 state.error = Some(err.to_string());
@@ -119,6 +121,8 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                             reply_to: Vec::new(),
                             time_bin_seconds: 60, // Default to 1 minute bins
                             locked_hover_post: None,
+                            repulsion_force: 500.0,
+                            sim_paused: false,
                         };
                         for post in &details.posts {
                             state

@@ -73,8 +73,8 @@ fn estimate_node_height(ui: &egui::Ui, post: &PostView, has_preview: bool) -> f3
     height
 }
 
-fn step_graph_layout(nodes: &mut HashMap<String, GraphNode>, posts: &[PostView], scale: f32, thread_id: &str) {
-    let repulsion = 0.5; // Reduced from 1.0
+fn step_graph_layout(nodes: &mut HashMap<String, GraphNode>, posts: &[PostView], scale: f32, thread_id: &str, repulsion_force: f32) {
+    let repulsion = repulsion_force / 1000.0; // Scale down for physics
     let attraction = 0.015; // Increased from 0.002 to keep things tighter
     let damping = 0.80; // Increased damping for stability
     let desired = 1.5; // Reduced desired distance
@@ -166,64 +166,8 @@ fn step_graph_layout(nodes: &mut HashMap<String, GraphNode>, posts: &[PostView],
         node.pos += node.vel;
     }
 
-    // 3. Resolve Collisions (AABB)
-    // Run a few iterations to stabilize
-    for _ in 0..2 {
-        for i in 0..ids.len() {
-            for j in (i + 1)..ids.len() {
-                let (p1, s1, p2, s2) = {
-                    let n1 = nodes.get(&ids[i]).unwrap();
-                    let n2 = nodes.get(&ids[j]).unwrap();
-                    (n1.pos, n1.size / scale, n2.pos, n2.size / scale)
-                };
-                
-                // AABB Collision
-                // p1, p2 are centers
-                let half_s1 = s1 / 2.0;
-                let half_s2 = s2 / 2.0;
-                
-                let l1 = p1.x - half_s1.x;
-                let r1 = p1.x + half_s1.x;
-                let t1 = p1.y - half_s1.y;
-                let b1 = p1.y + half_s1.y;
-                
-                let l2 = p2.x - half_s2.x;
-                let r2 = p2.x + half_s2.x;
-                let t2 = p2.y - half_s2.y;
-                let b2 = p2.y + half_s2.y;
-                
-                // Check overlap
-                let overlap_x = (r1.min(r2) - l1.max(l2)).max(0.0);
-                let overlap_y = (b1.min(b2) - t1.max(t2)).max(0.0);
-                
-                if overlap_x > 0.0 && overlap_y > 0.0 {
-                    // Resolve along axis of least penetration
-                    let move_vec = if overlap_x < overlap_y {
-                        // Push horizontally
-                        let sign = if p1.x < p2.x { -1.0 } else { 1.0 };
-                        egui::vec2(overlap_x * sign * 0.55, 0.0) // 0.55 to ensure separation
-                    } else {
-                        // Push vertically
-                        let sign = if p1.y < p2.y { -1.0 } else { 1.0 };
-                        egui::vec2(0.0, overlap_y * sign * 0.55)
-                    };
-                    
-                    if ids[i] != thread_id {
-                        if let Some(n1) = nodes.get_mut(&ids[i]) {
-                            n1.pos += move_vec;
-                            n1.vel *= 0.5;
-                        }
-                    }
-                    if ids[j] != thread_id {
-                        if let Some(n2) = nodes.get_mut(&ids[j]) {
-                            n2.pos -= move_vec;
-                            n2.vel *= 0.5;
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // 3. Resolve Collisions (AABB) - REMOVED to allow overlap
+    // We rely on soft repulsion now.
 }
 
 pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut ThreadState) {
@@ -269,9 +213,9 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
         .elapsed()
         .as_secs_f32() < 5.0;
 
-    if sim_active && !state.graph_dragging {
+    if sim_active && !state.graph_dragging && !state.sim_paused {
         for _ in 0..10 { // Run more steps per frame for smoother/faster expansion
-            step_graph_layout(&mut state.graph_nodes, &posts, scale, &thread_id);
+            step_graph_layout(&mut state.graph_nodes, &posts, scale, &thread_id, state.repulsion_force);
         }
         ui.ctx().request_repaint(); // Keep animating
     }
@@ -369,6 +313,9 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
             }
         }
     }
+
+    // Sort layouts so selected post is drawn last (on top)
+    layouts.sort_by_key(|l| state.selected_post.as_ref() == Some(&l.post.id));
 
     // let rect_lookup: HashMap<String, egui::Rect> = layouts
     //     .iter()
@@ -493,6 +440,10 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
             }
             state.graph_dragging = false;
         }
+        
+        if combined_drag.clicked() {
+            state.selected_post = Some(layout.post.id.clone());
+        }
     }
 
     // Controls overlay
@@ -511,6 +462,16 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
             
             ui.separator();
             
+            ui.label("Repulsion:");
+            ui.add(egui::Slider::new(&mut state.repulsion_force, 0.0..=2000.0).text(""));
+
+            ui.separator();
+            
+            let icon = if state.sim_paused { "▶" } else { "⏸" };
+            if ui.button(icon).clicked() {
+                state.sim_paused = !state.sim_paused;
+            }
+
             if ui.button("Reset Layout").clicked() {
                 state.graph_nodes = build_initial_graph(&posts);
                 state.sim_start_time = Some(Instant::now());

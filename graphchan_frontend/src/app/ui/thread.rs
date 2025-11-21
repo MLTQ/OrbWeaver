@@ -34,6 +34,8 @@ impl GraphchanApp {
             reply_to: Vec::new(),
             time_bin_seconds: 60, // Default to 1 minute bins
             locked_hover_post: None,
+            repulsion_force: 500.0,
+            sim_paused: false,
         });
         self.spawn_load_thread(&thread_id);
     }

@@ -328,6 +328,8 @@ impl eframe::App for GraphchanApp {
                         reply_to: Vec::new(),
                         time_bin_seconds: 60,
                         locked_hover_post: None,
+                        repulsion_force: 500.0,
+                        sim_paused: false,
                     },
                 )
             } else {
