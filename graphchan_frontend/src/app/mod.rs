@@ -1,8 +1,10 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use chrono::{DateTime, Utc};
 use eframe::egui::{self, Context, TextureHandle};
+use egui_video::{AudioDevice, Player};
 use log::error;
 
 use crate::api::ApiClient;
@@ -21,6 +23,20 @@ use state::{
 
 // Maximum number of concurrent image downloads to prevent overwhelming the backend
 const MAX_CONCURRENT_DOWNLOADS: usize = 4;
+
+// Get the cache directory for videos, creating it if it doesn't exist
+fn get_video_cache_dir() -> Result<PathBuf, String> {
+    let cache_dir = if let Some(home) = dirs::home_dir() {
+        home.join(".graphchan").join("cache").join("videos")
+    } else {
+        PathBuf::from(".graphchan").join("cache").join("videos")
+    };
+
+    std::fs::create_dir_all(&cache_dir)
+        .map_err(|e| format!("Failed to create cache directory: {}", e))?;
+
+    Ok(cache_dir)
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FileType {
@@ -87,6 +103,9 @@ pub struct GraphchanApp {
     identity_state: state::IdentityState,
     file_downloads: HashMap<String, FileDownloadState>,
     file_viewers: HashMap<String, FileViewerState>,
+    ctx: Option<egui::Context>,
+    audio_device: Option<AudioDevice>,
+    video_volume: f32, // 0.0 to 1.0
 }
 
 #[derive(Debug, Clone)]
@@ -96,7 +115,7 @@ pub struct FileDownloadState {
     pub downloaded_bytes: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct FileViewerState {
     pub file_id: String,
     pub file_name: String,
@@ -104,13 +123,24 @@ pub struct FileViewerState {
     pub content: FileViewerContent,
 }
 
-#[derive(Debug, Clone)]
 pub enum FileViewerContent {
     Loading,
     Text(String),
-    Video(Vec<u8>),
+    Video(Player),
     Pdf(Vec<u8>),
     Error(String),
+}
+
+impl std::fmt::Debug for FileViewerContent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Loading => write!(f, "Loading"),
+            Self::Text(_) => write!(f, "Text(..)"),
+            Self::Video(_) => write!(f, "Video(..)"),
+            Self::Pdf(_) => write!(f, "Pdf(..)"),
+            Self::Error(e) => write!(f, "Error({})", e),
+        }
+    }
 }
 
 pub(crate) fn resolve_download_url(
@@ -165,6 +195,34 @@ impl GraphchanApp {
         });
         let (tx, rx) = mpsc::channel();
 
+        // Initialize SDL2 audio for video playback
+        let audio_device = match sdl2::init() {
+            Ok(sdl_context) => {
+                match sdl_context.audio() {
+                    Ok(audio_subsystem) => {
+                        match AudioDevice::from_subsystem(&audio_subsystem) {
+                            Ok(device) => {
+                                log::info!("SDL2 audio initialized successfully");
+                                Some(device)
+                            }
+                            Err(e) => {
+                                log::error!("Failed to create audio device: {}", e);
+                                None
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to initialize SDL2 audio subsystem: {}", e);
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to initialize SDL2: {}", e);
+                None
+            }
+        };
+
         let mut app = Self {
             api,
             tx,
@@ -191,6 +249,9 @@ impl GraphchanApp {
             identity_state: state::IdentityState::default(),
             file_downloads: HashMap::new(),
             file_viewers: HashMap::new(),
+            ctx: None,
+            audio_device,
+            video_volume: 0.8, // Default to 80% volume
         };
         app.spawn_load_threads();
         app.spawn_load_peers();
@@ -457,6 +518,42 @@ impl GraphchanApp {
     }
 
     fn download_media_file(&mut self, file_id: &str, base_url: &str) {
+        // Check if video is already cached
+        if let Ok(cache_dir) = get_video_cache_dir() {
+            let cache_path = cache_dir.join(format!("{}.mp4", file_id));
+            if cache_path.exists() {
+                log::info!("Loading cached video: {}", cache_path.display());
+                // Load from cache instead of downloading
+                if let Some(ctx) = &self.ctx {
+                    let player_result = if let Some(audio_device) = &mut self.audio_device {
+                        Player::new(ctx, &cache_path.to_string_lossy().to_string())
+                            .and_then(|mut player| {
+                                // Set initial volume
+                                player.options.set_audio_volume(self.video_volume);
+                                player.with_audio(audio_device)
+                            })
+                    } else {
+                        log::warn!("No audio device available, creating player without audio");
+                        Player::new(ctx, &cache_path.to_string_lossy().to_string())
+                    };
+
+                    match player_result {
+                        Ok(player) => {
+                            if let Some(viewer) = self.file_viewers.get_mut(file_id) {
+                                viewer.content = FileViewerContent::Video(player);
+                            }
+                            return;
+                        }
+                        Err(err) => {
+                            log::error!("Failed to load cached video: {}", err);
+                            // Fall through to download
+                        }
+                    }
+                }
+            }
+        }
+
+        // Not cached or failed to load from cache - download it
         let url = resolve_file_url(base_url, file_id);
         tasks::download_media_file(self.tx.clone(), file_id.to_string(), url);
     }
@@ -473,76 +570,100 @@ impl GraphchanApp {
 
     fn render_file_viewers(&mut self, ctx: &egui::Context) {
         let mut to_close = Vec::new();
+        let mut save_actions = Vec::new();
 
-        // Clone the keys to avoid borrow issues
+        // Collect file IDs to iterate over
         let viewer_ids: Vec<String> = self.file_viewers.keys().cloned().collect();
 
         for file_id in viewer_ids {
-            let viewer = if let Some(v) = self.file_viewers.get(&file_id) {
-                v.clone()
-            } else {
-                continue;
-            };
+            if let Some(viewer) = self.file_viewers.get_mut(&file_id) {
+                let mut is_open = true;
+                let file_name = viewer.file_name.clone();
 
-            let mut is_open = true;
+                egui::Window::new(&file_name)
+                    .id(egui::Id::new(format!("file_viewer_{}", file_id)))
+                    .open(&mut is_open)
+                    .default_size([800.0, 600.0])
+                    .show(ctx, |ui| {
+                        match &mut viewer.content {
+                            FileViewerContent::Loading => {
+                                ui.vertical_centered(|ui| {
+                                    ui.spinner();
+                                    ui.label("Loading file...");
+                                });
+                            }
+                            FileViewerContent::Text(text) => {
+                                egui::ScrollArea::vertical().show(ui, |ui| {
+                                    ui.add(
+                                        egui::TextEdit::multiline(&mut text.as_str())
+                                            .desired_width(f32::INFINITY)
+                                            .code_editor()
+                                    );
+                                });
+                            }
+                            FileViewerContent::Video(player) => {
+                                ui.vertical_centered(|ui| {
+                                    // Render the video player with built-in controls
+                                    // egui-video Player includes play/pause/seek controls
+                                    player.ui(ui, egui::vec2(640.0, 480.0));
 
-            egui::Window::new(&viewer.file_name)
-                .id(egui::Id::new(format!("file_viewer_{}", file_id)))
-                .open(&mut is_open)
-                .default_size([600.0, 400.0])
-                .show(ctx, |ui| {
-                    match &viewer.content {
-                        FileViewerContent::Loading => {
-                            ui.vertical_centered(|ui| {
-                                ui.spinner();
-                                ui.label("Loading file...");
-                            });
-                        }
-                        FileViewerContent::Text(text) => {
-                            egui::ScrollArea::vertical().show(ui, |ui| {
-                                ui.add(
-                                    egui::TextEdit::multiline(&mut text.as_str())
-                                        .desired_width(f32::INFINITY)
-                                        .code_editor()
-                                );
-                            });
-                        }
-                        FileViewerContent::Video(bytes) => {
-                            ui.vertical_centered(|ui| {
-                                ui.label(format!("Video file ({} bytes)", bytes.len()));
-                                ui.label("Video playback not yet implemented");
-                                ui.label("Use 'Save as...' to download and play externally");
+                                    ui.add_space(10.0);
 
-                                if ui.button("💾 Save video").clicked() {
-                                    self.save_file_as(&file_id, &viewer.file_name, &self.base_url_input.clone());
-                                }
-                            });
-                        }
-                        FileViewerContent::Pdf(bytes) => {
-                            ui.vertical_centered(|ui| {
-                                ui.label(format!("PDF file ({} bytes)", bytes.len()));
-                                ui.label("PDF viewing not yet implemented");
-                                ui.label("Use 'Save as...' to download and open externally");
+                                    // Volume control (collapsible)
+                                    ui.collapsing("🔊 Volume", |ui| {
+                                        ui.horizontal(|ui| {
+                                            let mut volume = self.video_volume;
+                                            ui.label("Volume:");
+                                            if ui.add(egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false)).changed() {
+                                                self.video_volume = volume;
+                                                // Update player volume
+                                                player.options.set_audio_volume(volume);
+                                            }
+                                            ui.label(format!("{}%", (volume * 100.0) as i32));
+                                        });
+                                    });
 
-                                if ui.button("💾 Save PDF").clicked() {
-                                    self.save_file_as(&file_id, &viewer.file_name, &self.base_url_input.clone());
-                                }
-                            });
-                        }
-                        FileViewerContent::Error(err) => {
-                            ui.vertical_centered(|ui| {
-                                ui.colored_label(egui::Color32::RED, "Error loading file:");
-                                ui.label(err);
-                            });
-                        }
-                    }
-                });
+                                    ui.add_space(5.0);
 
-            if !is_open {
-                to_close.push(file_id);
+                                    // Save button
+                                    if ui.button("💾 Save video").clicked() {
+                                        save_actions.push((file_id.clone(), file_name.clone()));
+                                    }
+                                });
+                            }
+                            FileViewerContent::Pdf(bytes) => {
+                                ui.vertical_centered(|ui| {
+                                    ui.label(format!("PDF file ({} bytes)", bytes.len()));
+                                    ui.label("PDF viewing not yet implemented");
+                                    ui.label("Use 'Save as...' to download and open externally");
+
+                                    if ui.button("💾 Save PDF").clicked() {
+                                        save_actions.push((file_id.clone(), file_name.clone()));
+                                    }
+                                });
+                            }
+                            FileViewerContent::Error(err) => {
+                                ui.vertical_centered(|ui| {
+                                    ui.colored_label(egui::Color32::RED, "Error loading file:");
+                                    ui.label(err.as_str());
+                                });
+                            }
+                        }
+                    });
+
+                if !is_open {
+                    to_close.push(file_id);
+                }
             }
         }
 
+        // Process save actions after releasing borrow
+        for (file_id, file_name) in save_actions {
+            let base_url = self.base_url_input.clone();
+            self.save_file_as(&file_id, &file_name, &base_url);
+        }
+
+        // Close viewers
         for file_id in to_close {
             self.file_viewers.remove(&file_id);
         }
@@ -551,6 +672,11 @@ impl GraphchanApp {
 
 impl eframe::App for GraphchanApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        // Store context for video player initialization
+        if self.ctx.is_none() {
+            self.ctx = Some(ctx.clone());
+        }
+
         self.process_messages();
 
         egui::TopBottomPanel::top("top_controls").show(ctx, |ui| {

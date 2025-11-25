@@ -18,7 +18,7 @@ pub fn run_frontend_with_options(options: eframe::NativeOptions) -> Result<(), e
     eframe::run_native(
         "Graphchan Frontend",
         options,
-        Box::new(|cc| Box::new(GraphchanApp::new(cc))),
+        Box::new(|cc| Ok(Box::new(GraphchanApp::new(cc)))),
     )
 }
 

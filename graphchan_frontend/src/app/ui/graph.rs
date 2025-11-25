@@ -400,7 +400,7 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
                                         .size(13.0 * state.graph_zoom)
                                         .color(Color32::from_rgb(220, 220, 230)),
                                 )
-                                .wrap(true),
+                                .wrap(),
                             );
 
                             render_node_attachments(

@@ -397,7 +397,39 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
             AppMessage::MediaFileLoaded { file_id, result } => {
                 if let Some(viewer) = app.file_viewers.get_mut(&file_id) {
                     viewer.content = match result {
-                        Ok(bytes) => super::FileViewerContent::Video(bytes),
+                        Ok(bytes) => {
+                            // Save to persistent cache directory
+                            match super::get_video_cache_dir() {
+                                Ok(cache_dir) => {
+                                    let cache_path = cache_dir.join(format!("{}.mp4", file_id));
+                                    match std::fs::write(&cache_path, bytes) {
+                                        Ok(()) => {
+                                            log::info!("Cached video to: {}", cache_path.display());
+
+                                            // Create player with audio support
+                                            let player_result = if let Some(audio_device) = &mut app.audio_device {
+                                                egui_video::Player::new(app.ctx.as_ref().unwrap(), &cache_path.to_string_lossy().to_string())
+                                                    .and_then(|mut player| {
+                                                        // Set initial volume
+                                                        player.options.set_audio_volume(app.video_volume);
+                                                        player.with_audio(audio_device)
+                                                    })
+                                            } else {
+                                                log::warn!("No audio device available, creating player without audio");
+                                                egui_video::Player::new(app.ctx.as_ref().unwrap(), &cache_path.to_string_lossy().to_string())
+                                            };
+
+                                            match player_result {
+                                                Ok(player) => super::FileViewerContent::Video(player),
+                                                Err(err) => super::FileViewerContent::Error(format!("Failed to load video: {}", err)),
+                                            }
+                                        }
+                                        Err(err) => super::FileViewerContent::Error(format!("Failed to cache video: {}", err)),
+                                    }
+                                }
+                                Err(err) => super::FileViewerContent::Error(err),
+                            }
+                        }
                         Err(err) => super::FileViewerContent::Error(err),
                     };
                 }
