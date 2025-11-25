@@ -49,7 +49,12 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                         ui.label("Avatar:");
                         if let Some(avatar_id) = &peer.avatar_file_id {
                             if let Some(texture) = app.image_textures.get(avatar_id) {
-                                 ui.add(egui::Image::new(texture));
+                                 ui.add(egui::Image::from_texture(texture).max_width(150.0));
+                            } else if let Some(pending) = app.image_pending.remove(avatar_id) {
+                                let color = egui::ColorImage::from_rgba_unmultiplied(pending.size, &pending.pixels);
+                                let tex = ui.ctx().load_texture(avatar_id, color, egui::TextureOptions::default());
+                                app.image_textures.insert(avatar_id.clone(), tex.clone());
+                                ui.add(egui::Image::from_texture(&tex).max_width(150.0));
                             } else if let Some(err) = app.image_errors.get(avatar_id) {
                                  ui.colored_label(egui::Color32::RED, "Error loading avatar");
                                  ui.label(err);
@@ -96,7 +101,12 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                         ui.label("Current Avatar:");
                         if let Some(avatar_id) = &peer.avatar_file_id {
                             if let Some(texture) = app.image_textures.get(avatar_id) {
-                                 ui.add(egui::Image::new(texture));
+                                 ui.add(egui::Image::from_texture(texture).max_width(150.0));
+                            } else if let Some(pending) = app.image_pending.remove(avatar_id) {
+                                let color = egui::ColorImage::from_rgba_unmultiplied(pending.size, &pending.pixels);
+                                let tex = ui.ctx().load_texture(avatar_id, color, egui::TextureOptions::default());
+                                app.image_textures.insert(avatar_id.clone(), tex.clone());
+                                ui.add(egui::Image::from_texture(&tex).max_width(150.0));
                             } else if let Some(err) = app.image_errors.get(avatar_id) {
                                  ui.colored_label(egui::Color32::RED, "Error loading avatar");
                                  ui.label(err);

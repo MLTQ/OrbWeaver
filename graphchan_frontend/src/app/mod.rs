@@ -251,7 +251,19 @@ impl GraphchanApp {
                     } else {
                         1.0
                     };
-                    ui.add(egui::Image::new(texture).fit_to_exact_size(size * scale));
+                    ui.add(egui::Image::from_texture(texture).fit_to_exact_size(size * scale));
+                } else if let Some(pending) = self.image_pending.remove(&file.id) {
+                    let color = egui::ColorImage::from_rgba_unmultiplied(pending.size, &pending.pixels);
+                    let tex = ui.ctx().load_texture(&file.id, color, egui::TextureOptions::default());
+                    self.image_textures.insert(file.id.clone(), tex.clone());
+                    let size = tex.size_vec2();
+                    let max_width = 200.0;
+                    let scale = if size.x > max_width {
+                        max_width / size.x
+                    } else {
+                        1.0
+                    };
+                    ui.add(egui::Image::from_texture(&tex).fit_to_exact_size(size * scale));
                 } else if let Some(err) = self.image_errors.get(&file.id) {
                     ui.colored_label(egui::Color32::RED, format!("Error: {}", err));
                 } else {
