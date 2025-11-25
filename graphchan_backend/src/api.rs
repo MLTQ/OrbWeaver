@@ -5,6 +5,7 @@ use crate::identity::decode_friendcode;
 use crate::identity::IdentitySummary;
 use crate::network::FileAnnouncement;
 use crate::network::NetworkHandle;
+use crate::network::ProfileUpdate;
 use crate::peers::{PeerService, PeerView};
 use crate::threading::{
     CreatePostInput, CreateThreadInput, ThreadDetails, ThreadService, ThreadSummary,
@@ -20,8 +21,11 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use iroh_blobs::store::fs::FsStore;
+use iroh_blobs::ticket::BlobTicket;
+use iroh_blobs::{BlobFormat, Hash};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+use std::str::FromStr;
 use tokio::fs::File as TokioFile;
 use tokio::net::TcpListener;
 use tokio_util::io::ReaderStream;
@@ -35,6 +39,12 @@ pub struct AppState {
     pub network: NetworkHandle,
     pub blobs: FsStore,
     pub http_client: reqwest::Client,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateProfileRequest {
+    pub username: Option<String>,
+    pub bio: Option<String>,
 }
 
 pub async fn serve_http(
@@ -65,13 +75,15 @@ pub async fn serve_http(
         .route("/threads", get(list_threads).post(create_thread))
         .route("/threads/:id", get(get_thread))
         .route("/threads/:id/posts", post(create_post))
-        .route(
-            "/posts/:id/files",
-            get(list_post_files).post(upload_post_file),
-        )
+        .route("/posts/:id/files", get(list_post_files))
+        .route("/posts/:id/files", post(upload_post_file))
         .route("/files/:id", get(download_file))
-        .route("/peers", get(list_peers).post(add_peer))
+        .route("/peers", get(list_peers))
+        .route("/peers", post(add_peer))
         .route("/peers/self", get(get_self_peer))
+        .route("/identity/avatar", post(upload_avatar))
+        .route("/identity/profile", post(update_profile_handler))
+        .route("/blobs/:blob_id", get(get_blob))
         .route("/import", post(import_thread_handler))
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024)) // 50MB limit
         .layer(
@@ -126,21 +138,107 @@ async fn get_thread(
 
 async fn create_thread(
     State(state): State<AppState>,
-    Json(payload): Json<CreateThreadInput>,
-) -> Result<(StatusCode, Json<ThreadDetails>), ApiError> {
-    let service = ThreadService::new(state.database.clone());
-    match service.create_thread(payload) {
-        Ok(thread) => {
-            if let Err(err) = state.network.publish_thread_snapshot(thread.clone()).await {
-                tracing::warn!(error = ?err, thread_id = %thread.thread.id, "failed to publish thread update over network");
-            }
-            Ok((StatusCode::CREATED, Json(thread)))
+    mut multipart: Multipart,
+) -> Result<Json<ThreadDetails>, ApiError> {
+    let mut input: Option<CreateThreadInput> = None;
+    let mut files: Vec<(String, String, Vec<u8>)> = Vec::new();
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|err| ApiError::Internal(anyhow::Error::new(err)))?
+    {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "json" {
+            let data = field
+                .bytes()
+                .await
+                .map_err(|err| ApiError::Internal(anyhow::Error::new(err)))?;
+            let parsed: CreateThreadInput =
+                serde_json::from_slice(&data).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+            input = Some(parsed);
+        } else if name == "file" {
+            let filename = field.file_name().unwrap_or("unknown").to_string();
+            let mime = field
+                .content_type()
+                .unwrap_or("application/octet-stream")
+                .to_string();
+            let data = field
+                .bytes()
+                .await
+                .map_err(|err| ApiError::Internal(anyhow::Error::new(err)))?;
+            files.push((filename, mime, data.to_vec()));
         }
-        Err(err) if err.to_string().contains("may not be empty") => {
-            Err(ApiError::BadRequest(err.to_string()))
-        }
-        Err(err) => Err(ApiError::Internal(err)),
     }
+
+    let input = input.ok_or(ApiError::BadRequest("missing json field".into()))?;
+
+    let thread_service = ThreadService::new(state.database.clone());
+    let details = thread_service
+        .create_thread(input)
+        .map_err(ApiError::Internal)?;
+
+    // Attach files to the first post
+    if !files.is_empty() {
+        let file_service = FileService::new(
+            state.database.clone(),
+            state.config.paths.clone(),
+            state.config.file.clone(),
+            state.blobs.clone(),
+        );
+        let post_id = &details.posts[0].id;
+        let addr = state.network.current_addr();
+
+        for (filename, mime, data) in files {
+            match file_service
+                .save_post_file(SaveFileInput {
+                    post_id: post_id.clone(),
+                    original_name: Some(filename),
+                    mime: Some(mime),
+                    data,
+                })
+                .await
+            {
+                Ok(mut file_view) => {
+                    let ticket = file_view.blob_id.as_deref().and_then(|blob_id| {
+                        Hash::from_str(blob_id).ok().map(|hash| {
+                            BlobTicket::new(addr.clone(), hash, BlobFormat::Raw)
+                        })
+                    });
+                    if let Some(t) = &ticket {
+                        file_service.persist_ticket(&file_view.id, Some(t)).ok();
+                        file_view.ticket = Some(t.to_string());
+                    }
+                    
+                    // Broadcast file available
+                    if let (Some(blob_id), Some(ticket)) = (&file_view.blob_id, &ticket) {
+                         if let Ok(_hash) = Hash::from_str(blob_id) {
+                             let announcement = FileAnnouncement {
+                                 id: file_view.id.clone(),
+                                 post_id: file_view.post_id.clone(),
+                                 thread_id: details.thread.id.clone(),
+                                 original_name: file_view.original_name.clone(),
+                                 mime: file_view.mime.clone(),
+                                 size_bytes: file_view.size_bytes,
+                                 checksum: file_view.checksum.clone(),
+                                 blob_id: file_view.blob_id.clone(),
+                                 ticket: Some(ticket.clone()),
+                             };
+                             state.network.publish_file_available(announcement).await.ok();
+                         }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to save file for thread: {}", e);
+                }
+            }
+        }
+    }
+    
+    // Broadcast thread snapshot
+    state.network.publish_thread_snapshot(details.clone()).await.ok();
+
+    Ok(Json(details))
 }
 
 async fn create_post(
@@ -245,9 +343,17 @@ async fn upload_post_file(
                 .as_deref()
                 .and_then(|blob| state.network.make_blob_ticket(blob));
             file_view.ticket = ticket.as_ref().map(|t| t.to_string());
+            let thread_service = ThreadService::new(state.database.clone());
+            let thread_id = thread_service
+                .get_post(&post_id)
+                .map_err(ApiError::Internal)?
+                .map(|p| p.thread_id)
+                .unwrap_or_default(); // Should ideally handle not found, but we are in success path of save_post_file which checks post existence
+
             let announcement = FileAnnouncement {
                 id: file_view.id.clone(),
                 post_id: file_view.post_id.clone(),
+                thread_id,
                 original_name: file_view.original_name.clone(),
                 mime: file_view.mime.clone(),
                 size_bytes: file_view.size_bytes,
@@ -486,6 +592,118 @@ impl ApiError {
             }
         }
     }
+}
+
+async fn upload_avatar(
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> Result<(StatusCode, Json<String>), ApiError> {
+    let service = FileService::new(
+        state.database.clone(),
+        state.config.paths.clone(),
+        state.config.file.clone(),
+        state.blobs.clone(),
+    );
+    let mut file_bytes = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|err| ApiError::Internal(anyhow::Error::new(err)))?
+    {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "file" {
+            let data = field
+                .bytes()
+                .await
+                .map_err(|err| ApiError::Internal(anyhow::Error::new(err)))?;
+            file_bytes = Some(data.to_vec());
+            tracing::info!("Avatar file received, size: {}", data.len());
+            break;
+        } else {
+            tracing::debug!("Ignored field in avatar upload: {}", name);
+        }
+    }
+
+    let Some(bytes) = file_bytes else {
+        return Err(ApiError::BadRequest("missing file field".into()));
+    };
+
+    let blob_id = service.import_blob(bytes).await.map_err(ApiError::Internal)?;
+
+    // Update local peer profile
+    let peer_service = PeerService::new(state.database.clone());
+    // We need the local peer ID (fingerprint).
+    // We can get it from state.identity.gpg_fingerprint.
+    let peer_id = state.identity.gpg_fingerprint.clone();
+    peer_service.update_profile(&peer_id, Some(blob_id.clone()), None, None).map_err(ApiError::Internal)?;
+
+    // Generate ticket
+    let hash = Hash::from_str(&blob_id).map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
+    let addr = state.network.current_addr();
+    let ticket = BlobTicket::new(addr, hash, BlobFormat::Raw);
+
+    // Broadcast ProfileUpdate
+    let update = ProfileUpdate {
+        peer_id: peer_id.clone(),
+        avatar_file_id: Some(blob_id.clone()),
+        ticket: Some(ticket),
+        username: None,
+        bio: None,
+    };
+    state.network.publish_profile_update(update).await.map_err(ApiError::Internal)?;
+
+    Ok((StatusCode::OK, Json(blob_id)))
+}
+
+async fn update_profile_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<UpdateProfileRequest>,
+) -> Result<StatusCode, ApiError> {
+    let peer_service = PeerService::new(state.database.clone());
+    let peer_id = state.identity.gpg_fingerprint.clone();
+    
+    peer_service.update_profile(&peer_id, None, payload.username.clone(), payload.bio.clone())
+        .map_err(ApiError::Internal)?;
+
+    // Broadcast ProfileUpdate
+    // We need to fetch the current avatar ticket if we want to include it, 
+    // or we can make the fields optional in ProfileUpdate too.
+    // Let's assume ProfileUpdate needs to be updated to support optional fields.
+    // For now, let's just send what we have.
+    
+    // We need to get the current avatar ticket to send it along, or send None if we don't want to change it.
+    // But broadcast_profile_update replaces the state usually.
+    // Let's check ProfileUpdate struct in network.rs.
+    
+    let update = ProfileUpdate {
+        peer_id: peer_id.clone(),
+        avatar_file_id: None,
+        ticket: None,
+        username: payload.username,
+        bio: payload.bio,
+    };
+    state.network.publish_profile_update(update).await.map_err(ApiError::Internal)?;
+
+    Ok(StatusCode::OK)
+}
+
+async fn get_blob(
+    State(state): State<AppState>,
+    Path(blob_id): Path<String>,
+) -> Result<Response, ApiError> {
+    let hash = Hash::from_str(&blob_id).map_err(|_| ApiError::NotFound("invalid blob id".into()))?;
+    let reader = state.blobs.reader(hash);
+    let stream = ReaderStream::new(reader);
+    let body = Body::from_stream(stream);
+    
+    let mut headers = axum::http::HeaderMap::new();
+    // We don't know the mime type unless we store it or infer it.
+    // For now, let's assume generic binary or try to infer from first bytes if possible (hard with stream).
+    // Or just let the browser guess.
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
+
+    Ok((headers, body).into_response())
 }
 
 impl IntoResponse for ApiError {

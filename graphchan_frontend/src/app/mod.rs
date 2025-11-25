@@ -7,7 +7,7 @@ use log::error;
 
 use crate::api::ApiClient;
 // ImageLoader removed; using custom async pipeline
-use crate::models::{CreatePostInput, CreateThreadInput, ThreadSummary};
+use crate::models::{CreatePostInput, CreateThreadInput, PeerView, ThreadSummary};
 
 mod messages;
 mod state;
@@ -20,7 +20,7 @@ use state::{
 };
 
 // Maximum number of concurrent image downloads to prevent overwhelming the backend
-const MAX_CONCURRENT_DOWNLOADS: usize = 20;
+const MAX_CONCURRENT_DOWNLOADS: usize = 4;
 
 pub struct GraphchanApp {
     api: ApiClient,
@@ -44,6 +44,9 @@ pub struct GraphchanApp {
     // Download queue for rate limiting
     download_queue: VecDeque<(String, String)>, // (file_id, url)
     active_downloads: usize,
+    peers: HashMap<String, PeerView>,
+    show_identity: bool,
+    identity_state: state::IdentityState,
 }
 
 pub(crate) fn resolve_download_url(
@@ -62,6 +65,14 @@ pub(crate) fn resolve_download_url(
     } else {
         format!("{base_url}/files/{file_id}")
     }
+}
+
+pub(crate) fn resolve_blob_url(base_url: &str, blob_id: &str) -> String {
+    format!("{base_url}/blobs/{blob_id}")
+}
+
+pub(crate) fn resolve_file_url(base_url: &str, file_id: &str) -> String {
+    format!("{base_url}/files/{file_id}")
 }
 
 impl GraphchanApp {
@@ -95,8 +106,12 @@ impl GraphchanApp {
             image_viewers: HashMap::new(),
             download_queue: VecDeque::new(),
             active_downloads: 0,
+            peers: HashMap::new(),
+            show_identity: false,
+            identity_state: state::IdentityState::default(),
         };
         app.spawn_load_threads();
+        app.spawn_load_peers();
         app
     }
 
@@ -127,7 +142,7 @@ impl GraphchanApp {
         }
         self.create_thread.submitting = true;
         self.create_thread.error = None;
-        tasks::create_thread(self.api.clone(), self.tx.clone(), payload);
+        tasks::create_thread(self.api.clone(), self.tx.clone(), payload, self.create_thread.files.clone());
     }
 
     fn spawn_create_post(&mut self, thread_state: &mut ThreadState) {
@@ -158,33 +173,15 @@ impl GraphchanApp {
         tasks::import_fourchan(self.api.clone(), self.tx.clone(), url);
     }
 
-    fn spawn_load_attachments_for_post(&mut self, thread_id: &str, post_id: &str) {
-        let should_spawn = if let ViewState::Thread(state) = &mut self.view {
-            if state.summary.id != thread_id {
-                return;
-            }
-            if state.attachments.contains_key(post_id)
-                || state.attachments_loading.contains(post_id)
-            {
-                return;
-            }
-            state.attachments_loading.insert(post_id.to_string());
-            true
-        } else {
-            false
-        };
-
-        if !should_spawn {
-            return;
-        }
-
-        tasks::load_attachments(
-            self.api.clone(),
-            self.tx.clone(),
-            thread_id.to_string(),
-            post_id.to_string(),
-        );
+    fn spawn_load_identity(&mut self) {
+        tasks::load_identity(self.api.clone(), self.tx.clone());
     }
+
+    fn spawn_load_peers(&mut self) {
+        tasks::load_peers(self.api.clone(), self.tx.clone());
+    }
+
+
 
     fn process_messages(&mut self) {
         messages::process_messages(self);
@@ -199,6 +196,10 @@ impl GraphchanApp {
         
         // Process queue
         self.process_download_queue();
+    }
+
+    pub fn spawn_load_image(&mut self, file_id: &str, url: &str) {
+        self.spawn_download_image(file_id, url);
     }
     
     fn process_download_queue(&mut self) {
@@ -233,6 +234,40 @@ impl GraphchanApp {
             state.new_post_body = format!("{quote_line}{}", state.new_post_body);
         }
     }
+
+    pub fn render_file_attachment(
+        &mut self,
+        ui: &mut egui::Ui,
+        file: &crate::models::FileResponse,
+        base_url: &str,
+    ) {
+        if let Some(mime) = &file.mime {
+            if mime.starts_with("image/") {
+                if let Some(texture) = self.image_textures.get(&file.id) {
+                    let size = texture.size_vec2();
+                    let max_width = 200.0;
+                    let scale = if size.x > max_width {
+                        max_width / size.x
+                    } else {
+                        1.0
+                    };
+                    ui.add(egui::Image::new(texture).fit_to_exact_size(size * scale));
+                } else if let Some(err) = self.image_errors.get(&file.id) {
+                    ui.colored_label(egui::Color32::RED, format!("Error: {}", err));
+                } else {
+                    ui.spinner();
+                    if !self.image_loading.contains(&file.id) {
+                        let url = resolve_download_url(base_url, file.download_url.as_deref(), &file.id);
+                        self.spawn_download_image(&file.id, &url);
+                    }
+                }
+            } else {
+                ui.label(format!("File: {} ({})", file.original_name.as_deref().unwrap_or("unnamed"), mime));
+            }
+        } else {
+            ui.label(format!("File: {}", file.original_name.as_deref().unwrap_or("unnamed")));
+        }
+    }
 }
 
 impl eframe::App for GraphchanApp {
@@ -262,6 +297,9 @@ impl eframe::App for GraphchanApp {
                 }
                 if ui.button("Import 4chan…").clicked() {
                     self.importer.open = true;
+                }
+                if ui.selectable_label(self.show_identity, "Identity").clicked() {
+                    self.show_identity = !self.show_identity;
                 }
             });
 
@@ -338,25 +376,39 @@ impl eframe::App for GraphchanApp {
                 unreachable!()
             };
 
+            let mut thread_action = crate::app::ui::thread::ThreadAction::None;
             egui::CentralPanel::default().show(ctx, |ui| {
-                go_back = self.render_thread_view(ui, &mut temp_state);
+                thread_action = self.render_thread(ui, &mut temp_state);
             });
 
-            // Put it back
+            // Restore state
             if let ViewState::Thread(state) = &mut self.view {
                 *state = temp_state;
             }
+
+            let mut go_back = false;
+            match thread_action {
+                crate::app::ui::thread::ThreadAction::GoBack => go_back = true,
+                crate::app::ui::thread::ThreadAction::OpenThread(id) => {
+                    self.spawn_load_thread(&id);
+                }
+                _ => {}
+            }
+
+            if go_back {
+                self.view = ViewState::Catalog;
+                self.spawn_load_threads();
+            }
         }
 
-        if go_back {
-            self.view = ViewState::Catalog;
-        }
 
-        self.render_image_viewers(ctx);
 
         self.render_create_thread_dialog(ctx);
         self.render_import_dialog(ctx);
+        ui::drawer::render_identity_drawer(self, ctx);
     }
+
+
 }
 
 fn format_timestamp(ts: &str) -> String {

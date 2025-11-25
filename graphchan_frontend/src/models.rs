@@ -16,6 +16,8 @@ pub struct ThreadDetails {
     pub thread: ThreadSummary,
     #[serde(default)]
     pub posts: Vec<PostView>,
+    #[serde(default)]
+    pub peers: Vec<PeerView>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +32,8 @@ pub struct PostView {
     pub updated_at: Option<String>,
     #[serde(default)]
     pub parent_post_ids: Vec<String>,
+    #[serde(default)]
+    pub files: Vec<FileResponse>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -64,7 +68,7 @@ pub struct PostResponse {
     pub post: PostView,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileResponse {
     pub id: String,
     pub post_id: String,
@@ -83,3 +87,23 @@ pub struct FileResponse {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct FileListEntry(pub FileResponse);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerView {
+    pub id: String,
+    pub alias: Option<String>,
+    pub username: Option<String>,
+    pub bio: Option<String>,
+    pub friendcode: Option<String>,
+    pub iroh_peer_id: Option<String>,
+    pub gpg_fingerprint: Option<String>,
+    pub last_seen: Option<String>,
+    pub avatar_file_id: Option<String>,
+    pub trust_state: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateProfileRequest {
+    pub username: Option<String>,
+    pub bio: Option<String>,
+}

@@ -4,7 +4,7 @@ use crate::database::Database;
 use crate::identity::{decode_friendcode, FriendCodePayload};
 use crate::utils::now_utc_iso;
 use anyhow::{Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]
 pub struct PeerService {
@@ -34,10 +34,13 @@ impl PeerService {
             let record = PeerRecord {
                 id: fingerprint.clone(),
                 alias: Some("local".into()),
+                username: None,
+                bio: None,
                 friendcode: Some(friendcode.clone()),
                 iroh_peer_id: Some(peer_id.clone()),
                 gpg_fingerprint: Some(fingerprint.clone()),
                 last_seen: Some(now_utc_iso()),
+                avatar_file_id: None,
                 trust_state: "trusted".into(),
             };
             repos.peers().upsert(&record)?;
@@ -55,28 +58,54 @@ impl PeerService {
             Ok(PeerView::from_record(record))
         })
     }
+
+    pub fn update_profile(&self, peer_id: &str, avatar_file_id: Option<String>, username: Option<String>, bio: Option<String>) -> Result<()> {
+        self.database.with_repositories(|repos| {
+            if let Some(mut record) = repos.peers().get(peer_id)? {
+                if avatar_file_id.is_some() {
+                    record.avatar_file_id = avatar_file_id;
+                }
+                if username.is_some() {
+                    record.username = username;
+                }
+                if bio.is_some() {
+                    record.bio = bio;
+                }
+                repos.peers().upsert(&record)?;
+            } else {
+                tracing::warn!("received profile update for unknown peer {}", peer_id);
+            }
+            Ok(())
+        })
+    }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerView {
     pub id: String,
     pub alias: Option<String>,
+    pub username: Option<String>,
+    pub bio: Option<String>,
     pub friendcode: Option<String>,
     pub iroh_peer_id: Option<String>,
     pub gpg_fingerprint: Option<String>,
     pub last_seen: Option<String>,
+    pub avatar_file_id: Option<String>,
     pub trust_state: String,
 }
 
 impl PeerView {
-    fn from_record(record: PeerRecord) -> Self {
+    pub fn from_record(record: PeerRecord) -> Self {
         Self {
             id: record.id,
             alias: record.alias,
+            username: record.username,
+            bio: record.bio,
             friendcode: record.friendcode,
             iroh_peer_id: record.iroh_peer_id,
             gpg_fingerprint: record.gpg_fingerprint,
             last_seen: record.last_seen,
+            avatar_file_id: record.avatar_file_id,
             trust_state: record.trust_state,
         }
     }
@@ -86,10 +115,13 @@ fn payload_to_peer_record(friendcode: &str, payload: &FriendCodePayload) -> Peer
     PeerRecord {
         id: payload.gpg_fingerprint.clone(),
         alias: None,
+        username: None,
+        bio: None,
         friendcode: Some(friendcode.to_string()),
         iroh_peer_id: Some(payload.peer_id.clone()),
         gpg_fingerprint: Some(payload.gpg_fingerprint.clone()),
         last_seen: Some(now_utc_iso()),
+        avatar_file_id: None,
         trust_state: "unknown".into(),
     }
 }

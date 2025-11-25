@@ -115,6 +115,23 @@ impl FileService {
         Ok(FileView::from_record(record))
     }
 
+    pub async fn import_blob(&self, data: Vec<u8>) -> Result<String> {
+        if data.is_empty() {
+            return Err(anyhow!("blob data may not be empty"));
+        }
+        let bytes = Bytes::from(data);
+        let mut temp_tag = self
+            .blobs
+            .add_bytes(bytes)
+            .temp_tag()
+            .await
+            .context("failed to store blob in iroh-blobs store")?;
+        let hash_info = temp_tag.hash_and_format();
+        let blob_hex = hash_info.hash.to_hex().to_string();
+        temp_tag.leak();
+        Ok(blob_hex)
+    }
+
     pub fn list_post_files(&self, post_id: &str) -> Result<Vec<FileView>> {
         let base = self.paths.base.clone();
         self.database.with_repositories(|repos| {
@@ -184,7 +201,7 @@ pub struct SaveFileInput {
     pub data: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct FileView {
     pub id: String,
     pub post_id: String,
@@ -206,7 +223,7 @@ pub struct FileDownload {
 }
 
 impl FileView {
-    fn from_record(record: FileRecord) -> Self {
+    pub fn from_record(record: FileRecord) -> Self {
         Self {
             id: record.id,
             post_id: record.post_id,

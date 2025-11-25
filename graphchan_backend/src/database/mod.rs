@@ -29,7 +29,10 @@ pub(crate) const MIGRATIONS: &str = r#"
         iroh_peer_id TEXT UNIQUE,
         gpg_fingerprint TEXT,
         last_seen TEXT,
-        trust_state TEXT DEFAULT 'unknown'
+        trust_state TEXT DEFAULT 'unknown',
+        avatar_file_id TEXT,
+        username TEXT,
+        bio TEXT
     );
 
     CREATE TABLE IF NOT EXISTS threads (
@@ -76,6 +79,11 @@ pub(crate) const MIGRATIONS: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_posts_thread ON posts(thread_id);
     CREATE INDEX IF NOT EXISTS idx_post_relationships_child ON post_relationships(child_id);
     CREATE INDEX IF NOT EXISTS idx_files_post ON files(post_id);
+
+    -- Migrations for new fields
+    -- ALTER TABLE peers ADD COLUMN avatar_file_id TEXT;
+    -- ALTER TABLE peers ADD COLUMN username TEXT;
+    -- ALTER TABLE peers ADD COLUMN bio TEXT;
 "#;
 
 #[derive(Clone)]
@@ -103,6 +111,7 @@ impl Database {
             conn.execute_batch(MIGRATIONS)?;
             self.ensure_node_identity_schema_locked(conn)?;
             self.ensure_files_schema_locked(conn)?;
+            self.ensure_avatar_column(conn)?;
             Ok(())
         })?;
         Ok(self.newly_created)
@@ -233,5 +242,24 @@ impl Database {
             .lock()
             .map_err(|_| anyhow!("database mutex poisoned"))?;
         f(&guard)
+    }
+    fn ensure_avatar_column(&self, conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare("PRAGMA table_info(peers)")?;
+        let mut has_avatar = false;
+        let rows = stmt.query_map([], |row| {
+            let name: String = row.get(1)?;
+            Ok(name)
+        })?;
+        for row in rows {
+            let name = row?;
+            if name.eq_ignore_ascii_case("avatar_file_id") {
+                has_avatar = true;
+                break;
+            }
+        }
+        if !has_avatar {
+            conn.execute("ALTER TABLE peers ADD COLUMN avatar_file_id TEXT", [])?;
+        }
+        Ok(())
     }
 }

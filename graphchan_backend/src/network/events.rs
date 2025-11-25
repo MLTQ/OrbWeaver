@@ -29,12 +29,14 @@ pub enum EventPayload {
     FileAvailable(FileAnnouncement),
     FileRequest(FileRequest),
     FileChunk(FileChunk),
+    ProfileUpdate(ProfileUpdate),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileAnnouncement {
     pub id: String,
     pub post_id: String,
+    pub thread_id: String,
     pub original_name: Option<String>,
     pub mime: Option<String>,
     pub size_bytes: Option<i64>,
@@ -53,6 +55,15 @@ pub struct FileChunk {
     pub file_id: String,
     pub data: Vec<u8>,
     pub eof: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileUpdate {
+    pub peer_id: String,
+    pub avatar_file_id: Option<String>,
+    pub ticket: Option<BlobTicket>,
+    pub username: Option<String>,
+    pub bio: Option<String>,
 }
 
 #[derive(Debug)]
@@ -202,11 +213,12 @@ fn topic_for_payload(payload: &EventPayload) -> String {
         EventPayload::ThreadSnapshot(snapshot) => format!("thread:{}", snapshot.thread.id.clone()),
         EventPayload::PostUpdate(post) => format!("thread:{}", post.thread_id.clone()),
         EventPayload::FileAvailable(announcement) => {
-            format!("file:{}", announcement.id.clone())
+            format!("thread:{}", announcement.thread_id.clone())
         }
         EventPayload::FileRequest(request) => {
             format!("file-request:{}", request.file_id.clone())
         }
         EventPayload::FileChunk(chunk) => format!("file-chunk:{}", chunk.file_id.clone()),
+        EventPayload::ProfileUpdate(_) => "graphchan-global".to_string(),
     }
 }

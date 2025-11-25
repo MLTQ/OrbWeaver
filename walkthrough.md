@@ -1,71 +1,61 @@
-# Graphchan TypeScript Frontend Walkthrough
+# Walkthrough - Identity Expansion and Avatar Fixes
 
-This document details the new TypeScript frontend for Graphchan, designed to replace the existing Rust frontend while maintaining full compatibility with the Rust backend.
+## Changes
 
-## 1. Overview
+### Backend (`graphchan_backend`)
 
-The new frontend is built with **Vite + React + TypeScript**. It features a "slick but retro, minimal but high tech" aesthetic inspired by Neon Genesis Evangelion and Bloomberg terminals.
+1.  **Database Schema**:
+    *   Added `username` and `bio` columns to the `peers` table.
+    *   Updated `PeerRepository` to handle these new fields in `upsert`, `get`, and `list`.
+    *   Updated `PeerRecord` struct to include `username` and `bio`.
 
-### Key Features
-*   **Dashboard**: Real-time system health, network status, and recent activity.
-*   **Thread Index**: Searchable list of threads with metadata.
-*   **Thread View**:
-    *   **List Mode**: Traditional linear post view.
-    *   **Graph Mode**: Force-directed graph visualization of the thread structure (D3.js).
-    *   **Timeline Mode**: Placeholder for future chronological projection.
-*   **Posting**: Create threads and replies with file attachments (Images, Videos).
-*   **Identity**: Manage local identity and P2P connections (Friend Codes).
-*   **Media**: Inline rendering of images and videos.
+2.  **API**:
+    *   Added `POST /identity/profile` endpoint to update username and bio.
+    *   Updated `upload_avatar` to broadcast profile updates with the new fields.
+    *   Updated `PeerView` to include `username` and `bio`.
 
-## 2. Setup & Running
+3.  **Network**:
+    *   Updated `ProfileUpdate` event to include `username` and `bio`.
+    *   Updated `ingest.rs` to apply profile updates to the database.
 
-### Prerequisites
-*   Node.js (v16+)
-*   Running `graphchan_backend` (default: `http://localhost:8080`)
+4.  **Performance & Stability**:
+    *   Updated `PostView` to include `files: Vec<FileView>`.
+    *   Updated `ThreadService` to populate files when fetching threads/posts.
+    *   This eliminates the N+1 problem where the frontend was making a separate request for files for every post, causing "Too many open files" errors.
 
-### Installation
-```bash
-cd graphchan_ts_frontend
-npm install
-```
+### Frontend (`graphchan_frontend`)
 
-### Development Server
-To start the development server:
-```bash
-npm run dev
-```
-Access the app at `http://localhost:5173`.
+1.  **UI**:
+    *   Updated `IdentityDrawer` to allow editing username and bio.
+    *   Added "Back to My Identity" button when viewing other profiles.
+    *   Updated `ThreadView` to display author username and avatar.
+    *   Implemented click-to-view profile on post authors.
 
-### Production Build
-To build for production:
-```bash
-npm run build
-```
-The artifacts will be in `dist/`.
+2.  **State Management**:
+    *   Added `username_input` and `bio_input` to `IdentityState`.
+    *   Added `inspected_peer` to `IdentityState` for viewing other profiles.
+    *   Updated `ThreadLoaded` handler to populate attachments directly from `PostView`, removing the need for separate file loading tasks.
+    *   Reduced `MAX_CONCURRENT_DOWNLOADS` from 20 to 4 to prevent overwhelming the backend.
+    *   Fixed image loading panic by correctly selecting between blob URL (if `blob_id` exists) and file URL.
 
-## 3. Project Structure
+3.  **API Client**:
+    *   Added `update_profile` method to send profile updates to the backend.
 
-*   `src/api/`: Strongly-typed API client using `axios`.
-*   `src/components/`: Reusable UI components (`Layout`, `Post`, `ThreadGraph`).
-*   `src/pages/`: Application pages (`Dashboard`, `ThreadList`, `ThreadView`, `Identity`).
-*   `src/index.css`: Global retro/high-tech theme variables and styles.
+## Verification Results
 
-## 4. Aesthetic & Design
+### Automated Tests
+*   `cargo check` passes for both backend and frontend.
 
-The design uses a custom CSS system (no Tailwind) with:
-*   **Colors**: Dark background (`#050505`), Neon Orange (`#ff9900`), and Cyan (`#00f3ff`) accents.
-*   **Typography**: Monospace fonts (`Consolas`, `Courier New`) for a terminal feel.
-*   **Visuals**: Scanline overlays, grid backgrounds, and high-contrast borders.
+### Manual Verification
+1.  **Backend API**:
+    *   Verified `GET /peers/self` returns correct initial state.
+    *   Verified `POST /identity/profile` successfully updates username and bio.
+    *   Verified `GET /peers/self` reflects the updates.
 
-## 5. Verification
+2.  **File Loading**:
+    *   Verified that file loading no longer causes "Too many open files" errors by batching file metadata retrieval.
+    *   Verified that image URLs are correctly resolved to `/blobs/:hash` or `/files/:id`.
 
-The project has been successfully built using `npm run build`.
-*   **Linting**: All TypeScript errors and unused variables have been resolved.
-*   **Routing**: `react-router-dom` handles navigation between views.
-*   **API**: The client is configured to talk to `localhost:8080` by default.
-
-## 6. Next Steps
-
-*   Implement the **Timeline View** logic (currently a placeholder).
-*   Add more sophisticated graph interactions (filtering, expansion).
-*   Implement the **4chan Importer** UI (backend support required).
+## Next Steps
+*   Test the UI interactions manually (editing profile, clicking authors).
+*   Verify avatar uploading and rendering in the UI.

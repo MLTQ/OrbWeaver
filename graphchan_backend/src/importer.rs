@@ -94,7 +94,7 @@ pub async fn import_fourchan_thread(state: &AppState, url: &str) -> Result<Strin
                 .clone()
                 .unwrap_or_else(|| format!("{}", tim));
             if let Err(e) =
-                download_and_save_image(&file_service, &state, &board, tim, ext, &filename, &created_op.id).await
+                download_and_save_image(&file_service, &state, &board, tim, ext, &filename, &created_op.id, &graph_thread_id).await
             {
                 tracing::warn!("Failed to upload OP image: {}", e);
             }
@@ -135,7 +135,7 @@ pub async fn import_fourchan_thread(state: &AppState, url: &str) -> Result<Strin
         if let (Some(tim), Some(ext)) = (post.tim, post.ext.as_ref()) {
             let filename = post.filename.clone().unwrap_or_else(|| format!("{}", tim));
             if let Err(e) =
-                download_and_save_image(&file_service, &state, &board, tim, ext, &filename, &created.id).await
+                download_and_save_image(&file_service, &state, &board, tim, ext, &filename, &created.id, &graph_thread_id).await
             {
                 tracing::warn!("Failed to upload image for post {}: {}", post.no, e);
             }
@@ -153,6 +153,7 @@ async fn download_and_save_image(
     ext: &str,
     filename: &str,
     post_id: &str,
+    thread_id: &str,
 ) -> Result<()> {
     // 4chan image URL format: https://i.4cdn.org/{board}/{tim}{ext}
     let image_url = format!("https://i.4cdn.org/{}/{}{}", board, tim, ext);
@@ -167,16 +168,10 @@ async fn download_and_save_image(
         .get(&image_url)
         .send()
         .await
-        .context("failed to fetch image")?
-        .error_for_status()
-        .context("image download failed")?;
+        .context("failed to download image from 4chan")?;
 
-    if let Some(ct) = response.headers().get(reqwest::header::CONTENT_TYPE) {
-        if let Ok(ct_str) = ct.to_str() {
-            if ct_str.contains("text/html") {
-                anyhow::bail!("received HTML instead of image (likely Cloudflare or 404)");
-            }
-        }
+    if !response.status().is_success() {
+        anyhow::bail!("failed to download image: status {}", response.status());
     }
 
     let bytes = response.bytes().await.context("failed to read image bytes")?;
@@ -209,6 +204,7 @@ async fn download_and_save_image(
     let announcement = crate::network::FileAnnouncement {
         id: file_view.id.clone(),
         post_id: file_view.post_id.clone(),
+        thread_id: thread_id.to_string(),
         original_name: file_view.original_name.clone(),
         mime: file_view.mime.clone(),
         size_bytes: file_view.size_bytes,

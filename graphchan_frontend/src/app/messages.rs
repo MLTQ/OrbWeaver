@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use eframe::egui;
+use log::error;
 
-use crate::models::{FileResponse, PostView, ThreadDetails, ThreadSummary};
+use crate::models::{FileResponse, PeerView, PostView, ThreadDetails, ThreadSummary};
 
 use super::state::{
     CreateThreadState, GraphNode, LoadedImage, ThreadDisplayMode, ThreadState, ViewState,
@@ -31,6 +32,11 @@ pub enum AppMessage {
         file_id: String,
         result: Result<LoadedImage, String>,
     },
+    IdentityLoaded(Result<PeerView, anyhow::Error>),
+    PeersLoaded(Result<Vec<PeerView>, anyhow::Error>),
+    AvatarUploaded(Result<(), anyhow::Error>),
+    ProfileUpdated(Result<(), anyhow::Error>),
+    ThreadFilesSelected(Vec<std::path::PathBuf>),
 }
 
 pub(super) fn process_messages(app: &mut GraphchanApp) {
@@ -68,6 +74,12 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                                 state.graph_nodes = build_initial_graph(&details.posts);
                                 state.chronological_nodes = HashMap::new();
                                 state.sim_start_time = None;
+                                
+                                // Update global peer cache
+                                for peer in &details.peers {
+                                    app.peers.insert(peer.id.clone(), peer.clone());
+                                }
+                                
                                 state.details = Some(details);
                                 state.graph_zoom = 1.0;
                                 state.graph_offset = egui::vec2(0.0, 0.0);
@@ -80,15 +92,42 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                                 state.repulsion_force = 500.0;
                                 state.sim_paused = false;
                                 state.draft_attachments.clear();
+                                
+                                // Populate attachments from posts
+                                // Populate attachments from posts
+                                let mut downloads = Vec::new();
+                                if let Some(details) = &state.details {
+                                    for post in &details.posts {
+                                        if !post.files.is_empty() {
+                                            state.attachments.insert(post.id.clone(), post.files.clone());
+                                            
+                                            // Trigger image downloads
+                                            for file in &post.files {
+                                                if let Some(mime) = &file.mime {
+                                                    if mime.starts_with("image/") {
+                                                        let url = if let Some(blob_id) = &file.blob_id {
+                                                            crate::app::resolve_blob_url(&app.base_url_input, blob_id)
+                                                        } else {
+                                                            crate::app::resolve_file_url(&app.base_url_input, &file.id)
+                                                        };
+                                                        downloads.push((file.id.clone(), url));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                // Spawn downloads after releasing borrow
+                                for (file_id, url) in downloads {
+                                    app.spawn_load_image(&file_id, &url);
+                                }
                             }
                             Err(err) => {
                                 state.error = Some(err.to_string());
                             }
                         }
                     }
-                }
-                for post_id in post_ids {
-                    app.spawn_load_attachments_for_post(&thread_id, &post_id);
                 }
             }
             AppMessage::ThreadCreated(result) => {
@@ -133,11 +172,8 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                                 .or_insert_with(Vec::new);
                         }
                         app.view = ViewState::Thread(state);
-                        let post_ids: Vec<String> =
-                            details.posts.iter().map(|p| p.id.clone()).collect();
-                        for post_id in post_ids {
-                            app.spawn_load_attachments_for_post(&summary.id, &post_id);
-                        }
+                        // Attachments are already populated in ThreadDetails
+                        app.spawn_load_threads();
                         app.spawn_load_threads();
                     }
                     Err(err) => {
@@ -146,7 +182,6 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                 }
             }
             AppMessage::PostCreated { thread_id, result } => {
-                let mut attachment_target: Option<String> = None;
                 if let ViewState::Thread(state) = &mut app.view {
                     if state.summary.id == thread_id {
                         state.new_post_sending = false;
@@ -169,18 +204,34 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                                         pinned: false,
                                     },
                                 );
-                                attachment_target = Some(post.id.clone());
                                 app.info_banner = Some("Post published".into());
-                                state.reply_to.clear();
+                                let mut downloads = Vec::new();
+                                if !post.files.is_empty() {
+                                    state.attachments.insert(post.id.clone(), post.files.clone());
+                                    // Trigger image downloads
+                                    for file in &post.files {
+                                        if let Some(mime) = &file.mime {
+                                            if mime.starts_with("image/") {
+                                                let url = if let Some(blob_id) = &file.blob_id {
+                                                    crate::app::resolve_blob_url(&app.base_url_input, blob_id)
+                                                } else {
+                                                    crate::app::resolve_file_url(&app.base_url_input, &file.id)
+                                                };
+                                                downloads.push((file.id.clone(), url));
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                for (file_id, url) in downloads {
+                                    app.spawn_load_image(&file_id, &url);
+                                }
                             }
                             Err(err) => {
                                 state.new_post_error = Some(err.to_string());
                             }
                         }
                     }
-                }
-                if let Some(post_id) = attachment_target {
-                    app.spawn_load_attachments_for_post(&thread_id, &post_id);
                 }
             }
             AppMessage::PostAttachmentsLoaded {
@@ -259,11 +310,65 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                         app.image_pending.insert(file_id, img);
                     }
                     Err(e) => {
+                        error!("Failed to load image {}: {}", file_id, e);
                         app.image_errors.insert(file_id, e);
                     }
                 }
                 // Download completed, process next item in queue
                 app.on_download_complete();
+            }
+            AppMessage::IdentityLoaded(result) => {
+                let state = &mut app.identity_state;
+                match result {
+                    Ok(peer) => {
+                        state.local_peer = Some(peer);
+                        state.error = None;
+                    }
+                    Err(err) => {
+                        state.error = Some(format!("Failed to load identity: {err}"));
+                    }
+                }
+            }
+            AppMessage::PeersLoaded(result) => {
+                match result {
+                    Ok(peers) => {
+                        for peer in peers {
+                            app.peers.insert(peer.id.clone(), peer);
+                        }
+                    }
+                    Err(err) => {
+                        error!("Failed to load peers: {err}");
+                    }
+                }
+            }
+            AppMessage::AvatarUploaded(result) => {
+                let state = &mut app.identity_state;
+                state.uploading = false;
+                match result {
+                    Ok(()) => {
+                        state.avatar_path = None;
+                        // Reload identity to get new avatar ID
+                        app.spawn_load_identity();
+                    }
+                    Err(err) => {
+                        state.error = Some(format!("Failed to upload avatar: {err}"));
+                    }
+                }
+            }
+            AppMessage::ProfileUpdated(result) => {
+                let state = &mut app.identity_state;
+                state.uploading = false;
+                match result {
+                    Ok(()) => {
+                        app.spawn_load_identity();
+                    }
+                    Err(err) => {
+                        state.error = Some(format!("Failed to update profile: {err}"));
+                    }
+                }
+            }
+            AppMessage::ThreadFilesSelected(files) => {
+                app.create_thread.files.extend(files);
             }
         }
     }

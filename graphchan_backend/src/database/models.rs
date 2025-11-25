@@ -4,10 +4,13 @@ use serde::{Deserialize, Serialize};
 pub struct PeerRecord {
     pub id: String,
     pub alias: Option<String>,
+    pub username: Option<String>,
+    pub bio: Option<String>,
     pub friendcode: Option<String>,
     pub iroh_peer_id: Option<String>,
     pub gpg_fingerprint: Option<String>,
     pub last_seen: Option<String>,
+    pub avatar_file_id: Option<String>,
     pub trust_state: String,
 }
 

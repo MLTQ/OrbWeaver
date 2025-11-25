@@ -1,7 +1,8 @@
 use eframe::egui::{self, Align2, Color32, Context};
 
 use super::super::state::CreateThreadState;
-use super::super::GraphchanApp;
+
+use super::super::{tasks, GraphchanApp};
 
 impl GraphchanApp {
     pub(crate) fn render_create_thread_dialog(&mut self, ctx: &Context) {
@@ -29,6 +30,20 @@ impl GraphchanApp {
                         .desired_rows(6)
                         .hint_text("Write the opening post..."),
                 );
+                ui.add_space(6.0);
+                
+                if !self.create_thread.files.is_empty() {
+                    ui.label("Attachments:");
+                    for file in &self.create_thread.files {
+                         ui.label(file.file_name().unwrap_or_default().to_string_lossy());
+                    }
+                    ui.add_space(6.0);
+                }
+                
+                if ui.button("Attach Files").clicked() {
+                    tasks::pick_files(self.tx.clone());
+                }
+
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     if self.create_thread.submitting {

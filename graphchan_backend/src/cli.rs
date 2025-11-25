@@ -473,9 +473,17 @@ impl CliSession {
             .as_deref()
             .and_then(|blob| self.network.make_blob_ticket(blob));
         view.ticket = ticket.as_ref().map(|t| t.to_string());
+        let thread_id_actual = self.thread_service
+            .get_post(thread_id)
+            .ok()
+            .flatten()
+            .map(|p| p.thread_id)
+            .unwrap_or_else(|| "unknown".to_string());
+
         let announcement = crate::network::FileAnnouncement {
             id: view.id.clone(),
             post_id: view.post_id.clone(),
+            thread_id: thread_id_actual,
             original_name: view.original_name.clone(),
             mime: view.mime.clone(),
             size_bytes: view.size_bytes,

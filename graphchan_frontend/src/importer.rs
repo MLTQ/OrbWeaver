@@ -69,7 +69,7 @@ pub fn import_fourchan_thread(api: &ApiClient, url: &str) -> Result<String> {
     }
 
     let details = api
-        .create_thread(&thread_input)
+        .create_thread(&thread_input, &[])
         .context("failed to create thread in backend")?;
     let graph_thread_id = details.thread.id.clone();
 

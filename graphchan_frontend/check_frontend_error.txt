@@ -1,0 +1,121 @@
+warning: `/Users/max/.cargo/config` is deprecated in favor of `config.toml`
+note: if you need to support cargo 1.38 or earlier, you can symlink `config` to `config.toml`
+    Checking graphchan_frontend v0.1.0 (/Users/max/Code/OrbWeaver/graphchan_frontend)
+error[E0425]: cannot find function `resolve_file_url` in module `crate::app`
+   --> graphchan_frontend/src/app/messages.rs:106:79
+    |
+106 | ...                   let url = crate::app::resolve_file_url(&app.base_url_input, &file.id);
+    |                                             ^^^^^^^^^^^^^^^^ help: a function with a similar name exists: `resolve_blob_url`
+    |
+   ::: graphchan_frontend/src/app/mod.rs:70:1
+    |
+ 70 | pub(crate) fn resolve_blob_url(base_url: &str, blob_id: &str) -> String {
+    | ----------------------------------------------------------------------- similarly named function `resolve_blob_url` defined here
+
+error[E0425]: cannot find value `attachment_target` in this scope
+   --> graphchan_frontend/src/app/messages.rs:196:33
+    |
+196 | ...                   attachment_target = Some(post.id.clone());
+    |                       ^^^^^^^^^^^^^^^^^
+    |
+help: you might have meant to introduce a new binding
+    |
+196 |                                 let attachment_target = Some(post.id.clone());
+    |                                 +++
+
+error[E0425]: cannot find function `resolve_file_url` in module `crate::app`
+   --> graphchan_frontend/src/app/messages.rs:204:71
+    |
+204 | ...                   let url = crate::app::resolve_file_url(&app.base_url_input, &file.id);
+    |                                             ^^^^^^^^^^^^^^^^ help: a function with a similar name exists: `resolve_blob_url`
+    |
+   ::: graphchan_frontend/src/app/mod.rs:70:1
+    |
+ 70 | pub(crate) fn resolve_blob_url(base_url: &str, blob_id: &str) -> String {
+    | ----------------------------------------------------------------------- similarly named function `resolve_blob_url` defined here
+
+error[E0425]: cannot find value `attachment_target` in this scope
+   --> graphchan_frontend/src/app/messages.rs:217:40
+    |
+217 |                 if let Some(post_id) = attachment_target {
+    |                                        ^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0599]: no method named `spawn_load_attachments_for_post` found for mutable reference `&mut GraphchanApp` in the current scope
+   --> graphchan_frontend/src/app/messages.rs:218:25
+    |
+218 |                     app.spawn_load_attachments_for_post(&thread_id, &post_id);
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: there is a method `spawn_load_threads` with a similar name, but with different arguments
+   --> graphchan_frontend/src/app/mod.rs:114:5
+    |
+114 |     fn spawn_load_threads(&mut self) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `scale`
+  --> graphchan_frontend/src/app/ui/graph.rs:77:82
+   |
+77 | fn step_graph_layout(nodes: &mut HashMap<String, GraphNode>, posts: &[PostView], scale: f32, thread_id: &str, repulsion_force: f32) {
+   |                                                                                  ^^^^^
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+help: if this is intentional, prefix it with an underscore
+   |
+77 | fn step_graph_layout(nodes: &mut HashMap<String, GraphNode>, posts: &[PostView], _scale: f32, thread_id: &str, repulsion_force: f32) {
+   |                                                                                  +
+help: you might have meant to pattern match on the similarly named constant `TOP_MARGIN`
+   |
+77 - fn step_graph_layout(nodes: &mut HashMap<String, GraphNode>, posts: &[PostView], scale: f32, thread_id: &str, repulsion_force: f32) {
+77 + fn step_graph_layout(nodes: &mut HashMap<String, GraphNode>, posts: &[PostView], app::ui::chronological::TOP_MARGIN: f32, thread_id: &str, repulsion_force: f32) {
+   |
+
+warning: unused variable: `state`
+   --> graphchan_frontend/src/app/ui/graph.rs:520:42
+    |
+520 | fn render_node_header(ui: &mut egui::Ui, state: &mut ThreadState, post: &PostView, zoom: f32) {
+    |                                          ^^^^^ help: if this is intentional, prefix it with an underscore: `_state`
+
+warning: unused variable: `thread_id`
+   --> graphchan_frontend/src/app/ui/thread.rs:149:17
+    |
+149 |             let thread_id = state.summary.id.clone();
+    |                 ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_thread_id`
+
+warning: unused variable: `attachments`
+   --> graphchan_frontend/src/app/ui/thread.rs:150:17
+    |
+150 |             let attachments = &state.attachments;
+    |                 ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_attachments`
+
+warning: unused variable: `attachments_loading`
+   --> graphchan_frontend/src/app/ui/thread.rs:151:17
+    |
+151 |             let attachments_loading = &state.attachments_loading;
+    |                 ^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_attachments_loading`
+
+warning: unused variable: `attachments_errors`
+   --> graphchan_frontend/src/app/ui/thread.rs:152:17
+    |
+152 |             let attachments_errors = &state.attachments_errors;
+    |                 ^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_attachments_errors`
+
+warning: unused variable: `go_back`
+   --> graphchan_frontend/src/app/mod.rs:320:17
+    |
+320 |         let mut go_back = false;
+    |                 ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_go_back`
+
+warning: variable does not need to be mutable
+   --> graphchan_frontend/src/app/mod.rs:320:13
+    |
+320 |         let mut go_back = false;
+    |             ----^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+Some errors have detailed explanations: E0425, E0599.
+For more information about an error, try `rustc --explain E0425`.
+warning: `graphchan_frontend` (lib) generated 8 warnings
+error: could not compile `graphchan_frontend` (lib) due to 5 previous errors; 8 warnings emitted

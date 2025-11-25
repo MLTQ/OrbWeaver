@@ -30,9 +30,9 @@ pub fn load_thread(client: ApiClient, tx: Sender<AppMessage>, thread_id: String)
     });
 }
 
-pub fn create_thread(client: ApiClient, tx: Sender<AppMessage>, payload: CreateThreadInput) {
+pub fn create_thread(client: ApiClient, tx: Sender<AppMessage>, payload: CreateThreadInput, files: Vec<std::path::PathBuf>) {
     thread::spawn(move || {
-        let result = client.create_thread(&payload);
+        let result = client.create_thread(&payload, &files);
         if tx.send(AppMessage::ThreadCreated(result)).is_err() {
             error!("failed to send ThreadCreated message");
         }
@@ -52,18 +52,32 @@ pub fn create_post(
         match result {
             Ok(post) => {
                 let post_id = post.id.clone();
+                let mut uploaded_files = Vec::new();
+                
                 // 2. Upload Attachments
                 for path in attachments {
-                    if let Err(e) = client.upload_file(&post_id, &path) {
-                        error!("Failed to upload attachment {:?}: {}", path, e);
-                        // We continue trying to upload others even if one fails
+                    match client.upload_file(&post_id, &path) {
+                        Ok(file) => uploaded_files.push(file),
+                        Err(e) => error!("Failed to upload attachment {:?}: {}", path, e),
                     }
                 }
                 
                 // 3. Send Success Message
-                let message = AppMessage::PostCreated { thread_id, result: Ok(post) };
+                let message = AppMessage::PostCreated { thread_id: thread_id.clone(), result: Ok(post) };
                 if tx.send(message).is_err() {
                     error!("failed to send PostCreated message");
+                }
+
+                // 4. Send Attachments Message if any were uploaded
+                if !uploaded_files.is_empty() {
+                    let attach_msg = AppMessage::PostAttachmentsLoaded {
+                        thread_id,
+                        post_id,
+                        result: Ok(uploaded_files),
+                    };
+                    if tx.send(attach_msg).is_err() {
+                        error!("failed to send PostAttachmentsLoaded message");
+                    }
                 }
             }
             Err(e) => {
@@ -126,6 +140,53 @@ pub fn download_image(tx: Sender<AppMessage>, file_id: String, url: String) {
 
         if tx.send(message).is_err() {
             error!("failed to send ImageLoaded message");
+        }
+    });
+}
+
+pub fn load_identity(client: ApiClient, tx: Sender<AppMessage>) {
+    thread::spawn(move || {
+        let result = client.get_self_peer();
+        if tx.send(AppMessage::IdentityLoaded(result)).is_err() {
+            error!("failed to send IdentityLoaded message");
+        }
+    });
+}
+
+pub fn upload_avatar(client: ApiClient, tx: Sender<AppMessage>, path: String) {
+    thread::spawn(move || {
+        let path = std::path::Path::new(&path);
+        let result = client.upload_avatar(path);
+        if tx.send(AppMessage::AvatarUploaded(result)).is_err() {
+            error!("failed to send AvatarUploaded message");
+        }
+    });
+}
+
+pub fn update_profile(client: ApiClient, tx: Sender<AppMessage>, username: Option<String>, bio: Option<String>) {
+    thread::spawn(move || {
+        let result = client.update_profile(username, bio);
+        if tx.send(AppMessage::ProfileUpdated(result)).is_err() {
+            error!("failed to send ProfileUpdated message");
+        }
+    });
+}
+
+pub fn load_peers(client: ApiClient, tx: Sender<AppMessage>) {
+    thread::spawn(move || {
+        let result = client.list_peers();
+        if tx.send(AppMessage::PeersLoaded(result)).is_err() {
+            error!("failed to send PeersLoaded message");
+        }
+    });
+}
+
+pub fn pick_files(tx: Sender<AppMessage>) {
+    thread::spawn(move || {
+        if let Some(files) = rfd::FileDialog::new().pick_files() {
+            if tx.send(AppMessage::ThreadFilesSelected(files)).is_err() {
+                error!("failed to send ThreadFilesSelected message");
+            }
         }
     });
 }

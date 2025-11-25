@@ -296,15 +296,18 @@ impl<'conn> PeerRepository for SqlitePeerRepository<'conn> {
     fn upsert(&self, record: &PeerRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO peers (id, alias, friendcode, iroh_peer_id, gpg_fingerprint, last_seen, trust_state)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            INSERT INTO peers (id, alias, friendcode, iroh_peer_id, gpg_fingerprint, last_seen, trust_state, avatar_file_id, username, bio)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             ON CONFLICT(id) DO UPDATE SET
                 alias = excluded.alias,
                 friendcode = excluded.friendcode,
                 iroh_peer_id = excluded.iroh_peer_id,
                 gpg_fingerprint = excluded.gpg_fingerprint,
                 last_seen = excluded.last_seen,
-                trust_state = excluded.trust_state
+                trust_state = excluded.trust_state,
+                avatar_file_id = excluded.avatar_file_id,
+                username = excluded.username,
+                bio = excluded.bio
             "#,
             params![
                 record.id,
@@ -313,7 +316,10 @@ impl<'conn> PeerRepository for SqlitePeerRepository<'conn> {
                 record.iroh_peer_id,
                 record.gpg_fingerprint,
                 record.last_seen,
-                record.trust_state
+                record.trust_state,
+                record.avatar_file_id,
+                record.username,
+                record.bio
             ],
         )?;
         Ok(())
@@ -324,7 +330,7 @@ impl<'conn> PeerRepository for SqlitePeerRepository<'conn> {
             .conn
             .query_row(
                 r#"
-                SELECT id, alias, friendcode, iroh_peer_id, gpg_fingerprint, last_seen, trust_state
+                SELECT id, alias, friendcode, iroh_peer_id, gpg_fingerprint, last_seen, trust_state, avatar_file_id, username, bio
                 FROM peers
                 WHERE id = ?1
                 "#,
@@ -338,6 +344,9 @@ impl<'conn> PeerRepository for SqlitePeerRepository<'conn> {
                         gpg_fingerprint: row.get(4)?,
                         last_seen: row.get(5)?,
                         trust_state: row.get(6)?,
+                        avatar_file_id: row.get(7)?,
+                        username: row.get(8)?,
+                        bio: row.get(9)?,
                     })
                 },
             )
@@ -348,7 +357,7 @@ impl<'conn> PeerRepository for SqlitePeerRepository<'conn> {
     fn list(&self) -> Result<Vec<PeerRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, alias, friendcode, iroh_peer_id, gpg_fingerprint, last_seen, trust_state
+            SELECT id, alias, friendcode, iroh_peer_id, gpg_fingerprint, last_seen, trust_state, avatar_file_id, username, bio
             FROM peers
             ORDER BY datetime(COALESCE(last_seen, '1970-01-01T00:00:00Z')) DESC
             "#,
@@ -362,6 +371,9 @@ impl<'conn> PeerRepository for SqlitePeerRepository<'conn> {
                 gpg_fingerprint: row.get(4)?,
                 last_seen: row.get(5)?,
                 trust_state: row.get(6)?,
+                avatar_file_id: row.get(7)?,
+                username: row.get(8)?,
+                bio: row.get(9)?,
             })
         })?;
         let mut peers = Vec::new();
@@ -509,6 +521,7 @@ mod tests {
             gpg_fingerprint: None,
             last_seen: None,
             trust_state: "unknown".into(),
+            avatar_file_id: None,
         };
         repos.peers().upsert(&peer).unwrap();
 
@@ -552,6 +565,7 @@ mod tests {
             gpg_fingerprint: Some("fingerprint".into()),
             last_seen: Some("2024-01-01T00:00:00Z".into()),
             trust_state: "trusted".into(),
+            avatar_file_id: None,
         };
         repos.peers().upsert(&peer).unwrap();
         let fetched = repos.peers().get("peer-1").unwrap().unwrap();

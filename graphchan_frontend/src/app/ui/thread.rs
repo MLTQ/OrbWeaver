@@ -8,6 +8,35 @@ use super::super::state::{ThreadDisplayMode, ThreadState, ViewState};
 use super::super::{format_timestamp, GraphchanApp};
 use super::{chronological, graph};
 
+pub enum ThreadAction {
+    None,
+    GoBack,
+    OpenThread(String),
+}
+
+fn render_post_body(ui: &mut egui::Ui, body: &str) -> Option<String> {
+    let mut clicked_thread = None;
+    for line in body.lines() {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            for (i, word) in line.split(' ').enumerate() {
+                if i > 0 {
+                    ui.label(" ");
+                }
+                if word.starts_with(">>>") {
+                    let thread_id = &word[3..];
+                    if ui.link(word).clicked() {
+                        clicked_thread = Some(thread_id.to_string());
+                    }
+                } else {
+                    ui.label(word);
+                }
+            }
+        });
+    }
+    clicked_thread
+}
+
 impl GraphchanApp {
     pub(crate) fn open_thread(&mut self, summary: ThreadSummary) {
         let thread_id = summary.id.clone();
@@ -41,18 +70,18 @@ impl GraphchanApp {
         self.spawn_load_thread(&thread_id);
     }
 
-    pub(crate) fn render_thread_view(
+    pub(crate) fn render_thread(
         &mut self,
         ui: &mut egui::Ui,
         state: &mut ThreadState,
-    ) -> bool {
-        let mut go_back = false;
+    ) -> ThreadAction {
+        let mut action = ThreadAction::None;
         let mut should_retry = false;
         let mut should_create_post = false;
 
         ui.horizontal(|ui| {
             if ui.button("← Back to catalog").clicked() {
-                go_back = true;
+                action = ThreadAction::GoBack;
             }
             ui.separator();
             ui.label(RichText::new(&state.summary.title).heading());
@@ -60,7 +89,7 @@ impl GraphchanApp {
 
         if state.is_loading {
             ui.add(egui::Spinner::new());
-            return go_back;
+            return action;
         }
 
         if let Some(err) = &state.error {
@@ -74,7 +103,7 @@ impl GraphchanApp {
                 let thread_id = state.summary.id.clone();
                 self.spawn_load_thread(&thread_id);
             }
-            return go_back;
+            return action;
         }
 
         ui.horizontal(|ui| {
@@ -141,10 +170,36 @@ impl GraphchanApp {
                                     );
                                 });
                                 if let Some(author) = &post.author_peer_id {
-                                    ui.label(format!("Author: {author}"));
+                                    let peer = self.peers.get(author).cloned();
+                                    ui.horizontal(|ui| {
+                                        let avatar_id = peer.as_ref().and_then(|p| p.avatar_file_id.clone());
+                                        if let Some(avatar_id) = avatar_id {
+                                            if let Some(texture) = self.image_textures.get(&avatar_id) {
+                                                ui.image(texture);
+                                            } else if let Some(err) = self.image_errors.get(&avatar_id) {
+                                                ui.colored_label(egui::Color32::RED, "Error");
+                                                ui.label(err);
+                                            } else {
+                                                let needs_download = !self.image_loading.contains(&avatar_id);
+                                                if needs_download {
+                                                    let url = crate::app::resolve_blob_url(&self.base_url_input, &avatar_id);
+                                                    self.spawn_download_image(&avatar_id, &url);
+                                                }
+                                                ui.spinner();
+                                            }
+                                        }
+                                        
+                                        let name = peer.as_ref().and_then(|p| p.username.as_deref()).unwrap_or(author);
+                                        if ui.link(format!("Author: {}", name)).clicked() {
+                                            self.show_identity = true;
+                                            self.identity_state.inspected_peer = peer.clone();
+                                        }
+                                    });
                                 }
                                 ui.separator();
-                                ui.label(&post.body);
+                                if let Some(thread_id) = render_post_body(ui, &post.body) {
+                                    action = ThreadAction::OpenThread(thread_id);
+                                }
                                 if !post.parent_post_ids.is_empty() {
                                     ui.add_space(4.0);
                                     ui.label(format!(
@@ -154,29 +209,15 @@ impl GraphchanApp {
                                 }
                                 ui.add_space(6.0);
 
-                                if let Some(err) = attachments_errors.get(&post.id) {
-                                    ui.colored_label(Color32::LIGHT_RED, err);
-                                } else if attachments_loading.contains(&post.id) {
-                                    ui.horizontal(|ui| {
-                                        ui.add(egui::Spinner::new());
-                                        ui.label("Loading attachments…");
-                                    });
-                                } else if let Some(files) = attachments.get(&post.id) {
-                                    if !files.is_empty() {
-                                        ui.label(RichText::new("Attachments").strong());
-                                        for file in files {
-                                            self.render_file_attachment(ui, file, &api_base);
-                                        }
+                                if !post.files.is_empty() {
+                                    ui.label(RichText::new("Attachments").strong());
+                                    for file in &post.files {
+                                        self.render_file_attachment(ui, file, &api_base);
                                     }
                                 }
                             });
 
-                        if !state.attachments.contains_key(&post.id)
-                            && !state.attachments_loading.contains(&post.id)
-                            && !state.attachments_errors.contains_key(&post.id)
-                        {
-                            self.spawn_load_attachments_for_post(&thread_id, &post.id);
-                        }
+
                     }
                 });
         }
@@ -194,7 +235,7 @@ impl GraphchanApp {
             self.spawn_create_post(state);
         }
 
-        go_back
+        action
     }
 
     fn render_floating_composer(&mut self, ctx: &egui::Context, state: &mut ThreadState) -> bool {

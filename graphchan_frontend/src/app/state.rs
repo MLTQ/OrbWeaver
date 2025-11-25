@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use eframe::egui;
 
-use crate::models::{FileResponse, ThreadDetails, ThreadSummary};
+use crate::models::{FileResponse, PeerView, ThreadDetails, ThreadSummary};
 
 #[derive(Default)]
 pub struct CreateThreadState {
@@ -10,6 +10,7 @@ pub struct CreateThreadState {
     pub body: String,
     pub submitting: bool,
     pub error: Option<String>,
+    pub files: Vec<std::path::PathBuf>,
 }
 
 #[derive(Default)]
@@ -23,6 +24,18 @@ pub struct ImporterState {
 pub enum ViewState {
     Catalog,
     Thread(ThreadState),
+}
+
+#[derive(Default)]
+pub struct IdentityState {
+    pub local_peer: Option<PeerView>,
+    pub avatar_path: Option<String>,
+    pub uploading: bool,
+    pub error: Option<String>,
+    pub username_input: String,
+    pub bio_input: String,
+    pub initialized_inputs: bool,
+    pub inspected_peer: Option<PeerView>,
 }
 
 pub struct ThreadState {

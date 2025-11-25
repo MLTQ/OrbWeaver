@@ -6,8 +6,8 @@ use reqwest::blocking::Client;
 use reqwest::Url;
 
 use crate::models::{
-    CreatePostInput, CreateThreadInput, FileResponse, PostResponse, PostView, ThreadDetails,
-    ThreadSummary,
+    CreatePostInput, CreateThreadInput, FileResponse, PeerView, PostResponse, PostView,
+    ThreadDetails, ThreadSummary,
 };
 
 static SHARED_CLIENT: OnceLock<Client> = OnceLock::new();
@@ -64,15 +64,55 @@ impl ApiClient {
         Ok(response.json()?)
     }
 
-    pub fn create_thread(&self, input: &CreateThreadInput) -> Result<ThreadDetails> {
+    pub fn create_thread(&self, input: &CreateThreadInput, files: &[std::path::PathBuf]) -> Result<ThreadDetails> {
         let url = self.url("/threads")?;
+        let mut form = reqwest::blocking::multipart::Form::new();
+        
+        let json = serde_json::to_string(input)?;
+        form = form.part("json", reqwest::blocking::multipart::Part::text(json).mime_str("application/json")?);
+        
+        for path in files {
+             form = form.file("file", path)?;
+        }
+
         let response = self
             .client
             .post(url)
-            .json(input)
+            .multipart(form)
             .send()?
             .error_for_status()?;
         Ok(response.json()?)
+    }
+
+    pub fn get_self_peer(&self) -> Result<PeerView> {
+        let url = self.url("/peers/self")?;
+        let response = self.client.get(url).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
+    pub fn list_peers(&self) -> Result<Vec<PeerView>> {
+        let url = self.url("/peers")?;
+        let response = self.client.get(url).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
+    pub fn upload_avatar(&self, path: &std::path::Path) -> Result<()> {
+        let url = self.url("/identity/avatar")?;
+        let form = reqwest::blocking::multipart::Form::new()
+            .file("file", path)?;
+        self.client
+            .post(url)
+            .multipart(form)
+            .send()?
+            .error_for_status()?;
+        Ok(())
+    }
+
+    pub fn update_profile(&self, username: Option<String>, bio: Option<String>) -> Result<()> {
+        let url = self.url("/identity")?;
+        let input = crate::models::UpdateProfileRequest { username, bio };
+        self.client.post(url).json(&input).send()?.error_for_status()?;
+        Ok(())
     }
 
     pub fn create_post(&self, thread_id: &str, input: &CreatePostInput) -> Result<PostView> {

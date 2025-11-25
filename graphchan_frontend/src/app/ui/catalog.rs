@@ -41,6 +41,7 @@ impl GraphchanApp {
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
                                     ui.label(format_timestamp(&thread.created_at));
+                                    ui.label(RichText::new(&thread.id).monospace().size(10.0));
                                 },
                             );
                         });

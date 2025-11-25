@@ -1,10 +1,12 @@
 use crate::config::GraphchanPaths;
 use crate::database::models::{FileRecord, PostRecord, ThreadRecord};
-use crate::database::repositories::{FileRepository, PostRepository, ThreadRepository};
+use crate::database::repositories::{FileRepository, PeerRepository, PostRepository, ThreadRepository};
 use crate::database::Database;
 use crate::network::events::{
     EventPayload, FileAnnouncement, FileChunk, FileRequest, InboundGossip, NetworkEvent,
+    ProfileUpdate,
 };
+use crate::peers::PeerService;
 use crate::threading::{PostView, ThreadDetails};
 use anyhow::Result;
 use blake3::Hasher;
@@ -76,7 +78,14 @@ fn handle_message(
             Ok(())
         }
         EventPayload::FileChunk(chunk) => apply_file_chunk(database, paths, chunk),
+        EventPayload::ProfileUpdate(update) => apply_profile_update(database, update),
     }
+}
+
+fn apply_profile_update(database: &Database, update: ProfileUpdate) -> Result<()> {
+    let service = PeerService::new(database.clone());
+    service.update_profile(&update.peer_id, update.avatar_file_id, update.username, update.bio)?;
+    Ok(())
 }
 
 fn apply_thread_snapshot(database: &Database, snapshot: ThreadDetails) -> Result<()> {
@@ -96,6 +105,25 @@ fn apply_thread_snapshot(database: &Database, snapshot: ThreadDetails) -> Result
         for post in posts {
             upsert_post(&posts_repo, &post)?;
         }
+        
+        // Ingest peers
+        let peers_repo = repos.peers();
+        for peer in snapshot.peers {
+            let record = crate::database::models::PeerRecord {
+                id: peer.id,
+                alias: peer.alias,
+                username: peer.username,
+                bio: peer.bio,
+                friendcode: peer.friendcode,
+                iroh_peer_id: peer.iroh_peer_id,
+                gpg_fingerprint: peer.gpg_fingerprint,
+                last_seen: peer.last_seen,
+                avatar_file_id: peer.avatar_file_id,
+                trust_state: peer.trust_state,
+            };
+            peers_repo.upsert(&record)?;
+        }
+
         Ok(())
     })
 }
@@ -302,8 +330,9 @@ fn apply_file_chunk(database: &Database, paths: &GraphchanPaths, chunk: FileChun
 mod tests {
     use super::*;
     use crate::config::GraphchanPaths;
-    use crate::database::models::{PostRecord, ThreadRecord};
-    use crate::database::repositories::{PostRepository, ThreadRepository};
+    use crate::database::models::{PeerRecord, PostRecord, ThreadRecord};
+    use crate::database::repositories::{PeerRepository, PostRepository, ThreadRepository};
+    use crate::database::Database;
     use crate::utils::now_utc_iso;
     use iroh::SecretKey;
     use iroh_base::EndpointAddr;
@@ -369,6 +398,7 @@ mod tests {
         let announcement = FileAnnouncement {
             id: "file-1".into(),
             post_id: "post-1".into(),
+            thread_id: "thread-1".into(),
             original_name: Some("note.txt".into()),
             mime: Some("text/plain".into()),
             size_bytes: Some(4),

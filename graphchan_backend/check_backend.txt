@@ -1,0 +1,235 @@
+warning: `/Users/max/.cargo/config` is deprecated in favor of `config.toml`
+note: if you need to support cargo 1.38 or earlier, you can symlink `config` to `config.toml`
+    Checking graphchan_backend v0.1.0 (/Users/max/Code/OrbWeaver/graphchan_backend)
+error[E0061]: this method takes 4 arguments but 2 arguments were supplied
+   --> graphchan_backend/src/api.rs:638:18
+    |
+638 |     peer_service.update_profile(&peer_id, Some(blob_id.clone())).map_err(ApiError::Internal)?;
+    |                  ^^^^^^^^^^^^^^--------------------------------- two arguments of type `std::option::Option<std::string::String>` and `std::option::Option<std::string::String>` are missing
+    |
+note: method defined here
+   --> graphchan_backend/src/peers.rs:62:12
+    |
+ 62 |     pub fn update_profile(&self, peer_id: &str, avatar_file_id: Option<String>, username: Option<String>, bio: Option<String>) -> Result<...
+    |            ^^^^^^^^^^^^^^                                                       ------------------------  -------------------
+help: provide the arguments
+    |
+638 |     peer_service.update_profile(&peer_id, Some(blob_id.clone()), /* std::option::Option<std::string::String> */, /* std::option::Option<std::string::String> */).map_err(ApiError::Internal)?;
+    |                                                                ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0560]: struct `ProfileUpdate` has no field named `avatar_ticket`
+   --> graphchan_backend/src/api.rs:648:9
+    |
+648 |         avatar_ticket: Some(ticket.to_string()),
+    |         ^^^^^^^^^^^^^ `ProfileUpdate` does not have this field
+    |
+    = note: available fields are: `avatar_file_id`, `ticket`
+
+error[E0599]: no method named `broadcast_profile_update` found for struct `NetworkHandle` in the current scope
+   --> graphchan_backend/src/api.rs:652:19
+    |
+652 |     state.network.broadcast_profile_update(update).await.map_err(ApiError::Internal)?;
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: graphchan_backend/src/network.rs:34:1
+    |
+ 34 | pub struct NetworkHandle {
+    | ------------------------ method `broadcast_profile_update` not found for this struct
+    |
+help: there is a method `publish_profile_update` with a similar name
+    |
+652 -     state.network.broadcast_profile_update(update).await.map_err(ApiError::Internal)?;
+652 +     state.network.publish_profile_update(update).await.map_err(ApiError::Internal)?;
+    |
+
+error[E0560]: struct `ProfileUpdate` has no field named `avatar_ticket`
+   --> graphchan_backend/src/api.rs:679:9
+    |
+679 |         avatar_ticket: None, // We are not updating avatar here
+    |         ^^^^^^^^^^^^^ `ProfileUpdate` does not have this field
+    |
+    = note: available fields are: `avatar_file_id`, `ticket`
+
+error[E0599]: no method named `broadcast_profile_update` found for struct `NetworkHandle` in the current scope
+   --> graphchan_backend/src/api.rs:683:19
+    |
+683 |     state.network.broadcast_profile_update(update).await.map_err(ApiError::Internal)?;
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: graphchan_backend/src/network.rs:34:1
+    |
+ 34 | pub struct NetworkHandle {
+    | ------------------------ method `broadcast_profile_update` not found for this struct
+    |
+help: there is a method `publish_profile_update` with a similar name
+    |
+683 -     state.network.broadcast_profile_update(update).await.map_err(ApiError::Internal)?;
+683 +     state.network.publish_profile_update(update).await.map_err(ApiError::Internal)?;
+    |
+
+error[E0063]: missing fields `bio` and `username` in initializer of `PeerRecord`
+   --> graphchan_backend/src/database/repositories.rs:335:24
+    |
+335 |                     Ok(PeerRecord {
+    |                        ^^^^^^^^^^ missing `bio` and `username`
+
+error[E0063]: missing fields `bio` and `username` in initializer of `PeerRecord`
+   --> graphchan_backend/src/database/repositories.rs:360:16
+    |
+360 |             Ok(PeerRecord {
+    |                ^^^^^^^^^^ missing `bio` and `username`
+
+error[E0599]: no method named `upsert` found for opaque type `impl PeerRepository + '_` in the current scope
+   --> graphchan_backend/src/network/ingest.rs:124:24
+    |
+124 |             peers_repo.upsert(&record)?;
+    |                        ^^^^^^ method not found in `impl PeerRepository + '_`
+    |
+   ::: graphchan_backend/src/database/repositories.rs:22:8
+    |
+ 22 |     fn upsert(&self, record: &PeerRecord) -> Result<()>;
+    |        ------ the method is available for `impl PeerRepository + '_` here
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `PeerRepository` which provides `upsert` is implemented but not in scope; perhaps you want to import it
+    |
+  1 + use crate::database::repositories::PeerRepository;
+    |
+
+error[E0063]: missing fields `bio` and `username` in initializer of `PeerRecord`
+   --> graphchan_backend/src/peers.rs:115:5
+    |
+115 |     PeerRecord {
+    |     ^^^^^^^^^^ missing `bio` and `username`
+
+error[E0599]: no method named `get` found for opaque type `impl PeerRepository + '_` in the current scope
+  --> graphchan_backend/src/threading.rs:55:49
+   |
+55 |                 if let Some(record) = peer_repo.get(&peer_id)? {
+   |                                                 ^^^ method not found in `impl PeerRepository + '_`
+   |
+  ::: graphchan_backend/src/database/repositories.rs:23:8
+   |
+23 |     fn get(&self, id: &str) -> Result<Option<PeerRecord>>;
+   |        --- the method is available for `impl PeerRepository + '_` here
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `PeerRepository` which provides `get` is implemented but not in scope; perhaps you want to import it
+   |
+ 1 + use crate::database::repositories::PeerRepository;
+   |
+
+error[E0624]: associated function `from_record` is private
+  --> graphchan_backend/src/threading.rs:56:56
+   |
+56 |                     peers.push(crate::peers::PeerView::from_record(record));
+   |                                                        ^^^^^^^^^^^ private associated function
+   |
+  ::: graphchan_backend/src/peers.rs:98:5
+   |
+98 |     fn from_record(record: PeerRecord) -> Self {
+   |     ------------------------------------------ private associated function defined here
+
+error[E0277]: the trait bound `PeerView: serde::Deserialize<'de>` is not satisfied
+    --> graphchan_backend/src/threading.rs:179:16
+     |
+ 179 |     pub peers: Vec<crate::peers::PeerView>,
+     |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+     |
+help: the trait `Deserialize<'_>` is not implemented for `PeerView`
+    --> graphchan_backend/src/peers.rs:84:1
+     |
+  84 | pub struct PeerView {
+     | ^^^^^^^^^^^^^^^^^^^
+     = note: for local types consider adding `#[derive(serde::Deserialize)]` to your `PeerView` type
+     = note: for types from other crates check whether the crate offers a `serde` feature flag
+     = help: the following other types implement trait `Deserialize<'de>`:
+               `&'a [u8]` implements `Deserialize<'de>`
+               `&'a serde_bytes::bytearray::ByteArray<N>` implements `Deserialize<'de>`
+               `&'a serde_bytes::bytes::Bytes` implements `Deserialize<'de>`
+               `&'a serde_json::value::RawValue` implements `Deserialize<'de>`
+               `&'a std::path::Path` implements `Deserialize<'de>`
+               `&'a str` implements `Deserialize<'de>`
+               `()` implements `Deserialize<'de>`
+               `(T,)` implements `Deserialize<'de>`
+             and 373 others
+     = note: required for `Vec<PeerView>` to implement `Deserialize<'_>`
+note: required by a bound in `next_element`
+    --> /Users/max/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_core-1.0.228/src/de/mod.rs:1771:12
+     |
+1769 |     fn next_element<T>(&mut self) -> Result<Option<T>, Self::Error>
+     |        ------------ required by a bound in this associated function
+1770 |     where
+1771 |         T: Deserialize<'de>,
+     |            ^^^^^^^^^^^^^^^^ required by this bound in `SeqAccess::next_element`
+
+error[E0277]: the trait bound `PeerView: serde::Deserialize<'de>` is not satisfied
+    --> graphchan_backend/src/threading.rs:179:16
+     |
+ 179 |     pub peers: Vec<crate::peers::PeerView>,
+     |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+     |
+help: the trait `Deserialize<'_>` is not implemented for `PeerView`
+    --> graphchan_backend/src/peers.rs:84:1
+     |
+  84 | pub struct PeerView {
+     | ^^^^^^^^^^^^^^^^^^^
+     = note: for local types consider adding `#[derive(serde::Deserialize)]` to your `PeerView` type
+     = note: for types from other crates check whether the crate offers a `serde` feature flag
+     = help: the following other types implement trait `Deserialize<'de>`:
+               `&'a [u8]` implements `Deserialize<'de>`
+               `&'a serde_bytes::bytearray::ByteArray<N>` implements `Deserialize<'de>`
+               `&'a serde_bytes::bytes::Bytes` implements `Deserialize<'de>`
+               `&'a serde_json::value::RawValue` implements `Deserialize<'de>`
+               `&'a std::path::Path` implements `Deserialize<'de>`
+               `&'a str` implements `Deserialize<'de>`
+               `()` implements `Deserialize<'de>`
+               `(T,)` implements `Deserialize<'de>`
+             and 373 others
+     = note: required for `Vec<PeerView>` to implement `Deserialize<'_>`
+note: required by a bound in `next_value`
+    --> /Users/max/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_core-1.0.228/src/de/mod.rs:1916:12
+     |
+1914 |     fn next_value<V>(&mut self) -> Result<V, Self::Error>
+     |        ---------- required by a bound in this associated function
+1915 |     where
+1916 |         V: Deserialize<'de>,
+     |            ^^^^^^^^^^^^^^^^ required by this bound in `MapAccess::next_value`
+
+error[E0277]: the trait bound `PeerView: serde::Deserialize<'de>` is not satisfied
+   --> graphchan_backend/src/threading.rs:175:35
+    |
+175 | #[derive(Debug, Clone, Serialize, Deserialize)]
+    |                                   ^^^^^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `Deserialize<'_>` is not implemented for `PeerView`
+   --> graphchan_backend/src/peers.rs:84:1
+    |
+ 84 | pub struct PeerView {
+    | ^^^^^^^^^^^^^^^^^^^
+    = note: for local types consider adding `#[derive(serde::Deserialize)]` to your `PeerView` type
+    = note: for types from other crates check whether the crate offers a `serde` feature flag
+    = help: the following other types implement trait `Deserialize<'de>`:
+              `&'a [u8]` implements `Deserialize<'de>`
+              `&'a serde_bytes::bytearray::ByteArray<N>` implements `Deserialize<'de>`
+              `&'a serde_bytes::bytes::Bytes` implements `Deserialize<'de>`
+              `&'a serde_json::value::RawValue` implements `Deserialize<'de>`
+              `&'a std::path::Path` implements `Deserialize<'de>`
+              `&'a str` implements `Deserialize<'de>`
+              `()` implements `Deserialize<'de>`
+              `(T,)` implements `Deserialize<'de>`
+            and 373 others
+    = note: required for `Vec<PeerView>` to implement `Deserialize<'_>`
+note: required by a bound in `api::_::_serde::__private228::de::missing_field`
+   --> /Users/max/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:26:8
+    |
+ 24 | pub fn missing_field<'de, V, E>(field: &'static str) -> Result<V, E>
+    |        ------------- required by a bound in this function
+ 25 | where
+ 26 |     V: Deserialize<'de>,
+    |        ^^^^^^^^^^^^^^^^ required by this bound in `missing_field`
+    = note: this error originates in the derive macro `Deserialize` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+Some errors have detailed explanations: E0061, E0063, E0277, E0560, E0599, E0624.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `graphchan_backend` (lib) due to 14 previous errors

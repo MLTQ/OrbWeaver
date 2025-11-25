@@ -26,6 +26,7 @@ const GRAPHCHAN_ALPN: &[u8] = b"graphchan/0";
 const GOSSIP_BUFFER: usize = 128;
 
 pub use events::FileAnnouncement;
+pub use events::ProfileUpdate;
 
 type TopicId = iroh_gossip::proto::TopicId;
 
@@ -165,6 +166,12 @@ impl NetworkHandle {
     /// Broadcasts that an attachment blob is available for download.
     pub async fn publish_file_available(&self, announcement: FileAnnouncement) -> Result<()> {
         let event = NetworkEvent::Broadcast(EventPayload::FileAvailable(announcement));
+        self.publisher.send(event).await.ok();
+        Ok(())
+    }
+
+    pub async fn publish_profile_update(&self, update: ProfileUpdate) -> Result<()> {
+        let event = NetworkEvent::Broadcast(EventPayload::ProfileUpdate(update));
         self.publisher.send(event).await.ok();
         Ok(())
     }

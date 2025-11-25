@@ -1,8 +1,9 @@
 use crate::database::models::{PostRecord, ThreadRecord};
-use crate::database::repositories::{PostRepository, ThreadRepository};
+use crate::database::repositories::{PeerRepository, PostRepository, ThreadRepository};
 use crate::database::Database;
 use crate::utils::now_utc_iso;
-use anyhow::{Context, Result};
+use crate::database::repositories::FileRepository;
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -35,14 +36,49 @@ impl ThreadService {
             let posts_repo = repos.posts();
             let posts = posts_repo.list_for_thread(thread_id)?;
             let mut views = Vec::with_capacity(posts.len());
-            for post in posts {
-                let parents = posts_repo.parents_of(&post.id)?;
-                views.push(PostView::from_record(post, parents));
+            let mut peer_ids = std::collections::HashSet::new();
+            
+            if let Some(creator) = &thread.creator_peer_id {
+                peer_ids.insert(creator.clone());
             }
+
+            for post in posts {
+                if let Some(author) = &post.author_peer_id {
+                    peer_ids.insert(author.clone());
+                }
+                let parents = posts_repo.parents_of(&post.id)?;
+                let files = repos.files().list_for_post(&post.id)?;
+                let file_views = files.into_iter().map(crate::files::FileView::from_record).collect();
+                views.push(PostView::from_record(post, parents, file_views));
+            }
+
+            let mut peers = Vec::new();
+            let peer_repo = repos.peers();
+            for peer_id in peer_ids {
+                if let Some(record) = peer_repo.get(&peer_id)? {
+                    peers.push(crate::peers::PeerView::from_record(record));
+                }
+            }
+
             Ok(Some(ThreadDetails {
                 thread: ThreadSummary::from_record(thread),
                 posts: views,
+                peers,
             }))
+        })
+    }
+
+    pub fn get_post(&self, post_id: &str) -> Result<Option<PostView>> {
+        self.database.with_repositories(|repos| {
+            let posts_repo = repos.posts();
+            let post = posts_repo.get(post_id)?;
+            let Some(post) = post else {
+                return Ok(None);
+            };
+            let parents = posts_repo.parents_of(post_id)?;
+            let files = repos.files().list_for_post(post_id)?;
+            let file_views = files.into_iter().map(crate::files::FileView::from_record).collect();
+            Ok(Some(PostView::from_record(post, parents, file_views)))
         })
     }
 
@@ -117,6 +153,7 @@ impl ThreadService {
             created_at: stored_post.created_at,
             updated_at: stored_post.updated_at,
             parent_post_ids: input.parent_post_ids,
+            files: Vec::new(),
         })
     }
 }
@@ -139,12 +176,15 @@ pub struct PostView {
     pub created_at: String,
     pub updated_at: Option<String>,
     pub parent_post_ids: Vec<String>,
+    #[serde(default)]
+    pub files: Vec<crate::files::FileView>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadDetails {
     pub thread: ThreadSummary,
     pub posts: Vec<PostView>,
+    pub peers: Vec<crate::peers::PeerView>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -183,7 +223,7 @@ impl ThreadSummary {
 }
 
 impl PostView {
-    fn from_record(record: PostRecord, parent_post_ids: Vec<String>) -> Self {
+    fn from_record(record: PostRecord, parent_post_ids: Vec<String>, files: Vec<crate::files::FileView>) -> Self {
         Self {
             id: record.id,
             thread_id: record.thread_id,
@@ -192,6 +232,7 @@ impl PostView {
             created_at: record.created_at,
             updated_at: record.updated_at,
             parent_post_ids,
+            files,
         }
     }
 }
