@@ -4,6 +4,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use chrono::{DateTime, Utc};
 use eframe::egui::{self, Context, TextureHandle};
+use egui_commonmark::CommonMarkCache;
 use egui_video::{AudioDevice, Player};
 use log::error;
 
@@ -121,11 +122,13 @@ pub struct FileViewerState {
     pub file_name: String,
     pub mime: String,
     pub content: FileViewerContent,
+    pub markdown_cache: Option<CommonMarkCache>,
 }
 
 pub enum FileViewerContent {
     Loading,
     Text(String),
+    Markdown(String),
     Video(Player),
     Pdf(Vec<u8>),
     Error(String),
@@ -136,6 +139,7 @@ impl std::fmt::Debug for FileViewerContent {
         match self {
             Self::Loading => write!(f, "Loading"),
             Self::Text(_) => write!(f, "Text(..)"),
+            Self::Markdown(_) => write!(f, "Markdown(..)"),
             Self::Video(_) => write!(f, "Video(..)"),
             Self::Pdf(_) => write!(f, "Pdf(..)"),
             Self::Error(e) => write!(f, "Error({})", e),
@@ -491,6 +495,7 @@ impl GraphchanApp {
             file_name: file_name.to_string(),
             mime: mime.to_string(),
             content: FileViewerContent::Loading,
+            markdown_cache: None,
         };
 
         self.file_viewers.insert(file_id.to_string(), viewer);
@@ -601,6 +606,16 @@ impl GraphchanApp {
                                     );
                                 });
                             }
+                            FileViewerContent::Markdown(text) => {
+                                egui::ScrollArea::vertical().show(ui, |ui| {
+                                    if let Some(cache) = &mut viewer.markdown_cache {
+                                        egui_commonmark::CommonMarkViewer::new().show(ui, cache, text);
+                                    } else {
+                                        // Fallback to plain text if cache not initialized
+                                        ui.label(text.as_str());
+                                    }
+                                });
+                            }
                             FileViewerContent::Video(player) => {
                                 ui.vertical_centered(|ui| {
                                     // Render the video player with built-in controls
@@ -631,12 +646,17 @@ impl GraphchanApp {
                                     }
                                 });
                             }
-                            FileViewerContent::Pdf(bytes) => {
+                            FileViewerContent::Pdf(_bytes) => {
+                                // Simplified PDF viewer for now
+                                // TODO: Add full PDF page rendering with pdfium-render
                                 ui.vertical_centered(|ui| {
-                                    ui.label(format!("PDF file ({} bytes)", bytes.len()));
-                                    ui.label("PDF viewing not yet implemented");
-                                    ui.label("Use 'Save as...' to download and open externally");
+                                    ui.heading("PDF Viewer");
+                                    ui.add_space(10.0);
+                                    ui.label("PDF page rendering will be added in a future update.");
+                                    ui.label("For now, you can save the PDF and open it externally.");
+                                    ui.add_space(10.0);
 
+                                    // Save button
                                     if ui.button("💾 Save PDF").clicked() {
                                         save_actions.push((file_id.clone(), file_name.clone()));
                                     }

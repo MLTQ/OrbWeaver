@@ -389,7 +389,20 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
             AppMessage::TextFileLoaded { file_id, result } => {
                 if let Some(viewer) = app.file_viewers.get_mut(&file_id) {
                     viewer.content = match result {
-                        Ok(text) => super::FileViewerContent::Text(text),
+                        Ok(text) => {
+                            // Detect if it's markdown based on file extension or content
+                            let is_markdown = viewer.file_name.ends_with(".md")
+                                || viewer.file_name.ends_with(".markdown")
+                                || viewer.mime.contains("markdown");
+
+                            if is_markdown {
+                                // Initialize markdown cache
+                                viewer.markdown_cache = Some(egui_commonmark::CommonMarkCache::default());
+                                super::FileViewerContent::Markdown(text)
+                            } else {
+                                super::FileViewerContent::Text(text)
+                            }
+                        }
                         Err(err) => super::FileViewerContent::Error(err),
                     };
                 }
