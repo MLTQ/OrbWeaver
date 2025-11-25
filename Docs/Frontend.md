@@ -1,33 +1,55 @@
 # Graphchan Frontend Documentation
 
 ## Overview
-The `graphchan_frontend` crate is a desktop GUI implemented with `egui`/`eframe`. It provides a catalog and thread view for the Graphchan network, backed by the REST API served from `graphchan_backend`.
+The `graphchan_frontend` crate is a desktop GUI implemented with `egui`/`eframe`. It provides a catalog and thread view for the Graphchan network, backed by the REST API served from `graphchan_backend`. Features include multiple view modes (list/graph/timeline), rich attachment viewing (images, videos, text, markdown, PDFs), and interactive post navigation.
 
 ## Repository Layout
 ```
 graphchan_frontend/
 ├── src/
-│   ├── main.rs        # eframe entry point / window bootstrap
-│   ├── app.rs         # UI state machine, egui widgets, channel handling
-│   ├── api.rs         # Blocking reqwest client for backend endpoints
-│   └── models.rs      # Serde models mirroring backend JSON payloads
-└── README.md          # Quick-start instructions and roadmap snapshot
+│   ├── main.rs           # eframe entry point / window bootstrap
+│   ├── lib.rs            # Library entry with run_frontend functions
+│   ├── app/
+│   │   ├── mod.rs        # Core app state, file viewers, attachment rendering
+│   │   ├── messages.rs   # AppMessage enum and async message handlers
+│   │   ├── state.rs      # ViewState, ThreadState, and UI state structs
+│   │   ├── tasks.rs      # Background task spawning (downloads, API calls)
+│   │   └── ui/
+│   │       ├── catalog.rs      # Thread catalog grid view
+│   │       ├── thread.rs       # Posts list view with floating composer
+│   │       ├── graph.rs        # Force-directed graph layout with physics
+│   │       ├── chronological.rs # Timeline view with time binning
+│   │       ├── images.rs       # Image viewer popup windows
+│   │       ├── dialogs.rs      # Create thread & import dialogs
+│   │       └── drawer.rs       # Identity sidebar & avatar editor
+│   ├── api.rs            # ApiClient wrapper for backend REST endpoints
+│   ├── models.rs         # Serde models (ThreadSummary, PostView, FileResponse)
+│   └── importer.rs       # 4chan thread import logic
+└── README.md             # Quick-start instructions
 ```
 
 ## Runtime Behaviour
 - The app launches with a configurable API base URL (defaults to `http://127.0.0.1:8080`).
 - A background worker thread is spawned for each API action to keep the egui event loop responsive.
 - Messages flow back to the UI via an `mpsc::channel`, updating the catalog or thread views as responses arrive.
+- SDL2 audio subsystem is initialized at startup to enable video playback with audio.
 - Users can:
-  - Refresh the thread catalog.
-  - Create new threads (title + optional body).
-  - Open a thread to see posts and publish replies.
-  - Dismiss informational banners when updates complete.
+  - Browse threads in a grid catalog view
+  - View threads in three modes: Posts list, Graph, or Timeline
+  - Create new threads with title, body, and file attachments
+  - Reply to posts with multi-parent support
+  - Upload and view multiple file types (images, videos, text, markdown, PDFs)
+  - Click images to enlarge in popup windows
+  - Play videos with audio and volume control
+  - Import 4chan threads for archival/discussion
 
 ## Integration with the Backend
-- Thread and post payloads match the backend’s `ThreadSummary`, `ThreadDetails`, and `PostView` structures.
+- Thread and post payloads match the backend's `ThreadSummary`, `ThreadDetails`, and `PostView` structures.
 - Create payloads (`CreateThreadInput`, `CreatePostInput`) are serialized to the REST API as defined in `graphchan_backend/src/api.rs`.
-- File APIs are wrapped in the client but not surfaced yet in the UI; the groundwork allows future attachment previews and downloads with minimal changes.
+- File attachments use the backend's file storage system with proper `present` flag handling:
+  - Backend's `get_thread` endpoint (api.rs:128) uses `ThreadService::with_file_paths()` to check file existence
+  - Files are returned with `present: true/false` based on actual file availability on disk
+  - Frontend uses `post.files` directly for rendering, ensuring correct attachment display across all views
 
 ## Build & Run
 Two ways to start the UI:
@@ -35,22 +57,204 @@ Two ways to start the UI:
 1. **Desktop bundle (recommended)** – `cargo run --bin graphchan_desktop`. This starts the backend and GUI inside one process, automatically points the HTTP client at `http://127.0.0.1:{GRAPHCHAN_API_PORT}`, and still exposes the REST API for other tooling.
 2. **Headless backend + standalone frontend** – run `cargo run --bin graphchan_backend -- serve` (or `-- cli`) and separately `cargo run -p graphchan_frontend`. Paste the daemon’s URL into the “API Base URL” field to connect to remote peers or other machines.
 
-## Roadmap
-### Completed
-- `ApiClient` wrapper with endpoint helpers for threads, posts, and file metadata.
-- Catalog view that lists threads and allows navigation into a detail pane.
-- Thread detail UI with reply composer, attachment metadata, and inline updates after posting.
-- Configurable API base URL with banner feedback when actions succeed or fail.
-- Import dialog that pulls a 4chan thread and recreates it through the backend REST API.
+## Thread View Modes
 
-### In Progress / Planned
-- Richer attachment handling (thumbnails, download progress, inline previews).
-- Pagination/search and better sorting for the catalog.
-- Graph/DAG layout experiments (ported from the legacy `p2pchan` implementation).
-  - Visible reply edges now render between posts in graph mode (one edge per post for now; multi-parent rendering still WIP).
-- Improved error reporting (toast notifications, retry affordances).
-- Packaging scripts to coordinate backend & frontend launch for operators.
+The frontend offers three distinct ways to view and navigate threads:
+
+### 1. Posts List View (thread.rs)
+**Traditional linear discussion view**
+- Posts displayed in chronological order with full content
+- Floating draft composer window (bottom-right)
+- Inline attachment rendering with file type icons
+- Click images to enlarge, click other files to open in specialized viewers
+- Multi-file attachment support per post
+
+### 2. Graph View (graph.rs)
+**Force-directed physics-based layout**
+- Posts rendered as nodes with reply edges between them
+- Physics simulation with configurable repulsion force
+- Pan with right-click drag, zoom with scroll wheel
+- Orthogonal edge routing with lane-based collision avoidance
+- Click posts to select, edges highlight on hover
+- Supports pinning nodes to lock positions
+
+### 3. Timeline View (chronological.rs)
+**Chronological horizontal layout with time binning**
+- Posts grouped into time bins (configurable: 1 min - 24 hours)
+- Posts within same time bin stack horizontally
+- Time axis on left margin shows timestamps
+- Same pan/zoom controls as graph view
+- Compact card format optimized for temporal navigation
+
+## File Attachment System
+
+### Supported File Types
+
+**Images** (`.png`, `.jpg`, `.gif`, etc.)
+- Thumbnail previews in all views
+- Click to open full-size popup window (images.rs:6-24)
+- Auto-download and cache on first view
+- Enlarge/shrink controls in viewer
+
+**Videos** (`.mp4`, `.webm`, `.mov`, etc.)
+- Inline video player using `egui-video` crate
+- SDL2 audio playback with volume control slider
+- Play/pause/seek controls via egui-video UI
+- Volume persists across videos (stored in GraphchanApp.video_volume)
+- Save button to export video file
+- Implementation: mod.rs:619-647
+
+**Text Files** (`.txt`, `.log`, etc.)
+- Rendered in read-only code editor with syntax highlighting
+- Scrollable viewer window
+- Implementation: mod.rs:600-608
+
+**Markdown Files** (`.md`, `.markdown`)
+- Rich rendering using `egui_commonmark` library
+- Supports headers, lists, code blocks, links, emphasis
+- Auto-detected by file extension or MIME type
+- Rendered with CommonMarkCache for performance
+- Implementation: mod.rs:609-618, messages.rs:389-409
+
+**PDF Files** (`.pdf`)
+- Simplified viewer with save functionality
+- Shows "PDF page rendering will be added in a future update"
+- Save button to export PDF externally
+- Implementation: mod.rs:649-663
+- Note: Full page rendering planned for future (requires `pdfium-render` integration)
+
+### File Viewer Architecture
+
+**File Opening Flow:**
+1. User clicks file in any view → `app.open_file_viewer()` called (mod.rs:489)
+2. FileViewerState created with Loading content (mod.rs:493-501)
+3. Background download task spawned based on file type (tasks.rs)
+4. Download completes → AppMessage sent to UI thread
+5. Message handler updates FileViewerState.content (messages.rs)
+6. Viewer window renders content (mod.rs:576-690)
+
+**Key Components:**
+- `FileViewerState`: Tracks viewer state per file (mod.rs:119-126)
+- `FileViewerContent`: Enum for different content types (Loading/Text/Markdown/Video/Pdf/Error)
+- `open_file_viewer()`: Entry point for opening files (mod.rs:489-509)
+- `render_file_viewers()`: Renders all open viewer windows (mod.rs:576-690)
+
+### Video Audio System
+
+**SDL2 Integration:**
+- SDL2 audio subsystem initialized in `GraphchanApp::new()` (mod.rs:198-224)
+- Creates `AudioDevice` that's passed to video players
+- Graceful degradation: if SDL2 init fails, videos play without audio
+- Error logging for debugging audio initialization issues
+
+**Volume Control:**
+- Collapsible volume slider in video viewer (mod.rs:628-639)
+- Range: 0% - 100% with percentage display
+- Applied via `player.options.set_audio_volume(volume)`
+- Volume persisted in `GraphchanApp.video_volume` field
+
+**Player Creation:**
+- Video files downloaded to cache directory first
+- Player created with `egui_video::Player::new()` + `.with_audio(audio_device)`
+- Initial volume applied on creation (messages.rs:420)
+- Players stored in `FileViewerState` for inline rendering
+
+## Attachment Rendering by View
+
+### Posts List View (thread.rs:217-222)
+- Uses `render_file_attachment()` for each file in `post.files`
+- Images: thumbnails (150px max width) with click-to-enlarge
+- Other files: clickable labels with file type icons
+- All files render inline within post frame
+
+### Graph View (graph.rs:589-641)
+- Uses `render_node_attachments()` helper
+- Images: 300px max thumbnails with click-to-enlarge
+- Other files: clickable labels with MIME type detection
+- Attachment rendering scales with zoom level
+- Files sourced from `post.files` (not `state.attachments`)
+
+### Timeline View (chronological.rs:635-737)
+- Uses `render_node_attachments()` helper (same as graph but different sizing)
+- Images: 120px max thumbnails with click-to-enlarge
+- Other files: icon + filename clickable labels (🎥📄📕📎)
+- All sizing scales with zoom factor
+- Files sourced from `post.files` for correct `present` flag
+
+### Image Preview Helper (graph.rs:628-662)
+**Shared utility for graph and timeline views**
+- Returns `ImagePreview` enum: Ready/Loading/Error/None
+- Handles download triggering via `spawn_download_image()`
+- Uses `resolve_download_url()` to build correct URLs
+- Manages image loading states (`image_loading`, `image_pending`, `image_textures`)
+
+## Async Message Flow
+
+**Message Types (messages.rs:11-57):**
+- `ThreadsLoaded`, `ThreadLoaded` - Thread data from API
+- `PostCreated`, `PostAttachmentsLoaded` - Post creation responses
+- `ImageLoaded`, `TextFileLoaded`, `MediaFileLoaded`, `PdfFileLoaded` - File downloads
+- `IdentityLoaded`, `PeersLoaded` - Identity/peer data
+- `ThreadFilesSelected` - File picker results
+
+**Message Processing:**
+- `GraphchanApp::process_messages()` runs every frame (mod.rs:241-258)
+- Drains channel with `try_recv()` loop
+- Each message handler updates app state and triggers UI updates
+- Download completion triggers next queued download (mod.rs:356-361)
+
+**Post Creation with Attachments (tasks.rs:42-91):**
+1. Create post via API (returns post without files)
+2. Upload each attachment file sequentially
+3. Send `PostCreated` message (post appears in UI without attachments)
+4. Send `PostAttachmentsLoaded` message if any uploaded (attachments appear)
+5. This creates a brief window where post shows without attachments, then updates
+
+## Key Dependencies
+
+**UI Framework:**
+- `eframe` 0.29 - egui application framework with native window support
+- `egui_extras` 0.29 - Additional widgets (image support)
+
+**Media Handling:**
+- `egui-video` 0.9 - Video player with seek/play/pause controls
+- `sdl2` 0.37 - Audio subsystem for video playback
+- `image` 0.25 - Image loading/decoding (PNG, JPEG, GIF)
+- `egui_commonmark` 0.18 - Markdown rendering with rich formatting
+
+**Network/API:**
+- `reqwest` 0.12 - HTTP client with rustls TLS
+- `poll-promise` 0.3 - Async task management for egui
+
+**Utilities:**
+- `rfd` 0.14 - Native file picker dialogs
+- `open` 5 - Open files/URLs in system default apps
+- `html2text` 0.4 - HTML to plain text conversion (for imports)
+
+## Troubleshooting
+
+**Video audio not playing:**
+- Ensure SDL2 is installed on your system (macOS: `brew install sdl2`)
+- Check logs for "SDL2 audio initialized successfully"
+- If init fails, videos still play but without audio
+
+**Images showing "builder error":**
+- Usually caused by malformed download URLs
+- Check `resolve_download_url()` is used instead of manual URL construction
+- Verify backend's `download_url` field is properly populated
+
+**Attachments showing as "(remote)":**
+- Backend's `get_thread` must use `ThreadService::with_file_paths()` (not `.new()`)
+- Ensures `FileView.present` is set based on actual file existence
+- Frontend uses `post.files` directly (not `state.attachments`)
+
+**Images not clickable:**
+- Image widgets must use `.sense(egui::Sense::click())`
+- Click handler inserts into `app.image_viewers` map
+- `render_image_viewers()` must be called in main update loop
 
 ## References
 - Prior design notes: `p2pchan/docs/gui_design/main_window.md`, `p2pchan/docs/Post_Layout_Plan.md`.
 - Backend API definition: `graphchan_backend/src/api.rs` and `Docs/Architecture.md`.
+- Timeline view documentation: `TIMELINE_GUIDE.md`
+- Chronological layout documentation: `CHRONOLOGICAL_LAYOUT.md`

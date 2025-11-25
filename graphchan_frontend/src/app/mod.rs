@@ -412,7 +412,17 @@ impl GraphchanApp {
             } else {
                 1.0
             };
-            ui.add(egui::Image::from_texture(texture).fit_to_exact_size(size * scale));
+            let resp = ui.add(
+                egui::Image::from_texture(texture)
+                    .fit_to_exact_size(size * scale)
+                    .sense(egui::Sense::click())
+            );
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if resp.clicked() {
+                self.image_viewers.insert(file.id.clone(), true);
+            }
         } else if let Some(pending) = self.image_pending.remove(&file.id) {
             let color = egui::ColorImage::from_rgba_unmultiplied(pending.size, &pending.pixels);
             let tex = ui.ctx().load_texture(&file.id, color, egui::TextureOptions::default());
@@ -424,7 +434,17 @@ impl GraphchanApp {
             } else {
                 1.0
             };
-            ui.add(egui::Image::from_texture(&tex).fit_to_exact_size(size * scale));
+            let resp = ui.add(
+                egui::Image::from_texture(&tex)
+                    .fit_to_exact_size(size * scale)
+                    .sense(egui::Sense::click())
+            );
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if resp.clicked() {
+                self.image_viewers.insert(file.id.clone(), true);
+            }
         } else if let Some(err) = self.image_errors.get(&file.id) {
             ui.colored_label(egui::Color32::RED, format!("Error: {}", err));
         } else {
