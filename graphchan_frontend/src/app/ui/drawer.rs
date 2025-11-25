@@ -191,13 +191,239 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                 Some(Action::PickAvatar) => {
                     if let Some(path) = FileDialog::new()
                         .add_filter("image", &["png", "jpg", "jpeg", "gif", "webp"])
-                        .pick_file() 
+                        .pick_file()
                     {
-                        app.identity_state.avatar_path = Some(path.display().to_string());
-                        app.identity_state.error = None;
+                        // Load the image and open cropper
+                        match load_image_for_cropping(&path) {
+                            Ok(image) => {
+                                app.identity_state.cropper_state = Some(crate::app::state::AvatarCropperState {
+                                    image,
+                                    pan: egui::vec2(0.0, 0.0),
+                                    zoom: 1.0,
+                                    source_path: path.display().to_string(),
+                                });
+                                app.identity_state.error = None;
+                            }
+                            Err(e) => {
+                                app.identity_state.error = Some(format!("Failed to load image: {}", e));
+                            }
+                        }
                     }
                 }
                 None => {}
             }
         });
+}
+
+fn load_image_for_cropping(path: &std::path::Path) -> Result<egui::ColorImage, String> {
+    let image_bytes = std::fs::read(path)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+
+    let image = image::load_from_memory(&image_bytes)
+        .map_err(|e| format!("Failed to decode image: {}", e))?;
+
+    let rgba = image.to_rgba8();
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    let pixels = rgba.as_flat_samples();
+
+    Ok(egui::ColorImage::from_rgba_unmultiplied(size, pixels.as_slice()))
+}
+
+pub(crate) fn render_avatar_cropper(app: &mut crate::app::GraphchanApp, ctx: &egui::Context) {
+    let Some(cropper) = &mut app.identity_state.cropper_state else {
+        return;
+    };
+
+    let mut should_close = false;
+    let mut should_accept = false;
+
+    egui::Window::new("Crop Avatar")
+        .collapsible(false)
+        .resizable(false)
+        .fixed_size(egui::vec2(512.0 + 40.0, 512.0 + 100.0))
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.label("Drag to move, scroll to zoom");
+                ui.add_space(10.0);
+
+                // Draw the cropper canvas
+                let (response, painter) = ui.allocate_painter(
+                    egui::vec2(512.0, 512.0),
+                    egui::Sense::click_and_drag(),
+                );
+
+                let rect = response.rect;
+                let center = rect.center();
+
+                // Handle zoom with scroll wheel
+                if response.hovered() {
+                    let scroll = ui.input(|i| i.raw_scroll_delta.y);
+                    if scroll != 0.0 {
+                        cropper.zoom *= 1.0 + scroll * 0.005;
+                        cropper.zoom = cropper.zoom.clamp(0.1, 10.0);
+                    }
+                }
+
+                // Handle drag
+                if response.dragged() {
+                    cropper.pan += response.drag_delta();
+                }
+
+                // Draw the image
+                let img_size = egui::vec2(cropper.image.width() as f32, cropper.image.height() as f32);
+                let scaled_size = img_size * cropper.zoom;
+                let img_rect = egui::Rect::from_center_size(
+                    center + cropper.pan,
+                    scaled_size,
+                );
+
+                // Create and draw texture from the image
+                let texture_id = format!("avatar_cropper_{}", cropper.source_path);
+                let texture = ui.ctx().load_texture(
+                    &texture_id,
+                    cropper.image.clone(),
+                    egui::TextureOptions::default(),
+                );
+                painter.image(
+                    texture.id(),
+                    img_rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+
+                // Draw semi-transparent overlay outside the circle
+                let radius = 256.0;
+                let circle_center = center;
+
+                // Draw darkened overlay with circle cutout
+                // We'll use a mesh to draw the overlay with transparency
+                painter.rect_filled(rect, egui::Rounding::ZERO, egui::Color32::from_black_alpha(100));
+
+                // Draw circle outline
+                painter.circle_stroke(
+                    circle_center,
+                    radius,
+                    egui::Stroke::new(2.0, egui::Color32::WHITE),
+                );
+
+                // Draw inner transparent circle to show what will be kept
+                // This is visual only - the overlay handles the transparency
+
+                ui.add_space(20.0);
+
+                ui.horizontal(|ui| {
+                    ui.add_space(100.0);
+                    if ui.button("Cancel").clicked() {
+                        should_close = true;
+                    }
+                    ui.add_space(20.0);
+                    if ui.button("Accept").clicked() {
+                        should_accept = true;
+                    }
+                });
+            });
+        });
+
+    if should_close {
+        app.identity_state.cropper_state = None;
+    }
+
+    if should_accept {
+        // Crop and save
+        if let Some(cropper) = app.identity_state.cropper_state.take() {
+            match crop_to_circle(&cropper) {
+                Ok(cropped_bytes) => {
+                    // Save to a temporary file
+                    let temp_path = std::env::temp_dir().join("graphchan_avatar_cropped.png");
+                    if let Err(e) = std::fs::write(&temp_path, cropped_bytes) {
+                        app.identity_state.error = Some(format!("Failed to save cropped avatar: {}", e));
+                    } else {
+                        app.identity_state.avatar_path = Some(temp_path.display().to_string());
+                        // Auto-upload
+                        crate::app::tasks::upload_avatar(
+                            app.api.clone(),
+                            app.tx.clone(),
+                            temp_path.to_string_lossy().to_string(),
+                        );
+                        app.identity_state.uploading = true;
+                    }
+                }
+                Err(e) => {
+                    app.identity_state.error = Some(format!("Failed to crop avatar: {}", e));
+                }
+            }
+        }
+    }
+}
+
+fn crop_to_circle(cropper: &crate::app::state::AvatarCropperState) -> Result<Vec<u8>, String> {
+    use image::{RgbaImage, Rgba};
+
+    // Create a 512x512 output image
+    let output_size = 512u32;
+    let mut output = RgbaImage::new(output_size, output_size);
+
+    let radius = 256.0f32;
+    let center_x = 256.0f32;
+    let center_y = 256.0f32;
+
+    // Calculate the source image rectangle based on pan and zoom
+    let img_width = cropper.image.width() as f32;
+    let img_height = cropper.image.height() as f32;
+    let scaled_width = img_width * cropper.zoom;
+    let scaled_height = img_height * cropper.zoom;
+
+    // Center of the 512x512 canvas
+    let canvas_center_x = 256.0f32;
+    let canvas_center_y = 256.0f32;
+
+    // Top-left of the image in canvas space
+    let img_left = canvas_center_x + cropper.pan.x - scaled_width / 2.0;
+    let img_top = canvas_center_y + cropper.pan.y - scaled_height / 2.0;
+
+    for y in 0..output_size {
+        for x in 0..output_size {
+            let px = x as f32;
+            let py = y as f32;
+
+            // Check if pixel is inside the circle
+            let dx = px - center_x;
+            let dy = py - center_y;
+            let dist = (dx * dx + dy * dy).sqrt();
+
+            if dist <= radius {
+                // Map canvas coordinates back to source image coordinates
+                let src_x = (px - img_left) / cropper.zoom;
+                let src_y = (py - img_top) / cropper.zoom;
+
+                if src_x >= 0.0 && src_x < img_width && src_y >= 0.0 && src_y < img_height {
+                    let src_x_int = src_x as usize;
+                    let src_y_int = src_y as usize;
+                    let idx = src_y_int * cropper.image.width() + src_x_int;
+
+                    if idx < cropper.image.pixels.len() {
+                        let color = cropper.image.pixels[idx];
+                        output.put_pixel(x, y, Rgba([color.r(), color.g(), color.b(), color.a()]));
+                    } else {
+                        output.put_pixel(x, y, Rgba([0, 0, 0, 0]));
+                    }
+                } else {
+                    // Outside source image bounds - transparent
+                    output.put_pixel(x, y, Rgba([0, 0, 0, 0]));
+                }
+            } else {
+                // Outside circle - transparent
+                output.put_pixel(x, y, Rgba([0, 0, 0, 0]));
+            }
+        }
+    }
+
+    // Encode to PNG
+    let mut png_bytes = Vec::new();
+    let mut cursor = std::io::Cursor::new(&mut png_bytes);
+    output.write_to(&mut cursor, image::ImageFormat::Png)
+        .map_err(|e| format!("Failed to encode PNG: {}", e))?;
+
+    Ok(png_bytes)
 }

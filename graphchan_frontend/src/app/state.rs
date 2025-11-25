@@ -36,6 +36,14 @@ pub struct IdentityState {
     pub bio_input: String,
     pub initialized_inputs: bool,
     pub inspected_peer: Option<PeerView>,
+    pub cropper_state: Option<AvatarCropperState>,
+}
+
+pub struct AvatarCropperState {
+    pub image: egui::ColorImage,
+    pub pan: egui::Vec2,
+    pub zoom: f32,
+    pub source_path: String,
 }
 
 pub struct ThreadState {

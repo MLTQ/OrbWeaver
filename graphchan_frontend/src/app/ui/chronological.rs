@@ -583,12 +583,12 @@ fn render_node_header(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Thr
             let peer = app.peers.get(author_id).cloned();
             if let Some(avatar_id) = peer.as_ref().and_then(|p| p.avatar_file_id.clone()) {
                 if let Some(texture) = app.image_textures.get(&avatar_id) {
-                    ui.add(egui::Image::from_texture(texture).max_width(24.0 * zoom));
+                    ui.add(egui::Image::from_texture(texture).max_width(24.0 * zoom).rounding(12.0 * zoom));
                 } else if let Some(pending) = app.image_pending.remove(&avatar_id) {
                     let color = egui::ColorImage::from_rgba_unmultiplied(pending.size, &pending.pixels);
                     let tex = ui.ctx().load_texture(&avatar_id, color, egui::TextureOptions::default());
                     app.image_textures.insert(avatar_id.clone(), tex.clone());
-                    ui.add(egui::Image::from_texture(&tex).max_width(24.0 * zoom));
+                    ui.add(egui::Image::from_texture(&tex).max_width(24.0 * zoom).rounding(12.0 * zoom));
                 } else if !app.image_loading.contains(&avatar_id) && !app.image_errors.contains_key(&avatar_id) {
                     let url = crate::app::resolve_blob_url(&app.base_url_input, &avatar_id);
                     app.spawn_load_image(&avatar_id, &url);

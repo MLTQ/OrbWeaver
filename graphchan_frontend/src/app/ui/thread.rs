@@ -175,7 +175,12 @@ impl GraphchanApp {
                                         let avatar_id = peer.as_ref().and_then(|p| p.avatar_file_id.clone());
                                         if let Some(avatar_id) = avatar_id {
                                             if let Some(texture) = self.image_textures.get(&avatar_id) {
-                                                ui.image(texture);
+                                                ui.add(egui::Image::from_texture(texture).max_width(32.0).rounding(16.0));
+                                            } else if let Some(pending) = self.image_pending.remove(&avatar_id) {
+                                                let color = egui::ColorImage::from_rgba_unmultiplied(pending.size, &pending.pixels);
+                                                let tex = ui.ctx().load_texture(&avatar_id, color, egui::TextureOptions::default());
+                                                self.image_textures.insert(avatar_id.clone(), tex.clone());
+                                                ui.add(egui::Image::from_texture(&tex).max_width(32.0).rounding(16.0));
                                             } else if let Some(err) = self.image_errors.get(&avatar_id) {
                                                 ui.colored_label(egui::Color32::RED, "Error");
                                                 ui.label(err);

@@ -418,6 +418,7 @@ impl eframe::App for GraphchanApp {
         self.render_create_thread_dialog(ctx);
         self.render_import_dialog(ctx);
         ui::drawer::render_identity_drawer(self, ctx);
+        ui::drawer::render_avatar_cropper(self, ctx);
     }
 
 
