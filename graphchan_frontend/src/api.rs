@@ -109,7 +109,7 @@ impl ApiClient {
     }
 
     pub fn update_profile(&self, username: Option<String>, bio: Option<String>) -> Result<()> {
-        let url = self.url("/identity")?;
+        let url = self.url("/identity/profile")?;
         let input = crate::models::UpdateProfileRequest { username, bio };
         self.client.post(url).json(&input).send()?.error_for_status()?;
         Ok(())

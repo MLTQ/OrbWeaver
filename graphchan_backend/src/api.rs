@@ -171,7 +171,12 @@ async fn create_thread(
         }
     }
 
-    let input = input.ok_or(ApiError::BadRequest("missing json field".into()))?;
+    let mut input = input.ok_or(ApiError::BadRequest("missing json field".into()))?;
+
+    // If no creator specified, use the local peer (GPG fingerprint is the peer ID)
+    if input.creator_peer_id.is_none() {
+        input.creator_peer_id = Some(state.identity.gpg_fingerprint.clone());
+    }
 
     let thread_service = ThreadService::new(state.database.clone());
     let details = thread_service
@@ -248,6 +253,12 @@ async fn create_post(
 ) -> Result<(StatusCode, Json<PostResponse>), ApiError> {
     let service = ThreadService::new(state.database.clone());
     payload.thread_id = thread_id.clone();
+
+    // If no author specified, use the local peer (GPG fingerprint is the peer ID)
+    if payload.author_peer_id.is_none() {
+        payload.author_peer_id = Some(state.identity.gpg_fingerprint.clone());
+    }
+
     match service.create_post(payload) {
         Ok(post) => {
             let outbound = post.clone();

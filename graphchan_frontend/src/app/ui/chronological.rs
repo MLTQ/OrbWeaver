@@ -486,7 +486,7 @@ fn render_node(
 
                         // Render the rest of the content top-down in the remaining space
                         ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                            render_node_header(ui, state, &layout.post, zoom);
+                            render_node_header(app, ui, state, &layout.post, zoom);
 
                             // Show incoming edges (posts this replies to)
                             if !layout.post.parent_post_ids.is_empty() {
@@ -576,17 +576,40 @@ fn render_post_link(
     });
 }
 
-fn render_node_header(ui: &mut egui::Ui, state: &mut ThreadState, post: &PostView, zoom: f32) {
+fn render_node_header(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut ThreadState, post: &PostView, zoom: f32) {
     ui.horizontal(|ui| {
+        // Avatar
+        if let Some(author_id) = &post.author_peer_id {
+            let peer = app.peers.get(author_id).cloned();
+            if let Some(avatar_id) = peer.as_ref().and_then(|p| p.avatar_file_id.clone()) {
+                if let Some(texture) = app.image_textures.get(&avatar_id) {
+                    ui.add(egui::Image::from_texture(texture).max_width(24.0 * zoom));
+                } else if let Some(pending) = app.image_pending.remove(&avatar_id) {
+                    let color = egui::ColorImage::from_rgba_unmultiplied(pending.size, &pending.pixels);
+                    let tex = ui.ctx().load_texture(&avatar_id, color, egui::TextureOptions::default());
+                    app.image_textures.insert(avatar_id.clone(), tex.clone());
+                    ui.add(egui::Image::from_texture(&tex).max_width(24.0 * zoom));
+                } else if !app.image_loading.contains(&avatar_id) && !app.image_errors.contains_key(&avatar_id) {
+                    let url = crate::app::resolve_blob_url(&app.base_url_input, &avatar_id);
+                    app.spawn_load_image(&avatar_id, &url);
+                }
+            }
+
+            // Username/Author (clickable)
+            let name = peer.as_ref().and_then(|p| p.username.as_deref()).unwrap_or(author_id);
+            if ui.add(egui::Link::new(RichText::new(name).strong().size(12.0 * zoom))).clicked() {
+                app.show_identity = true;
+                app.identity_state.inspected_peer = peer;
+            }
+        }
+
         if ui
             .button(RichText::new(format!("#{}", post.id)).monospace().size(11.0 * zoom))
             .clicked()
         {
             state.selected_post = Some(post.id.clone());
         }
-        let author = post.author_peer_id.as_deref().unwrap_or("Anon");
-        ui.label(RichText::new(author).strong().size(12.0 * zoom));
-        
+
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
                 RichText::new(format_timestamp(&post.created_at))

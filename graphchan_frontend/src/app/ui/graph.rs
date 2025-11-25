@@ -379,7 +379,7 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
                     .inner_margin(Margin::same(10.0 * state.graph_zoom))
                     .show(ui, |ui| {
                         ui.vertical(|ui| {
-                            render_node_header(ui, state, &layout.post, state.graph_zoom);
+                            render_node_header(app, ui, state, &layout.post, state.graph_zoom);
 
                             if !layout.post.parent_post_ids.is_empty() {
                                 ui.add_space(4.0 * state.graph_zoom);
@@ -517,21 +517,44 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
     });
 }
 
-fn render_node_header(ui: &mut egui::Ui, state: &mut ThreadState, post: &PostView, zoom: f32) {
+fn render_node_header(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut ThreadState, post: &PostView, zoom: f32) {
     ui.horizontal(|ui| {
+        // Avatar
+        if let Some(author_id) = &post.author_peer_id {
+            let peer = app.peers.get(author_id).cloned();
+            if let Some(avatar_id) = peer.as_ref().and_then(|p| p.avatar_file_id.clone()) {
+                if let Some(texture) = app.image_textures.get(&avatar_id) {
+                    ui.add(egui::Image::from_texture(texture).max_width(24.0 * zoom));
+                } else if let Some(pending) = app.image_pending.remove(&avatar_id) {
+                    let color = egui::ColorImage::from_rgba_unmultiplied(pending.size, &pending.pixels);
+                    let tex = ui.ctx().load_texture(&avatar_id, color, egui::TextureOptions::default());
+                    app.image_textures.insert(avatar_id.clone(), tex.clone());
+                    ui.add(egui::Image::from_texture(&tex).max_width(24.0 * zoom));
+                } else if !app.image_loading.contains(&avatar_id) && !app.image_errors.contains_key(&avatar_id) {
+                    let url = crate::app::resolve_blob_url(&app.base_url_input, &avatar_id);
+                    app.spawn_load_image(&avatar_id, &url);
+                }
+            }
+
+            // Username/Author (clickable)
+            let name = peer.as_ref().and_then(|p| p.username.as_deref()).unwrap_or(author_id);
+            if ui.add(egui::Link::new(
+                egui::RichText::new(name)
+                    .color(Color32::from_rgb(100, 200, 100))
+                    .size(11.0 * zoom)
+                    .strong(),
+            )).clicked() {
+                app.show_identity = true;
+                app.identity_state.inspected_peer = peer;
+            }
+        }
+
         ui.label(
             egui::RichText::new(format!("#{}", post.id))
                 .color(Color32::from_rgb(150, 160, 180))
                 .size(11.0 * zoom),
         );
-        if let Some(name) = &post.author_peer_id {
-            ui.label(
-                egui::RichText::new(name)
-                    .color(Color32::from_rgb(100, 200, 100))
-                    .size(11.0 * zoom)
-                    .strong(),
-            );
-        }
+
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
                 egui::RichText::new(format_timestamp(&post.created_at))

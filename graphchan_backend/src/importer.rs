@@ -70,7 +70,10 @@ pub async fn import_fourchan_thread(state: &AppState, url: &str) -> Result<Strin
     if !first_body.is_empty() {
         thread_input.body = Some(first_body.clone());
     }
-    
+
+    // Set creator as the local peer (GPG fingerprint is the peer ID)
+    thread_input.creator_peer_id = Some(state.identity.gpg_fingerprint.clone());
+
     // Set timestamp from 4chan post
     if let Some(unix_time) = first_post.time {
         use chrono::{DateTime, Utc};
@@ -117,8 +120,11 @@ pub async fn import_fourchan_thread(state: &AppState, url: &str) -> Result<Strin
             body
         };
 
+        // Set author as the local peer (GPG fingerprint is the peer ID)
+        payload.author_peer_id = Some(state.identity.gpg_fingerprint.clone());
+
         payload.parent_post_ids = extract_references(post.com.as_deref(), &id_map);
-        
+
         // Convert Unix timestamp to ISO format
         if let Some(unix_time) = post.time {
             use chrono::{DateTime, Utc};
