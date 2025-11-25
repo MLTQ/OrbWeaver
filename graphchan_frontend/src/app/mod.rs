@@ -22,6 +22,44 @@ use state::{
 // Maximum number of concurrent image downloads to prevent overwhelming the backend
 const MAX_CONCURRENT_DOWNLOADS: usize = 4;
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum FileType {
+    Image,
+    Video,
+    Audio,
+    Text,
+    Pdf,
+    Archive,
+    Other,
+}
+
+impl FileType {
+    pub fn from_mime(mime: &str) -> Self {
+        match mime {
+            m if m.starts_with("image/") => FileType::Image,
+            m if m.starts_with("video/") => FileType::Video,
+            m if m.starts_with("audio/") => FileType::Audio,
+            m if m.starts_with("text/") => FileType::Text,
+            "application/json" | "application/javascript" | "application/xml" => FileType::Text,
+            "application/pdf" => FileType::Pdf,
+            "application/zip" | "application/x-tar" | "application/gzip" | "application/x-7z-compressed" => FileType::Archive,
+            _ => FileType::Other,
+        }
+    }
+
+    pub fn icon(&self) -> &'static str {
+        match self {
+            FileType::Image => "🖼",
+            FileType::Video => "🎬",
+            FileType::Audio => "🎵",
+            FileType::Text => "📄",
+            FileType::Pdf => "📕",
+            FileType::Archive => "📦",
+            FileType::Other => "📎",
+        }
+    }
+}
+
 pub struct GraphchanApp {
     api: ApiClient,
     tx: Sender<AppMessage>,
@@ -47,6 +85,32 @@ pub struct GraphchanApp {
     peers: HashMap<String, PeerView>,
     show_identity: bool,
     identity_state: state::IdentityState,
+    file_downloads: HashMap<String, FileDownloadState>,
+    file_viewers: HashMap<String, FileViewerState>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FileDownloadState {
+    pub progress: f32,
+    pub total_bytes: Option<usize>,
+    pub downloaded_bytes: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct FileViewerState {
+    pub file_id: String,
+    pub file_name: String,
+    pub mime: String,
+    pub content: FileViewerContent,
+}
+
+#[derive(Debug, Clone)]
+pub enum FileViewerContent {
+    Loading,
+    Text(String),
+    Video(Vec<u8>),
+    Pdf(Vec<u8>),
+    Error(String),
 }
 
 pub(crate) fn resolve_download_url(
@@ -73,6 +137,22 @@ pub(crate) fn resolve_blob_url(base_url: &str, blob_id: &str) -> String {
 
 pub(crate) fn resolve_file_url(base_url: &str, file_id: &str) -> String {
     format!("{base_url}/files/{file_id}")
+}
+
+fn format_file_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} bytes", bytes)
+    }
 }
 
 impl GraphchanApp {
@@ -109,6 +189,8 @@ impl GraphchanApp {
             peers: HashMap::new(),
             show_identity: false,
             identity_state: state::IdentityState::default(),
+            file_downloads: HashMap::new(),
+            file_viewers: HashMap::new(),
         };
         app.spawn_load_threads();
         app.spawn_load_peers();
@@ -241,43 +323,228 @@ impl GraphchanApp {
         file: &crate::models::FileResponse,
         base_url: &str,
     ) {
-        if let Some(mime) = &file.mime {
-            if mime.starts_with("image/") {
-                if let Some(texture) = self.image_textures.get(&file.id) {
-                    let size = texture.size_vec2();
-                    let max_width = 200.0;
-                    let scale = if size.x > max_width {
-                        max_width / size.x
-                    } else {
-                        1.0
-                    };
-                    ui.add(egui::Image::from_texture(texture).fit_to_exact_size(size * scale));
-                } else if let Some(pending) = self.image_pending.remove(&file.id) {
-                    let color = egui::ColorImage::from_rgba_unmultiplied(pending.size, &pending.pixels);
-                    let tex = ui.ctx().load_texture(&file.id, color, egui::TextureOptions::default());
-                    self.image_textures.insert(file.id.clone(), tex.clone());
-                    let size = tex.size_vec2();
-                    let max_width = 200.0;
-                    let scale = if size.x > max_width {
-                        max_width / size.x
-                    } else {
-                        1.0
-                    };
-                    ui.add(egui::Image::from_texture(&tex).fit_to_exact_size(size * scale));
-                } else if let Some(err) = self.image_errors.get(&file.id) {
-                    ui.colored_label(egui::Color32::RED, format!("Error: {}", err));
-                } else {
-                    ui.spinner();
-                    if !self.image_loading.contains(&file.id) {
-                        let url = resolve_download_url(base_url, file.download_url.as_deref(), &file.id);
-                        self.spawn_download_image(&file.id, &url);
-                    }
-                }
+        let file_type = file.mime.as_ref()
+            .map(|m| FileType::from_mime(m))
+            .unwrap_or(FileType::Other);
+
+        match file_type {
+            FileType::Image => self.render_image_attachment(ui, file, base_url),
+            _ => self.render_generic_file(ui, file, base_url, file_type),
+        }
+    }
+
+    fn render_image_attachment(
+        &mut self,
+        ui: &mut egui::Ui,
+        file: &crate::models::FileResponse,
+        base_url: &str,
+    ) {
+        if let Some(texture) = self.image_textures.get(&file.id) {
+            let size = texture.size_vec2();
+            let max_width = 200.0;
+            let scale = if size.x > max_width {
+                max_width / size.x
             } else {
-                ui.label(format!("File: {} ({})", file.original_name.as_deref().unwrap_or("unnamed"), mime));
-            }
+                1.0
+            };
+            ui.add(egui::Image::from_texture(texture).fit_to_exact_size(size * scale));
+        } else if let Some(pending) = self.image_pending.remove(&file.id) {
+            let color = egui::ColorImage::from_rgba_unmultiplied(pending.size, &pending.pixels);
+            let tex = ui.ctx().load_texture(&file.id, color, egui::TextureOptions::default());
+            self.image_textures.insert(file.id.clone(), tex.clone());
+            let size = tex.size_vec2();
+            let max_width = 200.0;
+            let scale = if size.x > max_width {
+                max_width / size.x
+            } else {
+                1.0
+            };
+            ui.add(egui::Image::from_texture(&tex).fit_to_exact_size(size * scale));
+        } else if let Some(err) = self.image_errors.get(&file.id) {
+            ui.colored_label(egui::Color32::RED, format!("Error: {}", err));
         } else {
-            ui.label(format!("File: {}", file.original_name.as_deref().unwrap_or("unnamed")));
+            ui.spinner();
+            if !self.image_loading.contains(&file.id) {
+                let url = resolve_download_url(base_url, file.download_url.as_deref(), &file.id);
+                self.spawn_download_image(&file.id, &url);
+            }
+        }
+    }
+
+    fn render_generic_file(
+        &mut self,
+        ui: &mut egui::Ui,
+        file: &crate::models::FileResponse,
+        base_url: &str,
+        file_type: FileType,
+    ) {
+        ui.horizontal(|ui| {
+            // File icon
+            ui.label(file_type.icon());
+
+            // File name and details
+            let file_name = file.original_name.as_deref().unwrap_or("unnamed");
+            let size_str = file.size_bytes
+                .map(|s| format_file_size(s as u64))
+                .unwrap_or_else(|| "unknown size".to_string());
+
+            // Check if downloading
+            if let Some(download_state) = self.file_downloads.get(&file.id) {
+                ui.spinner();
+                ui.label(format!("{} ({}%)", file_name, (download_state.progress * 100.0) as u32));
+            } else {
+                // Clickable file name
+                let response = ui.add(egui::Label::new(
+                    egui::RichText::new(file_name).underline().color(egui::Color32::LIGHT_BLUE)
+                ).sense(egui::Sense::click()));
+
+                if response.clicked() {
+                    // Open file viewer/downloader
+                    self.open_file_viewer(&file.id, file_name, file.mime.as_deref().unwrap_or("application/octet-stream"), base_url);
+                }
+
+                // Show context menu on right-click
+                response.context_menu(|ui| {
+                    if ui.button("💾 Save as...").clicked() {
+                        self.save_file_as(&file.id, file_name, base_url);
+                        ui.close_menu();
+                    }
+                    if ui.button("📋 Copy link").clicked() {
+                        let url = resolve_file_url(base_url, &file.id);
+                        ui.output_mut(|o| o.copied_text = url);
+                        ui.close_menu();
+                    }
+                });
+
+                ui.label(format!("({})", size_str));
+            }
+        });
+    }
+
+    fn open_file_viewer(&mut self, file_id: &str, file_name: &str, mime: &str, base_url: &str) {
+        let file_type = FileType::from_mime(mime);
+
+        // Create viewer state
+        let viewer = FileViewerState {
+            file_id: file_id.to_string(),
+            file_name: file_name.to_string(),
+            mime: mime.to_string(),
+            content: FileViewerContent::Loading,
+        };
+
+        self.file_viewers.insert(file_id.to_string(), viewer);
+
+        // Start download based on file type
+        match file_type {
+            FileType::Text => self.download_text_file(file_id, base_url),
+            FileType::Video | FileType::Audio => self.download_media_file(file_id, base_url),
+            FileType::Pdf => self.download_pdf_file(file_id, base_url),
+            _ => self.download_generic_file(file_id, file_name, base_url),
+        }
+    }
+
+    fn save_file_as(&mut self, file_id: &str, suggested_name: &str, base_url: &str) {
+        let url = resolve_file_url(base_url, file_id);
+        let file_id = file_id.to_string();
+        let suggested_name = suggested_name.to_string();
+
+        tasks::save_file_as(self.tx.clone(), file_id, url, suggested_name);
+    }
+
+    fn download_text_file(&mut self, file_id: &str, base_url: &str) {
+        let url = resolve_file_url(base_url, file_id);
+        tasks::download_text_file(self.tx.clone(), file_id.to_string(), url);
+    }
+
+    fn download_media_file(&mut self, file_id: &str, base_url: &str) {
+        let url = resolve_file_url(base_url, file_id);
+        tasks::download_media_file(self.tx.clone(), file_id.to_string(), url);
+    }
+
+    fn download_pdf_file(&mut self, file_id: &str, base_url: &str) {
+        let url = resolve_file_url(base_url, file_id);
+        tasks::download_pdf_file(self.tx.clone(), file_id.to_string(), url);
+    }
+
+    fn download_generic_file(&mut self, file_id: &str, file_name: &str, base_url: &str) {
+        let url = resolve_file_url(base_url, file_id);
+        tasks::save_file_as(self.tx.clone(), file_id.to_string(), url, file_name.to_string());
+    }
+
+    fn render_file_viewers(&mut self, ctx: &egui::Context) {
+        let mut to_close = Vec::new();
+
+        // Clone the keys to avoid borrow issues
+        let viewer_ids: Vec<String> = self.file_viewers.keys().cloned().collect();
+
+        for file_id in viewer_ids {
+            let viewer = if let Some(v) = self.file_viewers.get(&file_id) {
+                v.clone()
+            } else {
+                continue;
+            };
+
+            let mut is_open = true;
+
+            egui::Window::new(&viewer.file_name)
+                .id(egui::Id::new(format!("file_viewer_{}", file_id)))
+                .open(&mut is_open)
+                .default_size([600.0, 400.0])
+                .show(ctx, |ui| {
+                    match &viewer.content {
+                        FileViewerContent::Loading => {
+                            ui.vertical_centered(|ui| {
+                                ui.spinner();
+                                ui.label("Loading file...");
+                            });
+                        }
+                        FileViewerContent::Text(text) => {
+                            egui::ScrollArea::vertical().show(ui, |ui| {
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut text.as_str())
+                                        .desired_width(f32::INFINITY)
+                                        .code_editor()
+                                );
+                            });
+                        }
+                        FileViewerContent::Video(bytes) => {
+                            ui.vertical_centered(|ui| {
+                                ui.label(format!("Video file ({} bytes)", bytes.len()));
+                                ui.label("Video playback not yet implemented");
+                                ui.label("Use 'Save as...' to download and play externally");
+
+                                if ui.button("💾 Save video").clicked() {
+                                    self.save_file_as(&file_id, &viewer.file_name, &self.base_url_input.clone());
+                                }
+                            });
+                        }
+                        FileViewerContent::Pdf(bytes) => {
+                            ui.vertical_centered(|ui| {
+                                ui.label(format!("PDF file ({} bytes)", bytes.len()));
+                                ui.label("PDF viewing not yet implemented");
+                                ui.label("Use 'Save as...' to download and open externally");
+
+                                if ui.button("💾 Save PDF").clicked() {
+                                    self.save_file_as(&file_id, &viewer.file_name, &self.base_url_input.clone());
+                                }
+                            });
+                        }
+                        FileViewerContent::Error(err) => {
+                            ui.vertical_centered(|ui| {
+                                ui.colored_label(egui::Color32::RED, "Error loading file:");
+                                ui.label(err);
+                            });
+                        }
+                    }
+                });
+
+            if !is_open {
+                to_close.push(file_id);
+            }
+        }
+
+        for file_id in to_close {
+            self.file_viewers.remove(&file_id);
         }
     }
 }
@@ -419,9 +686,8 @@ impl eframe::App for GraphchanApp {
         self.render_import_dialog(ctx);
         ui::drawer::render_identity_drawer(self, ctx);
         ui::drawer::render_avatar_cropper(self, ctx);
+        self.render_file_viewers(ctx);
     }
-
-
 }
 
 fn format_timestamp(ts: &str) -> String {

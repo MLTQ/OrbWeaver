@@ -37,6 +37,22 @@ pub enum AppMessage {
     AvatarUploaded(Result<(), anyhow::Error>),
     ProfileUpdated(Result<(), anyhow::Error>),
     ThreadFilesSelected(Vec<std::path::PathBuf>),
+    TextFileLoaded {
+        file_id: String,
+        result: Result<String, String>,
+    },
+    MediaFileLoaded {
+        file_id: String,
+        result: Result<Vec<u8>, String>,
+    },
+    PdfFileLoaded {
+        file_id: String,
+        result: Result<Vec<u8>, String>,
+    },
+    FileSaved {
+        file_id: String,
+        result: Result<(), String>,
+    },
 }
 
 pub(super) fn process_messages(app: &mut GraphchanApp) {
@@ -369,6 +385,40 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
             }
             AppMessage::ThreadFilesSelected(files) => {
                 app.create_thread.files.extend(files);
+            }
+            AppMessage::TextFileLoaded { file_id, result } => {
+                if let Some(viewer) = app.file_viewers.get_mut(&file_id) {
+                    viewer.content = match result {
+                        Ok(text) => super::FileViewerContent::Text(text),
+                        Err(err) => super::FileViewerContent::Error(err),
+                    };
+                }
+            }
+            AppMessage::MediaFileLoaded { file_id, result } => {
+                if let Some(viewer) = app.file_viewers.get_mut(&file_id) {
+                    viewer.content = match result {
+                        Ok(bytes) => super::FileViewerContent::Video(bytes),
+                        Err(err) => super::FileViewerContent::Error(err),
+                    };
+                }
+            }
+            AppMessage::PdfFileLoaded { file_id, result } => {
+                if let Some(viewer) = app.file_viewers.get_mut(&file_id) {
+                    viewer.content = match result {
+                        Ok(bytes) => super::FileViewerContent::Pdf(bytes),
+                        Err(err) => super::FileViewerContent::Error(err),
+                    };
+                }
+            }
+            AppMessage::FileSaved { file_id: _, result } => {
+                match result {
+                    Ok(()) => {
+                        app.info_banner = Some("File saved successfully".to_string());
+                    }
+                    Err(err) => {
+                        app.info_banner = Some(format!("Failed to save file: {}", err));
+                    }
+                }
             }
         }
     }

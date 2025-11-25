@@ -190,3 +190,77 @@ pub fn pick_files(tx: Sender<AppMessage>) {
         }
     });
 }
+
+pub fn download_text_file(tx: Sender<AppMessage>, file_id: String, url: String) {
+    thread::spawn(move || {
+        let result = (|| {
+            let client = crate::api::get_shared_client().map_err(|e| e.to_string())?;
+            let resp = client.get(&url).send().map_err(|e| e.to_string())?;
+            let text = resp.text().map_err(|e| e.to_string())?;
+            Ok(text)
+        })();
+
+        let message = AppMessage::TextFileLoaded { file_id, result };
+        if tx.send(message).is_err() {
+            error!("failed to send TextFileLoaded message");
+        }
+    });
+}
+
+pub fn download_media_file(tx: Sender<AppMessage>, file_id: String, url: String) {
+    thread::spawn(move || {
+        let result = (|| {
+            let client = crate::api::get_shared_client().map_err(|e| e.to_string())?;
+            let resp = client.get(&url).send().map_err(|e| e.to_string())?;
+            let bytes = resp.bytes().map_err(|e| e.to_string())?.to_vec();
+            Ok(bytes)
+        })();
+
+        let message = AppMessage::MediaFileLoaded { file_id, result };
+        if tx.send(message).is_err() {
+            error!("failed to send MediaFileLoaded message");
+        }
+    });
+}
+
+pub fn download_pdf_file(tx: Sender<AppMessage>, file_id: String, url: String) {
+    thread::spawn(move || {
+        let result = (|| {
+            let client = crate::api::get_shared_client().map_err(|e| e.to_string())?;
+            let resp = client.get(&url).send().map_err(|e| e.to_string())?;
+            let bytes = resp.bytes().map_err(|e| e.to_string())?.to_vec();
+            Ok(bytes)
+        })();
+
+        let message = AppMessage::PdfFileLoaded { file_id, result };
+        if tx.send(message).is_err() {
+            error!("failed to send PdfFileLoaded message");
+        }
+    });
+}
+
+pub fn save_file_as(tx: Sender<AppMessage>, file_id: String, url: String, suggested_name: String) {
+    thread::spawn(move || {
+        let result = (|| {
+            let client = crate::api::get_shared_client().map_err(|e| e.to_string())?;
+            let resp = client.get(&url).send().map_err(|e| e.to_string())?;
+            let bytes = resp.bytes().map_err(|e| e.to_string())?;
+
+            // Open save dialog
+            if let Some(path) = rfd::FileDialog::new()
+                .set_file_name(&suggested_name)
+                .save_file()
+            {
+                std::fs::write(path, bytes).map_err(|e| e.to_string())?;
+                Ok(())
+            } else {
+                Err("Save cancelled".to_string())
+            }
+        })();
+
+        let message = AppMessage::FileSaved { file_id, result };
+        if tx.send(message).is_err() {
+            error!("failed to send FileSaved message");
+        }
+    });
+}
