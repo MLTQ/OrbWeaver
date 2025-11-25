@@ -3,6 +3,7 @@ use crate::database::repositories::{PeerRepository, PostRepository, ThreadReposi
 use crate::database::Database;
 use crate::utils::now_utc_iso;
 use crate::database::repositories::FileRepository;
+use crate::config::GraphchanPaths;
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -10,11 +11,22 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct ThreadService {
     database: Database,
+    file_paths: Option<GraphchanPaths>,
 }
 
 impl ThreadService {
     pub fn new(database: Database) -> Self {
-        Self { database }
+        Self {
+            database,
+            file_paths: None,
+        }
+    }
+
+    pub fn with_file_paths(database: Database, file_paths: GraphchanPaths) -> Self {
+        Self {
+            database,
+            file_paths: Some(file_paths),
+        }
     }
 
     pub fn list_threads(&self, limit: usize) -> Result<Vec<ThreadSummary>> {
@@ -48,7 +60,18 @@ impl ThreadService {
                 }
                 let parents = posts_repo.parents_of(&post.id)?;
                 let files = repos.files().list_for_post(&post.id)?;
-                let file_views = files.into_iter().map(crate::files::FileView::from_record).collect();
+                let file_views = files
+                    .into_iter()
+                    .map(|record| {
+                        let mut view = crate::files::FileView::from_record(record.clone());
+                        // Set present flag if file_paths is available
+                        if let Some(ref base) = self.file_paths {
+                            let absolute = base.base.join(&record.path);
+                            view.present = Some(absolute.exists());
+                        }
+                        view
+                    })
+                    .collect();
                 views.push(PostView::from_record(post, parents, file_views));
             }
 
@@ -77,7 +100,18 @@ impl ThreadService {
             };
             let parents = posts_repo.parents_of(post_id)?;
             let files = repos.files().list_for_post(post_id)?;
-            let file_views = files.into_iter().map(crate::files::FileView::from_record).collect();
+            let file_views = files
+                .into_iter()
+                .map(|record| {
+                    let mut view = crate::files::FileView::from_record(record.clone());
+                    // Set present flag if file_paths is available
+                    if let Some(ref base) = self.file_paths {
+                        let absolute = base.base.join(&record.path);
+                        view.present = Some(absolute.exists());
+                    }
+                    view
+                })
+                .collect();
             Ok(Some(PostView::from_record(post, parents, file_views)))
         })
     }

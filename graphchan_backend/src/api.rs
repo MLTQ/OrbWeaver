@@ -129,7 +129,7 @@ async fn get_thread(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> ApiResult<ThreadDetails> {
-    let service = ThreadService::new(state.database.clone());
+    let service = ThreadService::with_file_paths(state.database.clone(), state.config.paths.clone());
     match service.get_thread(&id)? {
         Some(thread) => Ok(Json(thread)),
         None => Err(ApiError::NotFound(format!("thread {id} not found"))),

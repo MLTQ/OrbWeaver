@@ -271,7 +271,12 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
         
         for (idx, post_id) in bin.post_ids.iter().enumerate() {
             if let Some(post) = posts.iter().find(|p| &p.id == post_id) {
-                let attachments = state.attachments.get(&post.id).cloned();
+                // Prefer post.files over state.attachments (post.files has correct present flag)
+                let attachments = if !post.files.is_empty() {
+                    Some(post.files.clone())
+                } else {
+                    state.attachments.get(&post.id).cloned()
+                };
                 let has_preview = attachments
                     .as_ref()
                     .map(|files| files.iter().any(is_image))
@@ -646,39 +651,88 @@ fn render_node_attachments(
         None => return,
     };
 
-    if let Some(file) = files.iter().find(|f| is_image(f)) {
-        match image_preview(app, ui, file, api_base) {
-            ImagePreview::Ready(tex) => {
-                ui.add_space(6.0 * zoom);
-                let resp = ui.add(
-                    egui::Image::from_texture(&tex)
-                        .maintain_aspect_ratio(true)
-                        .max_width(120.0 * zoom)
-                        .max_height(120.0 * zoom)
-                        .sense(egui::Sense::click()),
-                );
-                
-                if resp.hovered() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    if files.is_empty() {
+        return;
+    }
+
+    ui.add_space(6.0 * zoom);
+
+    // Render all attachments, not just images
+    for file in files {
+        let is_image_file = is_image(file);
+
+        if is_image_file {
+            // Render image preview
+            match image_preview(app, ui, file, api_base) {
+                ImagePreview::Ready(tex) => {
+                    let resp = ui.add(
+                        egui::Image::from_texture(&tex)
+                            .maintain_aspect_ratio(true)
+                            .max_width(120.0 * zoom)
+                            .max_height(120.0 * zoom)
+                            .sense(egui::Sense::click()),
+                    );
+
+                    if resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+
+                    if resp.clicked() {
+                        app.image_viewers.insert(file.id.clone(), true);
+                    }
                 }
-                
-                if resp.clicked() {
-                    app.image_viewers.insert(file.id.clone(), true);
+                ImagePreview::Loading => {
+                    ui.horizontal(|ui| {
+                        ui.add(egui::Spinner::new().size(16.0 * zoom));
+                        ui.label(RichText::new("Loading image…").size(12.0 * zoom));
+                    });
                 }
+                ImagePreview::Error(err) => {
+                    ui.colored_label(Color32::LIGHT_RED, RichText::new(format!("Image error: {err}")).size(11.0 * zoom));
+                    // Show download link as fallback
+                    let download_url = crate::app::resolve_download_url(
+                        api_base,
+                        file.download_url.as_deref(),
+                        &file.id,
+                    );
+                    let name = file.original_name.as_deref().unwrap_or("attachment");
+                    ui.hyperlink_to(RichText::new(name).size(11.0 * zoom), download_url);
+                }
+                ImagePreview::None => {}
             }
-            ImagePreview::Loading => {
-                ui.add_space(6.0 * zoom);
-                ui.horizontal(|ui| {
-                    ui.add(egui::Spinner::new().size(16.0 * zoom));
-                    ui.label(RichText::new("Fetching image…").size(12.0 * zoom));
-                });
+        } else {
+            // Render non-image files as clickable labels
+            let name = file.original_name.as_deref().unwrap_or("attachment");
+            let mime = file.mime.as_deref().unwrap_or("");
+
+            // Show icon based on file type
+            let icon = if mime.starts_with("video/") {
+                "🎥"
+            } else if mime.starts_with("text/") || mime.contains("markdown") {
+                "📄"
+            } else if mime.contains("pdf") {
+                "📕"
+            } else {
+                "📎"
+            };
+
+            let label = if file.present {
+                format!("{} {}", icon, name)
+            } else {
+                format!("{} {} (remote)", icon, name)
+            };
+
+            let response = ui.add(
+                egui::Label::new(RichText::new(label).size(11.0 * zoom).underline().color(Color32::LIGHT_BLUE))
+                    .sense(egui::Sense::click())
+            );
+
+            if response.clicked() {
+                app.open_file_viewer(&file.id, name, mime, api_base);
             }
-            ImagePreview::Error(err) => {
-                ui.add_space(6.0 * zoom);
-                ui.colored_label(Color32::LIGHT_RED, RichText::new(format!("Image failed: {err}")).size(12.0 * zoom));
-            }
-            ImagePreview::None => {}
         }
+
+        ui.add_space(4.0 * zoom);
     }
 }
 

@@ -199,7 +199,12 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
     // Update node sizes first so physics knows about them
     for post in &posts {
         if let Some(node) = state.graph_nodes.get_mut(&post.id) {
-            let attachments = state.attachments.get(&post.id).cloned();
+            // Prefer post.files over state.attachments (post.files has correct present flag)
+            let attachments = if !post.files.is_empty() {
+                Some(post.files.clone())
+            } else {
+                state.attachments.get(&post.id).cloned()
+            };
             let has_preview = attachments
                 .as_ref()
                 .map(|files| files.iter().any(is_image))
@@ -301,7 +306,12 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
     let mut layouts = Vec::new();
     for post in posts.iter() {
         if let Some(node) = state.graph_nodes.get_mut(&post.id) {
-            let attachments = state.attachments.get(&post.id).cloned();
+            // Prefer post.files over state.attachments (post.files has correct present flag)
+            let attachments = if !post.files.is_empty() {
+                Some(post.files.clone())
+            } else {
+                state.attachments.get(&post.id).cloned()
+            };
             let center_pos = world_to_screen(node.pos);
             // Node pos is center, rect is top-left
             let size = node.size * state.graph_zoom; 
@@ -589,9 +599,9 @@ fn render_node_attachments(
     if let Some(files) = attachments {
         for file in files {
             if is_image(file) {
-                let url = format!("{}{}", api_base, file.path);
+                let url = super::super::resolve_download_url(api_base, file.download_url.as_deref(), &file.id);
                 ui.add_space(4.0 * zoom);
-                
+
                 // Load texture if needed
                 if !app.image_textures.contains_key(&file.id) && !app.image_loading.contains(&file.id) {
                     app.spawn_download_image(&file.id, &url);
@@ -616,10 +626,16 @@ fn render_node_attachments(
                 }
             } else {
                 let name = file.original_name.as_deref().unwrap_or("file");
-                ui.hyperlink_to(
-                    egui::RichText::new(name).size(11.0 * zoom),
-                    format!("{}{}", api_base, file.path)
+                let mime = file.mime.as_deref().unwrap_or("");
+
+                let response = ui.add(
+                    egui::Label::new(egui::RichText::new(name).size(11.0 * zoom).underline().color(egui::Color32::LIGHT_BLUE))
+                        .sense(egui::Sense::click())
                 );
+
+                if response.clicked() {
+                    app.open_file_viewer(&file.id, name, mime, api_base);
+                }
             }
         }
     }

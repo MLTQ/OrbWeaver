@@ -486,7 +486,7 @@ impl GraphchanApp {
         });
     }
 
-    fn open_file_viewer(&mut self, file_id: &str, file_name: &str, mime: &str, base_url: &str) {
+    pub(crate) fn open_file_viewer(&mut self, file_id: &str, file_name: &str, mime: &str, base_url: &str) {
         let file_type = FileType::from_mime(mime);
 
         // Create viewer state
@@ -833,6 +833,7 @@ impl eframe::App for GraphchanApp {
         ui::drawer::render_identity_drawer(self, ctx);
         ui::drawer::render_avatar_cropper(self, ctx);
         self.render_file_viewers(ctx);
+        self.render_image_viewers(ctx);
     }
 }
 

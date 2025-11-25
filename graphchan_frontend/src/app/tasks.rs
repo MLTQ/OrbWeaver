@@ -122,12 +122,12 @@ pub fn download_image(tx: Sender<AppMessage>, file_id: String, url: String) {
     thread::spawn(move || {
         // Log the URL being requested for debugging
         log::info!("Downloading image from URL: {}", url);
-        
+
         let result = (|| {
-            let client = crate::api::get_shared_client().map_err(|e| e.to_string())?;
-            let resp = client.get(&url).send().map_err(|e| e.to_string())?;
-            let bytes = resp.bytes().map_err(|e| e.to_string())?;
-            let dyn_img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+            let client = crate::api::get_shared_client().map_err(|e| format!("HTTP client error: {}", e))?;
+            let resp = client.get(&url).send().map_err(|e| format!("Request error: {}", e))?;
+            let bytes = resp.bytes().map_err(|e| format!("Download error: {}", e))?;
+            let dyn_img = image::load_from_memory(&bytes).map_err(|e| format!("Image decode error: {}", e))?;
             let rgba = dyn_img.to_rgba8();
             let size = [dyn_img.width() as usize, dyn_img.height() as usize];
             Ok(LoadedImage {
