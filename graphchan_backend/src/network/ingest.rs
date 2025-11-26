@@ -105,7 +105,7 @@ fn apply_thread_snapshot(database: &Database, snapshot: ThreadDetails) -> Result
         for post in posts {
             upsert_post(&posts_repo, &post)?;
         }
-        
+
         // Ingest peers
         let peers_repo = repos.peers();
         for peer in snapshot.peers {

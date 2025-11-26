@@ -111,6 +111,7 @@ impl NetworkHandle {
 
         let blob_protocol = BlobsProtocol::new(&blob_store, None);
         let router = Router::builder(endpoint.as_ref().clone())
+            .accept(GRAPHCHAN_ALPN, gossip.clone())
             .accept(BLOBS_ALPN, blob_protocol)
             .spawn();
         let router = Arc::new(router);
@@ -202,20 +203,25 @@ impl NetworkHandle {
         let addr = build_endpoint_addr(payload)?;
         let peer_id = addr.id;
 
+        tracing::info!(peer = %peer_id.fmt_short(), "attempting to connect to peer");
+        self.endpoint.connect(addr, GRAPHCHAN_ALPN).await.context("failed to connect to peer")?;
+        tracing::info!(peer = %peer_id.fmt_short(), "✅ endpoint connected!");
+
         // Join the global gossip topic with this peer as a bootstrap node
         let global_topic_id = TopicId::from_bytes(*blake3::hash(b"graphchan-global").as_bytes());
 
         // Subscribe with this peer as bootstrap if not already subscribed
         let mut guard = self.topics.write().await;
         if !guard.contains_key("graphchan-global") {
+            tracing::info!(peer = %peer_id.fmt_short(), "subscribing to global topic with peer as bootstrap");
             let topic = self
                 .gossip
                 .subscribe(global_topic_id, vec![peer_id])
                 .await?;
             guard.insert("graphchan-global".to_string(), topic);
-            tracing::info!(peer = %peer_id.fmt_short(), "subscribed to global topic with peer as bootstrap");
+            tracing::info!(peer = %peer_id.fmt_short(), "✅ subscribed to global topic with peer as bootstrap");
         } else {
-            tracing::info!(peer = %peer_id.fmt_short(), "already subscribed to global topic");
+            tracing::warn!(peer = %peer_id.fmt_short(), "⚠️ global topic already exists - NOT adding peer as bootstrap!");
         }
 
         Ok(())

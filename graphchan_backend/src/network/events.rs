@@ -155,22 +155,31 @@ pub async fn run_gossip_receiver_loop(
     topics: Arc<RwLock<HashMap<String, GossipTopic>>>,
     inbound_tx: Sender<InboundGossip>,
 ) -> Result<()> {
-    // Wait for a peer to be added, which will subscribe to the global topic with bootstrap
+    // Wait for a peer to be added, which will create the global topic subscription
     tracing::info!("gossip receiver loop waiting for global topic subscription");
-    loop {
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        let guard = topics.read().await;
-        if guard.contains_key("graphchan-global") {
-            drop(guard);
-            break;
-        }
-    }
-
-    // Now subscribe to get our own receiver
     let global_topic_id = TopicId::from_bytes(*blake3::hash(b"graphchan-global").as_bytes());
-    let mut receiver = gossip.subscribe(global_topic_id, vec![]).await?;
 
-    tracing::info!("gossip receiver loop started after global topic created");
+    let mut receiver = loop {
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+        // Try to get the existing subscription from the topics map
+        let guard = topics.read().await;
+        if let Some(topic) = guard.get("graphchan-global") {
+            // Get a receiver from the existing subscription
+            match gossip.subscribe(global_topic_id, vec![]).await {
+                Ok(recv) => {
+                    drop(guard);
+                    break recv;
+                }
+                Err(_) => {
+                    drop(guard);
+                    continue;
+                }
+            }
+        }
+    };
+
+    tracing::info!("gossip receiver loop started");
 
     while let Some(event_result) = receiver.next().await {
         match event_result {
@@ -200,10 +209,10 @@ pub async fn run_gossip_receiver_loop(
                 }
             }
             Ok(iroh_gossip::api::Event::NeighborUp(peer_id)) => {
-                tracing::debug!(peer = %peer_id.fmt_short(), "gossip neighbor up");
+                tracing::info!(peer = %peer_id.fmt_short(), "🎉 GOSSIP NEIGHBOR UP - peer connected to mesh!");
             }
             Ok(iroh_gossip::api::Event::NeighborDown(peer_id)) => {
-                tracing::debug!(peer = %peer_id.fmt_short(), "gossip neighbor down");
+                tracing::info!(peer = %peer_id.fmt_short(), "❌ GOSSIP NEIGHBOR DOWN");
             }
             Ok(iroh_gossip::api::Event::Lagged) => {
                 tracing::warn!("gossip receiver lagged, some messages may have been dropped");

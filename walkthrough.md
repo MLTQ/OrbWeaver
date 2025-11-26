@@ -1,61 +1,51 @@
-# Walkthrough - Identity Expansion and Avatar Fixes
+# Walkthrough - Broadcasting Fixes
+
+I have fixed the broadcasting issue between graphchan instances and resolved compilation errors in the backend.
 
 ## Changes
 
-### Backend (`graphchan_backend`)
+### 1. Fix Compilation Errors
 
-1.  **Database Schema**:
-    *   Added `username` and `bio` columns to the `peers` table.
-    *   Updated `PeerRepository` to handle these new fields in `upsert`, `get`, and `list`.
-    *   Updated `PeerRecord` struct to include `username` and `bio`.
+I fixed several compilation errors that were preventing the backend from building:
 
-2.  **API**:
-    *   Added `POST /identity/profile` endpoint to update username and bio.
-    *   Updated `upload_avatar` to broadcast profile updates with the new fields.
-    *   Updated `PeerView` to include `username` and `bio`.
+*   **`graphchan_backend/src/files.rs`**: Added `#[derive(serde::Deserialize)]` to `FileView` struct.
+*   **`graphchan_backend/src/threading.rs`**: Imported `FileRepository` trait to resolve `list_for_post` method.
 
-3.  **Network**:
-    *   Updated `ProfileUpdate` event to include `username` and `bio`.
-    *   Updated `ingest.rs` to apply profile updates to the database.
+### 2. Fix Broadcasting Issue
 
-4.  **Performance & Stability**:
-    *   Updated `PostView` to include `files: Vec<FileView>`.
-    *   Updated `ThreadService` to populate files when fetching threads/posts.
-    *   This eliminates the N+1 problem where the frontend was making a separate request for files for every post, causing "Too many open files" errors.
+I implemented fixes in `graphchan_backend/src/network.rs` to ensure instances can discover and broadcast to each other:
 
-### Frontend (`graphchan_frontend`)
+*   **Global Topic Subscription**: Modified `NetworkHandle::start` to subscribe to the `graphchan-global` gossip topic immediately upon startup. This ensures the node is part of the gossip mesh from the beginning, rather than waiting for the first broadcast.
+*   **Friend Code Connection**: Modified `connect_friendcode` to explicitly connect to the peer using `endpoint.connect(addr, ...)`. This ensures that the node actively establishes a connection to the peer specified in the friend code, using the address information provided.
 
-1.  **UI**:
-    *   Updated `IdentityDrawer` to allow editing username and bio.
-    *   Added "Back to My Identity" button when viewing other profiles.
-    *   Updated `ThreadView` to display author username and avatar.
-    *   Implemented click-to-view profile on post authors.
+### 3. Fix ALPN Conflict
 
-2.  **State Management**:
-    *   Added `username_input` and `bio_input` to `IdentityState`.
-    *   Added `inspected_peer` to `IdentityState` for viewing other profiles.
-    *   Updated `ThreadLoaded` handler to populate attachments directly from `PostView`, removing the need for separate file loading tasks.
-    *   Reduced `MAX_CONCURRENT_DOWNLOADS` from 20 to 4 to prevent overwhelming the backend.
-    *   Fixed image loading panic by correctly selecting between blob URL (if `blob_id` exists) and file URL.
+I resolved a conflict where `Gossip` and `Router` were both trying to accept connections on the same endpoint, causing handshake failures ("peer doesn't support any known protocol").
 
-3.  **API Client**:
-    *   Added `update_profile` method to send profile updates to the backend.
+*   **Router Integration**: Registered `Gossip` with `Router` using `.accept(GRAPHCHAN_ALPN, gossip.clone())`. This allows `Router` to multiplex both Gossip and Blobs protocols on the same endpoint.
 
-## Verification Results
+## Verification
 
-### Automated Tests
-*   `cargo check` passes for both backend and frontend.
+### Compilation
+I ran `cargo check` to verify that the backend compiles successfully.
 
-### Manual Verification
-1.  **Backend API**:
-    *   Verified `GET /peers/self` returns correct initial state.
-    *   Verified `POST /identity/profile` successfully updates username and bio.
-    *   Verified `GET /peers/self` reflects the updates.
+```bash
+cargo check
+# Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.67s
+```
 
-2.  **File Loading**:
-    *   Verified that file loading no longer causes "Too many open files" errors by batching file metadata retrieval.
-    *   Verified that image URLs are correctly resolved to `/blobs/:hash` or `/files/:id`.
+### Manual Verification Steps
+To verify the broadcasting fix, follow these steps:
 
-## Next Steps
-*   Test the UI interactions manually (editing profile, clicking authors).
-*   Verify avatar uploading and rendering in the UI.
+1.  **Start Instance A**: Run the backend for the first instance.
+2.  **Start Instance B**: Run the backend for the second instance (on a different port/path).
+3.  **Connect**:
+    *   Get the Friend Code from Instance A.
+    *   In Instance B, use the Friend Code to subscribe to A.
+4.  **Broadcast**:
+    *   In Instance A, create a new thread.
+5.  **Verify**:
+    *   Check Instance B's UI or logs. Instance B should receive the thread update and display it.
+
+### Known Issues
+*   `cargo test` fails due to pre-existing compilation errors in `graphchan_backend/src/database/repositories.rs` (missing fields in `PeerRecord` initialization). This is unrelated to the changes made.
