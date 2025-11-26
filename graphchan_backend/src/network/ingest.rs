@@ -117,6 +117,56 @@ fn apply_thread_snapshot(
     let post_ids: Vec<String> = posts.iter().map(|p| p.id.clone()).collect();
 
     database.with_repositories(|repos| {
+        // First, ingest all peers from the snapshot
+        let peers_repo = repos.peers();
+        for peer in &snapshot.peers {
+            let record = crate::database::models::PeerRecord {
+                id: peer.id.clone(),
+                alias: peer.alias.clone(),
+                username: peer.username.clone(),
+                bio: peer.bio.clone(),
+                friendcode: peer.friendcode.clone(),
+                iroh_peer_id: peer.iroh_peer_id.clone(),
+                gpg_fingerprint: peer.gpg_fingerprint.clone(),
+                last_seen: peer.last_seen.clone(),
+                avatar_file_id: peer.avatar_file_id.clone(),
+                trust_state: peer.trust_state.clone(),
+            };
+            peers_repo.upsert(&record)?;
+        }
+
+        // Collect all author peer IDs from posts
+        let mut all_author_ids = std::collections::HashSet::new();
+        if let Some(creator_id) = &thread.creator_peer_id {
+            all_author_ids.insert(creator_id.clone());
+        }
+        for post in &posts {
+            if let Some(author_id) = &post.author_peer_id {
+                all_author_ids.insert(author_id.clone());
+            }
+        }
+
+        // Create stub peer records for any authors not in the snapshot
+        for author_id in all_author_ids {
+            if peers_repo.get(&author_id)?.is_none() {
+                tracing::info!(peer_id = %author_id, "creating stub peer for unknown author in thread snapshot");
+                let stub_peer = crate::database::models::PeerRecord {
+                    id: author_id.clone(),
+                    alias: None,
+                    username: Some(format!("Unknown ({})", &author_id[..8])),
+                    bio: None,
+                    friendcode: None,
+                    iroh_peer_id: None,
+                    gpg_fingerprint: Some(author_id.clone()),
+                    last_seen: None,
+                    avatar_file_id: None,
+                    trust_state: "unknown".into(),
+                };
+                peers_repo.upsert(&stub_peer)?;
+            }
+        }
+
+        // Now upsert thread and posts
         let thread_record = ThreadRecord {
             id: thread.id.clone(),
             title: thread.title.clone(),
@@ -129,24 +179,6 @@ fn apply_thread_snapshot(
         let posts_repo = repos.posts();
         for post in posts {
             upsert_post(&posts_repo, &post)?;
-        }
-
-        // Ingest peers
-        let peers_repo = repos.peers();
-        for peer in snapshot.peers {
-            let record = crate::database::models::PeerRecord {
-                id: peer.id,
-                alias: peer.alias,
-                username: peer.username,
-                bio: peer.bio,
-                friendcode: peer.friendcode,
-                iroh_peer_id: peer.iroh_peer_id,
-                gpg_fingerprint: peer.gpg_fingerprint,
-                last_seen: peer.last_seen,
-                avatar_file_id: peer.avatar_file_id,
-                trust_state: peer.trust_state,
-            };
-            peers_repo.upsert(&record)?;
         }
 
         Ok(())
