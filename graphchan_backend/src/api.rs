@@ -47,6 +47,32 @@ pub struct UpdateProfileRequest {
     pub bio: Option<String>,
 }
 
+/// Tries to bind to the given port, or finds the next available port
+async fn find_available_port(start_port: u16) -> Result<(TcpListener, u16)> {
+    const MAX_PORT_ATTEMPTS: u16 = 100;
+
+    for offset in 0..MAX_PORT_ATTEMPTS {
+        let port = start_port + offset;
+        let addr = SocketAddr::from(([0, 0, 0, 0], port));
+
+        match TcpListener::bind(addr).await {
+            Ok(listener) => return Ok((listener, port)),
+            Err(e) => {
+                if offset == 0 {
+                    tracing::debug!(port, error = %e, "Port in use, trying next port");
+                }
+                continue;
+            }
+        }
+    }
+
+    anyhow::bail!(
+        "Could not find available port in range {}-{}",
+        start_port,
+        start_port + MAX_PORT_ATTEMPTS - 1
+    )
+}
+
 pub async fn serve_http(
     config: GraphchanConfig,
     identity: IdentitySummary,
@@ -94,8 +120,18 @@ pub async fn serve_http(
         )
         .with_state(state.clone());
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], config.api_port));
-    let listener = TcpListener::bind(addr).await?;
+    // Try to bind to the configured port, or find the next available port
+    let (listener, actual_port) = find_available_port(config.api_port).await?;
+    let addr = SocketAddr::from(([0, 0, 0, 0], actual_port));
+
+    if actual_port != config.api_port {
+        tracing::warn!(
+            requested_port = config.api_port,
+            actual_port = actual_port,
+            "Configured port was in use, bound to next available port"
+        );
+    }
+
     tracing::info!(?addr, "HTTP server listening");
     axum::serve(listener, router.into_make_service()).await?;
     Ok(())

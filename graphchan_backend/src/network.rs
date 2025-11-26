@@ -95,10 +95,12 @@ impl NetworkHandle {
         });
 
         let gossip_receiver_worker_gossip = gossip.clone();
+        let gossip_receiver_worker_topics = event_worker_topics.clone();
         let gossip_receiver_worker_tx = inbound_tx.clone();
         tokio::spawn(async move {
             if let Err(err) = events::run_gossip_receiver_loop(
                 gossip_receiver_worker_gossip,
+                gossip_receiver_worker_topics,
                 gossip_receiver_worker_tx,
             )
             .await

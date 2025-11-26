@@ -142,6 +142,9 @@ async fn broadcast_to_topic(
     let mut guard = topics.write().await;
     if let Some(topic) = guard.get_mut(topic_name) {
         topic.broadcast(Bytes::from(bytes)).await?;
+        tracing::info!(topic = %topic_name, "broadcasted message to topic");
+    } else {
+        tracing::warn!(topic = %topic_name, "attempted to broadcast to non-existent topic");
     }
 
     Ok(())
@@ -149,13 +152,25 @@ async fn broadcast_to_topic(
 
 pub async fn run_gossip_receiver_loop(
     gossip: Gossip,
+    topics: Arc<RwLock<HashMap<String, GossipTopic>>>,
     inbound_tx: Sender<InboundGossip>,
 ) -> Result<()> {
-    // Subscribe to a global topic for general updates
+    // Wait for a peer to be added, which will subscribe to the global topic with bootstrap
+    tracing::info!("gossip receiver loop waiting for global topic subscription");
+    loop {
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        let guard = topics.read().await;
+        if guard.contains_key("graphchan-global") {
+            drop(guard);
+            break;
+        }
+    }
+
+    // Now subscribe to get our own receiver
     let global_topic_id = TopicId::from_bytes(*blake3::hash(b"graphchan-global").as_bytes());
     let mut receiver = gossip.subscribe(global_topic_id, vec![]).await?;
 
-    tracing::info!("gossip receiver loop started");
+    tracing::info!("gossip receiver loop started after global topic created");
 
     while let Some(event_result) = receiver.next().await {
         match event_result {
@@ -163,6 +178,11 @@ pub async fn run_gossip_receiver_loop(
                 match serde_json::from_slice::<EventEnvelope>(&message.content) {
                     Ok(envelope) => {
                         let peer_id = Some(message.delivered_from.to_string());
+                        tracing::info!(
+                            from_peer = %message.delivered_from.fmt_short(),
+                            topic = %envelope.topic,
+                            "received gossip message"
+                        );
                         if let Err(err) = inbound_tx
                             .send(InboundGossip {
                                 peer_id,
@@ -210,11 +230,11 @@ fn envelope_for(payload: EventPayload) -> EventEnvelope {
 
 fn topic_for_payload(payload: &EventPayload) -> String {
     match payload {
-        EventPayload::ThreadSnapshot(snapshot) => format!("thread:{}", snapshot.thread.id.clone()),
-        EventPayload::PostUpdate(post) => format!("thread:{}", post.thread_id.clone()),
-        EventPayload::FileAvailable(announcement) => {
-            format!("thread:{}", announcement.thread_id.clone())
-        }
+        // Route threads, posts, and files to global topic so all connected peers receive them
+        EventPayload::ThreadSnapshot(_) => "graphchan-global".to_string(),
+        EventPayload::PostUpdate(_) => "graphchan-global".to_string(),
+        EventPayload::FileAvailable(_) => "graphchan-global".to_string(),
+        // File transfers use dedicated topics
         EventPayload::FileRequest(request) => {
             format!("file-request:{}", request.file_id.clone())
         }
