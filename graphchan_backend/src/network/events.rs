@@ -121,7 +121,8 @@ async fn broadcast_to_topic(
 ) -> Result<()> {
     let topic_id = TopicId::from_bytes(*blake3::hash(topic_name.as_bytes()).as_bytes());
 
-    // Ensure we're subscribed to this topic and get a mutable reference
+    // Ensure we're subscribed to this topic
+    // Note: global topic is created at startup, other topics are auto-created here
     let guard = topics.read().await;
     let needs_subscribe = !guard.contains_key(topic_name);
     drop(guard);
@@ -152,32 +153,14 @@ async fn broadcast_to_topic(
 
 pub async fn run_gossip_receiver_loop(
     gossip: Gossip,
-    topics: Arc<RwLock<HashMap<String, GossipTopic>>>,
+    _topics: Arc<RwLock<HashMap<String, GossipTopic>>>,
     inbound_tx: Sender<InboundGossip>,
 ) -> Result<()> {
-    // Wait for a peer to be added, which will create the global topic subscription
-    tracing::info!("gossip receiver loop waiting for global topic subscription");
+    // Subscribe to global topic for receiving
+    // Note: This is a separate subscription from the one used for broadcasting
+    // iroh-gossip allows multiple subscriptions to the same topic
     let global_topic_id = TopicId::from_bytes(*blake3::hash(b"graphchan-global").as_bytes());
-
-    let mut receiver = loop {
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-        // Try to get the existing subscription from the topics map
-        let guard = topics.read().await;
-        if let Some(topic) = guard.get("graphchan-global") {
-            // Get a receiver from the existing subscription
-            match gossip.subscribe(global_topic_id, vec![]).await {
-                Ok(recv) => {
-                    drop(guard);
-                    break recv;
-                }
-                Err(_) => {
-                    drop(guard);
-                    continue;
-                }
-            }
-        }
-    };
+    let mut receiver = gossip.subscribe(global_topic_id, vec![]).await?;
 
     tracing::info!("gossip receiver loop started");
 

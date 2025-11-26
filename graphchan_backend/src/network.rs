@@ -35,6 +35,7 @@ pub struct NetworkHandle {
     endpoint: Arc<Endpoint>,
     gossip: Gossip,
     publisher: mpsc::Sender<events::NetworkEvent>,
+    inbound_tx: mpsc::Sender<events::InboundGossip>,
     _event_worker: Arc<JoinHandle<()>>,
     _ingest_worker: Arc<JoinHandle<()>>,
     _router: Arc<Router>,
@@ -73,6 +74,15 @@ impl NetworkHandle {
         let (tx, rx) = mpsc::channel(GOSSIP_BUFFER);
         let event_worker_gossip = gossip.clone();
         let event_worker_topics = Arc::new(RwLock::new(HashMap::new()));
+
+        // Subscribe to global topic at startup so we can broadcast even before adding friends
+        // When friends are added via connect_friendcode, the endpoint connection + shared topic
+        // will allow gossip to discover neighbors
+        let global_topic_id = TopicId::from_bytes(*blake3::hash(b"graphchan-global").as_bytes());
+        let global_topic = gossip.subscribe(global_topic_id, vec![]).await?;
+        event_worker_topics.write().await.insert("graphchan-global".to_string(), global_topic);
+        tracing::info!("subscribed to global gossip topic");
+
         let event_worker_topics_clone = event_worker_topics.clone();
         let event_worker = tokio::spawn(async move {
             events::run_event_loop(event_worker_gossip, event_worker_topics_clone, rx).await;
@@ -120,6 +130,7 @@ impl NetworkHandle {
             endpoint,
             gossip,
             publisher: tx,
+            inbound_tx,
             _event_worker: Arc::new(event_worker),
             _ingest_worker: Arc::new(ingest_worker),
             _router: router.clone(),
@@ -204,25 +215,64 @@ impl NetworkHandle {
         let peer_id = addr.id;
 
         tracing::info!(peer = %peer_id.fmt_short(), "attempting to connect to peer");
-        self.endpoint.connect(addr, GRAPHCHAN_ALPN).await.context("failed to connect to peer")?;
+        self.endpoint.connect(addr.clone(), GRAPHCHAN_ALPN).await.context("failed to connect to peer")?;
         tracing::info!(peer = %peer_id.fmt_short(), "✅ endpoint connected!");
 
-        // Join the global gossip topic with this peer as a bootstrap node
+        // Create a new subscription with this peer as bootstrap to establish gossip connectivity
+        // Note: This creates a parallel subscription alongside the one from startup
+        // Both will receive messages, but the inbound channel deduplicates
         let global_topic_id = TopicId::from_bytes(*blake3::hash(b"graphchan-global").as_bytes());
+        let mut peer_topic = self.gossip.subscribe(global_topic_id, vec![peer_id]).await?;
 
-        // Subscribe with this peer as bootstrap if not already subscribed
-        let mut guard = self.topics.write().await;
-        if !guard.contains_key("graphchan-global") {
-            tracing::info!(peer = %peer_id.fmt_short(), "subscribing to global topic with peer as bootstrap");
-            let topic = self
-                .gossip
-                .subscribe(global_topic_id, vec![peer_id])
-                .await?;
-            guard.insert("graphchan-global".to_string(), topic);
-            tracing::info!(peer = %peer_id.fmt_short(), "✅ subscribed to global topic with peer as bootstrap");
-        } else {
-            tracing::warn!(peer = %peer_id.fmt_short(), "⚠️ global topic already exists - NOT adding peer as bootstrap!");
-        }
+        tracing::info!(
+            peer = %peer_id.fmt_short(),
+            "subscribed to global topic with peer as bootstrap, spawning receiver"
+        );
+
+        // Spawn a receiver task for this subscription (parallel to the main receiver loop)
+        let inbound_tx = self.inbound_tx.clone();
+        tokio::spawn(async move {
+            use futures_util::StreamExt;
+            tracing::info!("peer-specific gossip receiver started");
+            while let Some(event_result) = peer_topic.next().await {
+                match event_result {
+                    Ok(iroh_gossip::api::Event::Received(message)) => {
+                        match serde_json::from_slice::<events::EventEnvelope>(&message.content) {
+                            Ok(envelope) => {
+                                let peer_id = Some(message.delivered_from.to_string());
+                                if let Err(err) = inbound_tx
+                                    .send(events::InboundGossip {
+                                        peer_id,
+                                        payload: envelope.payload,
+                                    })
+                                    .await
+                                {
+                                    tracing::warn!(error = ?err, "failed to forward inbound gossip from peer subscription");
+                                    break;
+                                }
+                            }
+                            Err(err) => {
+                                tracing::warn!(error = ?err, "failed to decode gossip envelope in peer subscription");
+                            }
+                        }
+                    }
+                    Ok(iroh_gossip::api::Event::NeighborUp(pid)) => {
+                        tracing::info!(peer = %pid.fmt_short(), "🎉 GOSSIP NEIGHBOR UP on peer subscription!");
+                    }
+                    Ok(iroh_gossip::api::Event::NeighborDown(pid)) => {
+                        tracing::info!(peer = %pid.fmt_short(), "❌ GOSSIP NEIGHBOR DOWN on peer subscription");
+                    }
+                    Ok(iroh_gossip::api::Event::Lagged) => {
+                        tracing::warn!("peer subscription lagged");
+                    }
+                    Err(err) => {
+                        tracing::error!(error = ?err, "peer subscription error");
+                        break;
+                    }
+                }
+            }
+            tracing::info!("peer-specific gossip receiver ended");
+        });
 
         Ok(())
     }

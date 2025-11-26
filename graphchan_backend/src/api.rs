@@ -297,6 +297,7 @@ async fn create_post(
 
     match service.create_post(payload) {
         Ok(post) => {
+            // Broadcast the individual post update
             let outbound = post.clone();
             if let Err(err) = state.network.publish_post_update(outbound).await {
                 tracing::warn!(
@@ -306,6 +307,23 @@ async fn create_post(
                     "failed to publish post update over network"
                 );
             }
+
+            // Also broadcast the full thread snapshot so our followers get it
+            // This "takes on" the thread and propagates it to peers who follow us
+            let thread_service = ThreadService::with_file_paths(
+                state.database.clone(),
+                state.config.paths.clone(),
+            );
+            if let Ok(Some(thread_details)) = thread_service.get_thread(&post.thread_id) {
+                if let Err(err) = state.network.publish_thread_snapshot(thread_details).await {
+                    tracing::warn!(
+                        error = ?err,
+                        thread_id = %post.thread_id,
+                        "failed to rebroadcast thread snapshot after post"
+                    );
+                }
+            }
+
             Ok((StatusCode::CREATED, Json(PostResponse { post })))
         }
         Err(err) if err.to_string().contains("thread not found") => {

@@ -138,6 +138,28 @@ fn apply_post_update(database: &Database, post: PostView) -> Result<()> {
             );
             return Ok(());
         }
+
+        // Ensure the author peer exists - create stub if unknown
+        if let Some(author_id) = &post.author_peer_id {
+            let peers_repo = repos.peers();
+            if peers_repo.get(author_id)?.is_none() {
+                tracing::info!(peer_id = %author_id, "creating stub peer for unknown post author");
+                let stub_peer = crate::database::models::PeerRecord {
+                    id: author_id.clone(),
+                    alias: None,
+                    username: Some(format!("Unknown ({})", &author_id[..8])),
+                    bio: None,
+                    friendcode: None,
+                    iroh_peer_id: None,
+                    gpg_fingerprint: Some(author_id.clone()),
+                    last_seen: None,
+                    avatar_file_id: None,
+                    trust_state: "unknown".into(),
+                };
+                peers_repo.upsert(&stub_peer)?;
+            }
+        }
+
         let posts_repo = repos.posts();
         upsert_post(&posts_repo, &post)?;
         Ok(())
