@@ -265,6 +265,11 @@ async fn create_thread(
                                  blob_id: file_view.blob_id.clone(),
                                  ticket: Some(ticket.clone()),
                              };
+                             tracing::info!(
+                                 file_id = %file_view.id,
+                                 post_id = %file_view.post_id,
+                                 "📢 broadcasting FileAnnouncement (thread creation)"
+                             );
                              state.network.publish_file_available(announcement).await.ok();
                          }
                     }
@@ -429,6 +434,11 @@ async fn upload_post_file(
             if let Err(err) = service.persist_ticket(&file_view.id, ticket.as_ref()) {
                 tracing::warn!(error = ?err, file_id = %file_view.id, "failed to persist blob ticket");
             }
+            tracing::info!(
+                file_id = %file_view.id,
+                post_id = %post_id,
+                "📢 broadcasting FileAnnouncement"
+            );
             if let Err(err) = state.network.publish_file_available(announcement).await {
                 tracing::warn!(
                     error = ?err,

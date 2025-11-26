@@ -647,18 +647,17 @@ pub(super) fn image_preview(
     file: &FileResponse,
     api_base: &str,
 ) -> ImagePreview {
-    if !file.present {
-        return ImagePreview::None;
-    }
-
+    // Check if we have an error for this image
     if let Some(err) = app.image_errors.get(&file.id) {
         return ImagePreview::Error(err.clone());
     }
 
+    // Check if we already have the texture loaded
     if let Some(tex) = app.image_textures.get(&file.id) {
         return ImagePreview::Ready(tex.clone());
     }
 
+    // Check if we have pending image data to load
     if let Some(pending) = app.image_pending.remove(&file.id) {
         let color = egui::ColorImage::from_rgba_unmultiplied(pending.size, &pending.pixels);
         let tex = ui
@@ -668,6 +667,8 @@ pub(super) fn image_preview(
         return ImagePreview::Ready(tex);
     }
 
+    // If file is not present locally, show loading and try to download
+    // The backend will handle FileRequest/FileChunk to fetch from peers
     if !app.image_loading.contains(&file.id) {
         let url =
             super::super::resolve_download_url(api_base, file.download_url.as_deref(), &file.id);

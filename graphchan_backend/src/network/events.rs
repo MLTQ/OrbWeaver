@@ -12,6 +12,7 @@ use tokio::sync::{
     mpsc::{Receiver, Sender},
     RwLock,
 };
+use base64::{Engine as _, engine::general_purpose};
 
 type TopicId = iroh_gossip::proto::TopicId;
 
@@ -53,8 +54,30 @@ pub struct FileRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileChunk {
     pub file_id: String,
+    #[serde(
+        serialize_with = "serialize_bytes_as_base64",
+        deserialize_with = "deserialize_bytes_from_base64"
+    )]
     pub data: Vec<u8>,
     pub eof: bool,
+}
+
+fn serialize_bytes_as_base64<S>(data: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let encoded = general_purpose::STANDARD.encode(data);
+    serializer.serialize_str(&encoded)
+}
+
+fn deserialize_bytes_from_base64<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let encoded: String = serde::Deserialize::deserialize(deserializer)?;
+    general_purpose::STANDARD
+        .decode(&encoded)
+        .map_err(serde::de::Error::custom)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,12 +161,27 @@ async fn broadcast_to_topic(
 
     let envelope = envelope_for(payload);
     let bytes = serde_json::to_vec(&envelope)?;
+    let size = bytes.len();
+
+    let payload_type = match &envelope.payload {
+        EventPayload::ThreadSnapshot(_) => "ThreadSnapshot",
+        EventPayload::PostUpdate(_) => "PostUpdate",
+        EventPayload::FileAvailable(_) => "FileAnnouncement",
+        EventPayload::FileRequest(_) => "FileRequest",
+        EventPayload::FileChunk(_) => "FileChunk",
+        EventPayload::ProfileUpdate(_) => "ProfileUpdate",
+    };
 
     // Get mutable access to broadcast
     let mut guard = topics.write().await;
     if let Some(topic) = guard.get_mut(topic_name) {
         topic.broadcast(Bytes::from(bytes)).await?;
-        tracing::info!(topic = %topic_name, "broadcasted message to topic");
+        tracing::info!(
+            topic = %topic_name,
+            payload_type = %payload_type,
+            size_bytes = size,
+            "broadcasted message to topic"
+        );
     } else {
         tracing::warn!(topic = %topic_name, "attempted to broadcast to non-existent topic");
     }
@@ -167,12 +205,23 @@ pub async fn run_gossip_receiver_loop(
     while let Some(event_result) = receiver.next().await {
         match event_result {
             Ok(iroh_gossip::api::Event::Received(message)) => {
+                let msg_size = message.content.len();
                 match serde_json::from_slice::<EventEnvelope>(&message.content) {
                     Ok(envelope) => {
                         let peer_id = Some(message.delivered_from.to_string());
+                        let payload_type = match &envelope.payload {
+                            EventPayload::ThreadSnapshot(_) => "ThreadSnapshot",
+                            EventPayload::PostUpdate(_) => "PostUpdate",
+                            EventPayload::FileAvailable(_) => "FileAnnouncement",
+                            EventPayload::FileRequest(_) => "FileRequest",
+                            EventPayload::FileChunk(_) => "FileChunk",
+                            EventPayload::ProfileUpdate(_) => "ProfileUpdate",
+                        };
                         tracing::info!(
                             from_peer = %message.delivered_from.fmt_short(),
                             topic = %envelope.topic,
+                            payload_type = %payload_type,
+                            size_bytes = msg_size,
                             "received gossip message"
                         );
                         if let Err(err) = inbound_tx
@@ -187,7 +236,11 @@ pub async fn run_gossip_receiver_loop(
                         }
                     }
                     Err(err) => {
-                        tracing::warn!(error = ?err, "failed to decode gossip envelope");
+                        tracing::warn!(
+                            error = ?err,
+                            size_bytes = msg_size,
+                            "⚠️  failed to decode gossip envelope - message may be too large or corrupted"
+                        );
                     }
                 }
             }
@@ -222,15 +275,12 @@ fn envelope_for(payload: EventPayload) -> EventEnvelope {
 
 fn topic_for_payload(payload: &EventPayload) -> String {
     match payload {
-        // Route threads, posts, and files to global topic so all connected peers receive them
+        // Route everything to global topic so all connected peers receive them
         EventPayload::ThreadSnapshot(_) => "graphchan-global".to_string(),
         EventPayload::PostUpdate(_) => "graphchan-global".to_string(),
         EventPayload::FileAvailable(_) => "graphchan-global".to_string(),
-        // File transfers use dedicated topics
-        EventPayload::FileRequest(request) => {
-            format!("file-request:{}", request.file_id.clone())
-        }
-        EventPayload::FileChunk(chunk) => format!("file-chunk:{}", chunk.file_id.clone()),
+        EventPayload::FileRequest(_) => "graphchan-global".to_string(),
+        EventPayload::FileChunk(_) => "graphchan-global".to_string(),
         EventPayload::ProfileUpdate(_) => "graphchan-global".to_string(),
     }
 }

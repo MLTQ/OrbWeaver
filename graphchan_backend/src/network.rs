@@ -93,6 +93,7 @@ impl NetworkHandle {
         let ingest_database = database.clone();
         let ingest_paths = paths.clone();
         let ingest_store = blob_store.clone();
+        let ingest_endpoint = endpoint.clone();
         let ingest_worker = tokio::spawn(async move {
             ingest::run_ingest_loop(
                 ingest_database,
@@ -100,6 +101,7 @@ impl NetworkHandle {
                 ingest_publisher,
                 inbound_rx,
                 ingest_store,
+                ingest_endpoint,
             )
             .await;
         });
@@ -237,9 +239,15 @@ impl NetworkHandle {
             while let Some(event_result) = peer_topic.next().await {
                 match event_result {
                     Ok(iroh_gossip::api::Event::Received(message)) => {
+                        let msg_size = message.content.len();
                         match serde_json::from_slice::<events::EventEnvelope>(&message.content) {
                             Ok(envelope) => {
                                 let peer_id = Some(message.delivered_from.to_string());
+                                tracing::debug!(
+                                    from_peer = %message.delivered_from.fmt_short(),
+                                    size_bytes = msg_size,
+                                    "peer subscription received message"
+                                );
                                 if let Err(err) = inbound_tx
                                     .send(events::InboundGossip {
                                         peer_id,
@@ -252,7 +260,11 @@ impl NetworkHandle {
                                 }
                             }
                             Err(err) => {
-                                tracing::warn!(error = ?err, "failed to decode gossip envelope in peer subscription");
+                                tracing::warn!(
+                                    error = ?err,
+                                    size_bytes = msg_size,
+                                    "⚠️  failed to decode in peer subscription - message may be too large"
+                                );
                             }
                         }
                     }

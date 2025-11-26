@@ -8,10 +8,12 @@ use crate::network::events::{
 };
 use crate::peers::PeerService;
 use crate::threading::{PostView, ThreadDetails};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use blake3::Hasher;
+use iroh::endpoint::Endpoint;
 use iroh_blobs::store::fs::FsStore;
 use std::fs;
+use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, Sender};
 
 pub async fn run_ingest_loop(
@@ -20,14 +22,20 @@ pub async fn run_ingest_loop(
     publisher: Sender<NetworkEvent>,
     mut rx: Receiver<InboundGossip>,
     blobs: FsStore,
+    endpoint: Arc<Endpoint>,
 ) {
-    let _ = &blobs;
     tracing::info!("network ingest loop started");
     while let Some(message) = rx.recv().await {
         let peer = message.peer_id.clone();
-        if let Err(err) =
-            handle_message(&database, &paths, &publisher, peer.clone(), message.payload)
-        {
+        if let Err(err) = handle_message(
+            &database,
+            &paths,
+            &publisher,
+            peer.clone(),
+            message.payload,
+            &blobs,
+            &endpoint,
+        ) {
             tracing::warn!(error = ?err, ?peer, "failed to apply inbound gossip payload");
         }
     }
@@ -40,44 +48,52 @@ fn handle_message(
     publisher: &Sender<NetworkEvent>,
     peer_id: Option<String>,
     payload: EventPayload,
+    blobs: &FsStore,
+    endpoint: &Arc<Endpoint>,
 ) -> Result<()> {
     match payload {
-        EventPayload::ThreadSnapshot(snapshot) => apply_thread_snapshot(database, snapshot),
+        EventPayload::ThreadSnapshot(snapshot) => apply_thread_snapshot(database, paths, publisher, snapshot, blobs, endpoint),
         EventPayload::PostUpdate(post) => apply_post_update(database, post),
         EventPayload::FileAvailable(announcement) => {
             let fetch_needed = apply_file_announcement(database, paths, &announcement)?;
-            if fetch_needed {
-                let request_payload = EventPayload::FileRequest(FileRequest {
-                    file_id: announcement.id.clone(),
-                });
-                if let Some(peer_id) = peer_id.clone() {
-                    let sender = publisher.clone();
-                    let payload = request_payload.clone();
-                    tokio::spawn(async move {
-                        if let Err(err) =
-                            sender.send(NetworkEvent::Direct { peer_id, payload }).await
-                        {
-                            tracing::warn!(error = ?err, "failed to enqueue direct file request");
-                        }
-                    });
-                }
-
-                let sender = publisher.clone();
+            if fetch_needed && announcement.ticket.is_some() {
+                tracing::info!(
+                    file_id = %announcement.id,
+                    post_id = %announcement.post_id,
+                    "📥 file needed - downloading via blob ticket"
+                );
+                // Use iroh-blobs to download directly
+                let db = database.clone();
+                let p = paths.clone();
+                let ann = announcement.clone();
+                let blob_store = blobs.clone();
+                let ep = endpoint.clone();
                 tokio::spawn(async move {
-                    if let Err(err) = sender.send(NetworkEvent::Broadcast(request_payload)).await {
-                        tracing::warn!(error = ?err, "failed to broadcast file request");
+                    if let Err(err) = download_blob(&db, &p, &ann, blob_store, ep).await {
+                        tracing::warn!(error = ?err, file_id = %ann.id, "failed to download blob");
                     }
                 });
+            } else if fetch_needed {
+                tracing::warn!(
+                    file_id = %announcement.id,
+                    "file needed but no blob ticket available"
+                );
             }
             Ok(())
         }
         EventPayload::FileRequest(request) => {
             if let Some(peer_id) = peer_id {
+                tracing::info!(file_id = %request.file_id, peer = %peer_id, "📤 received file request, preparing to send chunk");
                 respond_with_file_chunk(database, paths, publisher, &peer_id, request)?;
+            } else {
+                tracing::debug!(file_id = %request.file_id, "received file request without peer_id");
             }
             Ok(())
         }
-        EventPayload::FileChunk(chunk) => apply_file_chunk(database, paths, chunk),
+        EventPayload::FileChunk(chunk) => {
+            tracing::info!(file_id = %chunk.file_id, size = %chunk.data.len(), "📦 received file chunk");
+            apply_file_chunk(database, paths, chunk)
+        }
         EventPayload::ProfileUpdate(update) => apply_profile_update(database, update),
     }
 }
@@ -88,9 +104,18 @@ fn apply_profile_update(database: &Database, update: ProfileUpdate) -> Result<()
     Ok(())
 }
 
-fn apply_thread_snapshot(database: &Database, snapshot: ThreadDetails) -> Result<()> {
+fn apply_thread_snapshot(
+    database: &Database,
+    paths: &GraphchanPaths,
+    _publisher: &Sender<NetworkEvent>,
+    snapshot: ThreadDetails,
+    blobs: &FsStore,
+    endpoint: &Arc<Endpoint>,
+) -> Result<()> {
     let thread = snapshot.thread;
     let posts = snapshot.posts;
+    let post_ids: Vec<String> = posts.iter().map(|p| p.id.clone()).collect();
+
     database.with_repositories(|repos| {
         let thread_record = ThreadRecord {
             id: thread.id.clone(),
@@ -125,7 +150,53 @@ fn apply_thread_snapshot(database: &Database, snapshot: ThreadDetails) -> Result
         }
 
         Ok(())
-    })
+    })?;
+
+    // After creating posts, check for any files that need downloading
+    // (Files might have arrived before the posts existed)
+    for post_id in post_ids {
+        let files = database.with_repositories(|repos| {
+            repos.files().list_for_post(&post_id)
+        })?;
+
+        for file in files {
+            let needs_fetch = file_needs_download(paths, &file)?;
+            if needs_fetch && file.ticket.is_some() {
+                tracing::info!(
+                    file_id = %file.id,
+                    post_id = %post_id,
+                    "📥 post now exists - downloading pending blob"
+                );
+                // Convert the file record into a FileAnnouncement for blob download
+                let announcement = FileAnnouncement {
+                    id: file.id.clone(),
+                    post_id: file.post_id.clone(),
+                    thread_id: thread.id.clone(),
+                    original_name: file.original_name.clone(),
+                    mime: file.mime.clone(),
+                    size_bytes: file.size_bytes,
+                    checksum: file.checksum.clone(),
+                    blob_id: file.blob_id.clone(),
+                    ticket: file.ticket.as_ref().and_then(|t| {
+                        use std::str::FromStr;
+                        iroh_blobs::ticket::BlobTicket::from_str(t).ok()
+                    }),
+                };
+
+                let db = database.clone();
+                let p = paths.clone();
+                let blob_store = blobs.clone();
+                let ep = endpoint.clone();
+                tokio::spawn(async move {
+                    if let Err(err) = download_blob(&db, &p, &announcement, blob_store, ep).await {
+                        tracing::warn!(error = ?err, file_id = %announcement.id, "failed to download pending blob");
+                    }
+                });
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn apply_post_update(database: &Database, post: PostView) -> Result<()> {
@@ -188,6 +259,36 @@ fn apply_file_announcement(
     paths: &GraphchanPaths,
     announcement: &FileAnnouncement,
 ) -> Result<bool> {
+    tracing::debug!(
+        file_id = %announcement.id,
+        post_id = %announcement.post_id,
+        "processing FileAnnouncement"
+    );
+
+    // Check if we already have this file locally (we're the uploader)
+    let existing_record = database.with_repositories(|repos| {
+        repos.files().get(&announcement.id)
+    })?;
+
+    if let Some(existing) = &existing_record {
+        let existing_path = paths.base.join(&existing.path);
+        if existing_path.exists() {
+            tracing::info!(
+                file_id = %announcement.id,
+                path = %existing_path.display(),
+                "✅ file already exists locally, skipping announcement"
+            );
+            return Ok(false); // We already have it, no need to fetch
+        } else {
+            tracing::debug!(
+                file_id = %announcement.id,
+                path = %existing_path.display(),
+                "file record exists but file missing on disk, will re-download"
+            );
+        }
+    }
+
+    // We don't have it locally, create/update record for download
     let relative_path = format!("files/downloads/{}", announcement.id);
     let record = FileRecord {
         id: announcement.id.clone(),
@@ -201,24 +302,25 @@ fn apply_file_announcement(
         ticket: announcement.ticket.as_ref().map(|t| t.to_string()),
     };
 
-    let should_persist = database.with_repositories(|repos| {
-        if repos.posts().get(&announcement.post_id)?.is_none() {
-            tracing::debug!(
-                file_id = %announcement.id,
-                post_id = %announcement.post_id,
-                "skipping file announcement because post is unknown"
-            );
-            return Ok(false);
-        }
+    // Always persist the file record, even if post doesn't exist yet
+    // The post might arrive in a later message (ThreadSnapshot)
+    let post_exists = database.with_repositories(|repos| {
         repos.files().upsert(&record)?;
-        Ok(true)
+        tracing::debug!(file_id = %announcement.id, "file record upserted");
+        Ok(repos.posts().get(&announcement.post_id)?.is_some())
     })?;
 
-    if !should_persist {
-        return Ok(false);
+    if !post_exists {
+        tracing::info!(
+            file_id = %announcement.id,
+            post_id = %announcement.post_id,
+            "💾 saved file record, but post doesn't exist yet - will download when post arrives"
+        );
+        return Ok(false); // Don't download yet, wait for post
     }
 
     let needs_fetch = file_needs_download(paths, &record)?;
+    tracing::debug!(file_id = %announcement.id, needs_fetch = %needs_fetch, "checked if download needed");
     if needs_fetch {
         ensure_download_directory(paths)?;
     }
@@ -272,10 +374,12 @@ fn respond_with_file_chunk(
     };
     let absolute = paths.base.join(&record.path);
     if !absolute.exists() {
-        tracing::debug!(file_id = %request.file_id, path = %absolute.display(), "requested file missing locally");
+        tracing::warn!(file_id = %request.file_id, path = %absolute.display(), "⚠️  requested file missing locally");
         return Ok(());
     }
-    let data = fs::read(&absolute)?;
+    let data = fs::read(&absolute)
+        .with_context(|| format!("failed to read file for chunk: {}", absolute.display()))?;
+    tracing::info!(file_id = %request.file_id, size = %data.len(), "sending file chunk");
     let chunk_payload = EventPayload::FileChunk(FileChunk {
         file_id: request.file_id,
         data,
@@ -316,7 +420,10 @@ fn apply_file_chunk(database: &Database, paths: &GraphchanPaths, chunk: FileChun
     ensure_download_directory(paths)?;
     let relative = format!("files/downloads/{}", chunk.file_id);
     let absolute = paths.base.join(&relative);
-    fs::write(&absolute, &chunk.data)?;
+
+    fs::write(&absolute, &chunk.data)
+        .with_context(|| format!("failed to write file chunk to {}", absolute.display()))?;
+    tracing::debug!(file_id = %chunk.file_id, path = %absolute.display(), "wrote file chunk to disk");
 
     let mut hasher = Hasher::new();
     hasher.update(&chunk.data);
@@ -341,10 +448,113 @@ fn apply_file_chunk(database: &Database, paths: &GraphchanPaths, chunk: FileChun
     })?;
 
     if !known {
-        tracing::warn!(file_id = %chunk.file_id, "file chunk arrived without prior announcement; discarding");
+        tracing::warn!(file_id = %chunk.file_id, "⚠️  file chunk arrived without prior announcement; discarding");
         let _ = fs::remove_file(&absolute);
         return Ok(());
     }
+
+    tracing::info!(file_id = %chunk.file_id, size_bytes = size, "✅ file downloaded and saved successfully");
+    Ok(())
+}
+
+async fn download_blob(
+    database: &Database,
+    paths: &GraphchanPaths,
+    announcement: &FileAnnouncement,
+    blob_store: FsStore,
+    endpoint: Arc<Endpoint>,
+) -> Result<()> {
+    let ticket = announcement
+        .ticket
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("no ticket in announcement"))?;
+
+    tracing::info!(
+        file_id = %announcement.id,
+        hash = %ticket.hash().fmt_short(),
+        "downloading blob via iroh-blobs"
+    );
+
+    let hash = ticket.hash();
+
+    // Check if blob already exists in local store
+    let has_blob = blob_store.has(hash).await.context("failed to check blob existence")?;
+
+    if !has_blob {
+        tracing::info!(
+            file_id = %announcement.id,
+            hash = %hash.fmt_short(),
+            peer = %ticket.addr().id.fmt_short(),
+            "blob not in local store - downloading from peer"
+        );
+
+        // Download the blob from the peer specified in the ticket
+        let downloader = blob_store.downloader(&endpoint);
+        let download_result = downloader
+            .download(hash, Some(ticket.addr().id))
+            .await;
+
+        match download_result {
+            Ok(_) => {
+                tracing::info!(
+                    file_id = %announcement.id,
+                    hash = %hash.fmt_short(),
+                    "✅ blob downloaded successfully from peer"
+                );
+            }
+            Err(err) => {
+                tracing::warn!(
+                    file_id = %announcement.id,
+                    hash = %hash.fmt_short(),
+                    error = ?err,
+                    "⚠️  failed to download blob from peer"
+                );
+                return Err(err.into());
+            }
+        }
+    } else {
+        tracing::info!(file_id = %announcement.id, "blob already in local store");
+    }
+
+    // Export blob to file
+    ensure_download_directory(paths)?;
+    let relative_path = format!("files/downloads/{}", announcement.id);
+    let absolute_path = paths.base.join(&relative_path);
+
+    // Read blob data and write to file - use export method
+    blob_store
+        .export(hash, absolute_path.clone())
+        .await
+        .with_context(|| format!("failed to export blob to {}", absolute_path.display()))?;
+
+    let data = fs::read(&absolute_path)
+        .with_context(|| format!("failed to read exported file {}", absolute_path.display()))?;
+
+    tracing::info!(
+        file_id = %announcement.id,
+        path = %absolute_path.display(),
+        size = %data.len(),
+        "blob exported to file"
+    );
+
+    // Update database record
+    let size = data.len() as i64;
+    let mut hasher = Hasher::new();
+    hasher.update(&data);
+    let digest = hasher.finalize();
+    let checksum = format!("blake3:{}", digest.to_hex());
+
+    database.with_repositories(|repos| {
+        if let Some(mut record) = repos.files().get(&announcement.id)? {
+            record.path = relative_path;
+            record.size_bytes = Some(size);
+            record.checksum = Some(checksum);
+            repos.files().upsert(&record)?;
+            tracing::info!(file_id = %announcement.id, "✅ blob downloaded and saved successfully");
+        }
+        Ok(())
+    })?;
+
     Ok(())
 }
 
@@ -397,9 +607,19 @@ mod tests {
         let (inbound_tx, inbound_rx) = mpsc::channel(1);
         let blob_store = FsStore::load(&paths.blobs_dir).await.expect("blob store");
 
+        let secret = SecretKey::from_bytes(&[9u8; 32]);
+        let endpoint = Arc::new(
+            iroh::endpoint::Endpoint::builder()
+                .secret_key(secret.clone())
+                .bind()
+                .await
+                .expect("endpoint"),
+        );
+
         let ingest_db = database.clone();
         let ingest_paths = paths.clone();
         let ingest_publisher = publisher_tx.clone();
+        let ingest_endpoint = endpoint.clone();
         let handle = tokio::spawn(async move {
             run_ingest_loop(
                 ingest_db,
@@ -407,11 +627,11 @@ mod tests {
                 ingest_publisher,
                 inbound_rx,
                 blob_store,
+                ingest_endpoint,
             )
             .await;
         });
 
-        let secret = SecretKey::from_bytes(&[9u8; 32]);
         let hash = Hash::from_bytes([1u8; 32]);
         let blob_hex = hash.to_hex().to_string();
         let ticket = BlobTicket::new(EndpointAddr::new(secret.public()), hash, BlobFormat::Raw);
