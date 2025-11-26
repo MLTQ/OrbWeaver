@@ -6,8 +6,8 @@ use reqwest::blocking::Client;
 use reqwest::Url;
 
 use crate::models::{
-    CreatePostInput, CreateThreadInput, FileResponse, PeerView, PostResponse, PostView,
-    ThreadDetails, ThreadSummary,
+    AddPeerRequest, CreatePostInput, CreateThreadInput, FileResponse, PeerView, PostResponse,
+    PostView, ThreadDetails, ThreadSummary,
 };
 
 static SHARED_CLIENT: OnceLock<Client> = OnceLock::new();
@@ -93,6 +93,15 @@ impl ApiClient {
     pub fn list_peers(&self) -> Result<Vec<PeerView>> {
         let url = self.url("/peers")?;
         let response = self.client.get(url).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
+    pub fn add_peer(&self, friendcode: &str) -> Result<PeerView> {
+        let url = self.url("/peers")?;
+        let request = AddPeerRequest {
+            friendcode: friendcode.to_string(),
+        };
+        let response = self.client.post(url).json(&request).send()?.error_for_status()?;
         Ok(response.json()?)
     }
 

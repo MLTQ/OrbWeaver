@@ -34,6 +34,7 @@ pub enum AppMessage {
     },
     IdentityLoaded(Result<PeerView, anyhow::Error>),
     PeersLoaded(Result<Vec<PeerView>, anyhow::Error>),
+    PeerAdded(Result<PeerView, anyhow::Error>),
     AvatarUploaded(Result<(), anyhow::Error>),
     ProfileUpdated(Result<(), anyhow::Error>),
     ThreadFilesSelected(Vec<std::path::PathBuf>),
@@ -380,6 +381,21 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                     }
                     Err(err) => {
                         state.error = Some(format!("Failed to update profile: {err}"));
+                    }
+                }
+            }
+            AppMessage::PeerAdded(result) => {
+                let state = &mut app.identity_state;
+                state.adding_peer = false;
+                match result {
+                    Ok(peer) => {
+                        app.peers.insert(peer.id.clone(), peer.clone());
+                        app.info_banner = Some(format!("Added peer: {}", peer.username.as_deref().unwrap_or("Unknown")));
+                        state.friendcode_input.clear();
+                        state.error = None;
+                    }
+                    Err(err) => {
+                        state.error = Some(format!("Failed to add peer: {err}"));
                     }
                 }
             }

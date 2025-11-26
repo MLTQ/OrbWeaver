@@ -172,6 +172,15 @@ pub fn update_profile(client: ApiClient, tx: Sender<AppMessage>, username: Optio
     });
 }
 
+pub fn add_peer(client: ApiClient, tx: Sender<AppMessage>, friendcode: String) {
+    thread::spawn(move || {
+        let result = client.add_peer(&friendcode);
+        if tx.send(AppMessage::PeerAdded(result)).is_err() {
+            error!("failed to send PeerAdded message");
+        }
+    });
+}
+
 pub fn load_peers(client: ApiClient, tx: Sender<AppMessage>) {
     thread::spawn(move || {
         let result = client.list_peers();

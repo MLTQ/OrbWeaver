@@ -37,6 +37,8 @@ pub struct IdentityState {
     pub initialized_inputs: bool,
     pub inspected_peer: Option<PeerView>,
     pub cropper_state: Option<AvatarCropperState>,
+    pub friendcode_input: String,
+    pub adding_peer: bool,
 }
 
 pub struct AvatarCropperState {

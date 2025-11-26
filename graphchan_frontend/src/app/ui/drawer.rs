@@ -11,9 +11,6 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
         .resizable(true)
         .default_width(300.0)
         .show(ctx, |ui| {
-            ui.heading("Identity Management");
-            ui.add_space(10.0);
-
             let mut next_action = None;
             let mut trigger_load = false;
 
@@ -21,20 +18,25 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                 DownloadAvatar(String, String),
                 UploadAvatar(String),
                 PickAvatar,
+                AddPeer(String),
             }
 
-            // Scope 1: Identity Info
-            {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.heading("Identity Management");
+                ui.add_space(10.0);
+
+                // Scope 1: Identity Info
+                {
                 let state = &mut app.identity_state;
                 let mut back_clicked = false;
                 
                 if let Some(peer) = &state.inspected_peer {
                     ui.heading("Peer Profile");
-                    if ui.button("Back to My Identity").clicked() {
+                    if ui.button("← Back to My Identity").clicked() {
                         back_clicked = true;
                     }
                     ui.add_space(10.0);
-                    
+
                     ui.group(|ui| {
                         if let Some(username) = &peer.username {
                             ui.label(format!("Username: {}", username));
@@ -44,7 +46,25 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                         }
                         ui.label(format!("Friendcode: {}", peer.friendcode.as_deref().unwrap_or("Unknown")));
                         ui.label(format!("Fingerprint: {}", peer.gpg_fingerprint.as_deref().unwrap_or("Unknown")));
-                        
+
+                        ui.add_space(10.0);
+
+                        // Follow button
+                        if let Some(friendcode) = &peer.friendcode {
+                            // Check if we already have this peer in our list
+                            let already_following = app.peers.contains_key(&peer.id);
+
+                            if already_following {
+                                ui.label("✓ Following");
+                            } else {
+                                if ui.button("Follow").clicked() && !state.adding_peer {
+                                    state.adding_peer = true;
+                                    state.error = None;
+                                    next_action = Some(Action::AddPeer(friendcode.clone()));
+                                }
+                            }
+                        }
+
                         ui.add_space(10.0);
                         ui.label("Avatar:");
                         if let Some(avatar_id) = &peer.avatar_file_id {
@@ -158,6 +178,27 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                     if let Some(err) = &state.error {
                         ui.colored_label(egui::Color32::RED, err);
                     }
+
+                    ui.add_space(20.0);
+                    ui.separator();
+                    ui.add_space(20.0);
+
+                    ui.heading("Add Friend");
+                    ui.label("Enter a friendcode to connect with a peer:");
+                    ui.text_edit_singleline(&mut state.friendcode_input);
+
+                    ui.horizontal(|ui| {
+                        if ui.button("Add Friend").clicked() && !state.adding_peer && !state.friendcode_input.trim().is_empty() {
+                            state.adding_peer = true;
+                            state.error = None;
+                            next_action = Some(Action::AddPeer(state.friendcode_input.trim().to_string()));
+                        }
+
+                        if state.adding_peer {
+                            ui.spinner();
+                            ui.label("Adding...");
+                        }
+                    });
                 } else {
                     ui.spinner();
                     ui.label("Loading identity...");
@@ -165,17 +206,16 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                          trigger_load = true;
                     }
                 }
-                
+
                 if back_clicked {
                     state.inspected_peer = None;
                 }
             }
+            }); // End ScrollArea
 
             if trigger_load {
                 app.spawn_load_identity();
             }
-
-
 
             match next_action {
                 Some(Action::DownloadAvatar(id, url)) => {
@@ -186,6 +226,13 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                         app.api.clone(),
                         app.tx.clone(),
                         std::path::PathBuf::from(path).to_string_lossy().to_string(),
+                    );
+                }
+                Some(Action::AddPeer(friendcode)) => {
+                    crate::app::tasks::add_peer(
+                        app.api.clone(),
+                        app.tx.clone(),
+                        friendcode,
                     );
                 }
                 Some(Action::PickAvatar) => {

@@ -107,3 +107,8 @@ pub struct UpdateProfileRequest {
     pub username: Option<String>,
     pub bio: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddPeerRequest {
+    pub friendcode: String,
+}
