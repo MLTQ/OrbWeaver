@@ -8,67 +8,103 @@
 
 ## Event Model
 - **Topics:**
-  - `thread:{thread_id}` – thread snapshots and post increments.
-  - `file:{file_id}` – attachment announcements.
-  - `control` – reserved for future peer metadata.
-- **Payloads:** JSON `EventEnvelope { version, topic, payload }` framed with a u32 length prefix.
-  - `ThreadSnapshot` carries `ThreadDetails` (summary + posts) so receivers can upsert missing content.
-  - `PostUpdate` ships a single `PostView` when only a reply changes.
-  - `FileAvailable` includes `{id, post_id, original_name, mime, size_bytes, checksum?, blob_id?}`; blob info is still optional until promotion lands.
-  - `FileRequest { file_id }` allows a peer missing a blob to request it directly from the announcer.
-  - `FileChunk { file_id, data, eof }` transports the raw bytes back to the requester (currently bundled as a single chunk per file).
-  - Add `node_signature` using the local GPG key for authenticity once signing helpers land.
+  - `graphchan-global` – All messages are routed to this single global topic. Per-peer topics are created during friendcode connection (with peer as bootstrap) but all use the same global topic ID for message routing.
+  - Topic-based filtering was simplified to use a single global channel to avoid message loss.
+- **Payloads:** JSON `EventEnvelope { version, topic, payload }` serialized directly (no length prefix needed with iroh-gossip).
+  - `ThreadSnapshot(ThreadDetails)` – Carries complete thread with posts and peer metadata so receivers can upsert missing content. Peers list includes all authors referenced in posts to satisfy foreign key constraints.
+  - `PostUpdate(PostView)` – Ships a single post when only a reply changes.
+  - `FileAvailable(FileAnnouncement)` – Includes `{id, post_id, thread_id, original_name, mime, size_bytes, checksum?, blob_id?, ticket: BlobTicket}`. The ticket contains the uploader's endpoint address and blob hash for active download.
+  - `ProfileUpdate(ProfileUpdate)` – Peer profile/avatar updates with optional blob ticket for avatar files.
+  - **DEPRECATED** `FileRequest { file_id }` and `FileChunk { file_id, data, eof }` – Legacy gossip-based file transfer retained for compatibility but no longer used. Replaced by iroh-blobs active downloads.
+  - Future: Add `node_signature` using the local GPG key for authenticity once signing helpers land.
 
 ## Transport Strategy
-1. **Endpoint Lifecycle**
-   - Bind endpoint with `GRAPHCHAN_ALPN` (already done).
+1. **Endpoint Lifecycle** ✅
+   - Bind endpoint with `GRAPHCHAN_ALPN = b"graphchan/0"` (done).
    - Respect `GRAPHCHAN_RELAY_URL` by building a `RelayMap` when present (done).
-   - Periodically refresh `EndpointAddr` and publish local friendcode updates when addresses change.
+   - Future: Periodically refresh `EndpointAddr` and publish local friendcode updates when addresses change.
 
-2. **Gossip Channels**
-   - Use Iroh’s stream APIs (`Endpoint::open_bi`/`accept_bi`) to open long-lived connections per peer.
-   - Implement a simple protocol on top of QUIC streams:
-     - Frame = `<len:u32><payload>` where payload is `EventEnvelope` (topic + bytes).
-     - Broadcast events fan out to every active connection; targeted messages (`FileRequest`, `FileChunk`, future control frames) resolve the remote peer ID and send over a single connection.
-   - Alternatively, explore `iroh::net` pub/sub if exposed (to be researched in Docs/Iroh).
+2. **Gossip Protocol** ✅
+   - Uses `iroh-gossip` (`iroh_gossip::net::Gossip`) for P2P message broadcasting.
+   - All peers subscribe to `graphchan-global` topic at startup via `gossip.subscribe(topic_id, vec![])`.
+   - When connecting to a peer via friendcode:
+     1. Endpoint connects: `endpoint.connect(addr, GRAPHCHAN_ALPN).await`
+     2. Creates new gossip subscription with peer as bootstrap: `gossip.subscribe(global_topic_id, vec![peer_id])`
+     3. Spawns receiver loop for the peer-specific subscription
+   - Messages are JSON-serialized `EventEnvelope` and broadcast via `topic.broadcast(Bytes::from(json))`.
+   - iroh-gossip handles:
+     - Automatic mesh formation between neighbors
+     - Message deduplication
+     - Neighbor up/down events for connectivity tracking
+     - Reliable delivery within the mesh
 
-3. **Peer Discovery & Sessions**
-   - Decode incoming friendcode → `EndpointAddr`. Add to connection manager.
-   - Maintain a background task that dials known peers; on success, register a `PeerSession` and spawn reader/writer tasks.
-   - Support reconnection with exponential backoff.
+3. **Peer Discovery & Sessions** ✅
+   - Decode incoming friendcode → `EndpointAddr` (done).
+   - `NetworkHandle::connect_friendcode` initiates endpoint connection and gossip subscription (done).
+   - Multiple parallel gossip receiver loops (one from startup, one per friendcode connection) all forward to a single inbound channel.
+   - Future: Support reconnection with exponential backoff for failed connections.
 
-4. **Blob Distribution**
-   - When uploading a file:
-     1. Store locally and compute checksum.
-     2. Stage file as an Iroh blob (map local path → blob hash via Iroh Blob API).
-     3. Emit `FileEvent` with `blob_hash` so peers can fetch via Iroh.
-   - On receipt of `FileEvent`, if blob missing, fetch via Iroh and persist under `files/downloads/`.
+4. **Blob Distribution** ✅
+   - **Upload path:**
+     1. File bytes imported to `FsStore`: `blob_store.add_bytes(bytes).temp_tag().await`
+     2. Obtain Blake3 hash from tag: `hash_and_format().hash`
+     3. Create `BlobTicket` with local endpoint address: `BlobTicket::new(endpoint_addr, hash, BlobFormat::Raw)`
+     4. Persist metadata to SQLite including ticket string
+     5. Broadcast `FileAvailable` with ticket via gossip
+   - **Download path:**
+     1. Receive `FileAvailable` with `BlobTicket`
+     2. Save file record to SQLite (even if post doesn't exist yet)
+     3. If post exists, spawn download task:
+        - Check local store: `blob_store.has(hash)`
+        - If missing, download from peer: `blob_store.downloader(&endpoint).download(hash, peer_id)`
+        - Export to downloads: `blob_store.export(hash, path)`
+        - Update SQLite with final path/size/checksum
+     4. If post missing, defer download until `ThreadSnapshot` creates it
+   - Files of any size supported; no gossip message size limits.
 
-5. **Ordering & Idempotency**
-   - Each `PostEvent` carries `post_id` so receivers can upsert (using existing repositories’ `upsert` logic to implement).
-   - Maintain event revision numbers (timestamp or monotonic counters) to de-duplicate.
+5. **Ordering & Idempotency** ✅
+   - Events carry stable IDs (`thread_id`, `post_id`, `file_id`) enabling upsert operations.
+   - Repository `upsert` methods handle duplicates idempotently (done).
+   - iroh-gossip provides automatic message deduplication.
+   - Race conditions handled:
+     - `FileAvailable` before `ThreadSnapshot`: File record saved, download deferred
+     - Missing peer records: Stub peers created automatically
+     - Duplicate `ThreadSnapshot`: upsert is idempotent
 
 ## Implementation Roadmap
-1. **Message Layer** ✅ `network/events.rs` now serializes full thread/post/file payloads and broadcasts to every live connection.
+1. **Message Layer** ✅ `network/events.rs` serializes full thread/post/file payloads and broadcasts via iroh-gossip to all connected peers on `graphchan-global` topic.
 
-2. **Session Manager** ✅ Accept + dial loops register connections, track lifecycle, and spawn reader tasks per QUIC connection.
+2. **Gossip Integration** ✅ Migrated from custom QUIC streams to `iroh-gossip` for reliable P2P broadcasting with automatic mesh formation, deduplication, and neighbor tracking.
 
-3. **Inbound Processing** ✅ `network/ingest.rs` receives decoded envelopes and upserts data into SQLite (threads, posts, files) so REST reads reflect remote gossip.
+3. **Inbound Processing** ✅ `network/ingest.rs` receives decoded envelopes and upserts data into SQLite (threads, posts, files, peers) with proper handling of foreign key constraints and race conditions.
 
-4. **Blob Integration**
-   - Current: single-chunk transfers ride over the gossip stream after a `FileRequest`; attachments are verified with Blake3 and stored under `files/downloads/`.
-   - Next: research the native Iroh blob API (`iroh::blobs`) to stream large payloads, resume partial downloads, and decouple file sync from the control channel.
+4. **Blob Integration** ✅
+   - ~~Legacy: single-chunk transfers over gossip after `FileRequest` (deprecated, retained for compatibility)~~
+   - **Current**: Full iroh-blobs integration with active downloads:
+     - Files stored in content-addressed `FsStore` with Blake3 hashing
+     - `BlobTicket` creation and gossip broadcast
+     - Active blob download: `blob_store.downloader(&endpoint).download(hash, peer_id)`
+     - Export to downloads directory via `blob_store.export(hash, path)`
+     - Deferred downloads for race conditions
+   - Supports files of any size without message size limits
+   - Blobs are deduplicated by hash automatically
 
-5. **Testing**
-   - Add multi-node integration harness launching two servers with loopback friendcodes.
-   - Validate thread + file replication end-to-end (after blob promotion lands update the ignored REST test).
+5. **Testing** ⚠️
+   - Manual two-node testing confirms end-to-end replication with blob downloads working
+   - TODO: Add automated integration harness launching two servers with loopback friendcodes
+   - TODO: Validate thread + file replication in CI
 
 ## Open Questions
 - Should friendcodes embed relay/public address updates each time? Might need signed metadata messages over gossip instead.
-- Encryption: rely on Iroh’s transport security; do we also sign payloads with GPG? (Recommended for tamper detection.)
-- Persistence of peer sessions: write to DB for crash recovery?
+- Encryption: Currently relying on Iroh's transport security (QUIC + TLS). Future: sign payloads with GPG for tamper detection and non-repudiation.
+- Persistence of peer sessions: Currently peer metadata is persisted but connection state is ephemeral. Consider persisting connection attempts for crash recovery?
+- Blob download retry: Should failed downloads be queued for retry with exponential backoff, or rely on user-initiated refresh?
+- Legacy code removal: When can we remove deprecated `FileRequest`/`FileChunk` handlers?
 
 ## References
 - `Docs/Iroh Docs 0.94.0/src/iroh/endpoint.rs.html` for endpoint builder, relays, and connection APIs.
 - `iroh-base::EndpointAddr` for managing addresses and relays.
-- Future: check `iroh::net` module for higher-level pub/sub once stable.
+- `iroh-gossip` crate documentation: https://docs.rs/iroh-gossip/latest/iroh_gossip/
+- `iroh-blobs` crate documentation: https://docs.rs/iroh-blobs/latest/iroh_blobs/
+- Iroh quickstart guide: https://www.iroh.computer/docs/quickstart
+- BlobTicket API: https://docs.rs/iroh-blobs/latest/iroh_blobs/ticket/struct.BlobTicket.html

@@ -104,6 +104,7 @@ pub async fn import_fourchan_thread(state: &AppState, url: &str) -> Result<Strin
         }
     }
 
+    // Import remaining posts directly via service (not API) to avoid broadcasting each post
     for post in posts_iter {
         let body = clean_body(post.com.clone());
         if body.is_empty() && post.tim.is_none() {
@@ -132,12 +133,13 @@ pub async fn import_fourchan_thread(state: &AppState, url: &str) -> Result<Strin
             payload.created_at = Some(dt.to_rfc3339());
         }
 
+        // Create post directly via service (bypasses API broadcast)
         let created = thread_service
             .create_post(payload)
             .with_context(|| format!("failed to create post {}", post.no))?;
         id_map.insert(post.no, created.id.clone());
 
-        // Upload post's image if it has one
+        // Upload post's image if it has one (still broadcasts FileAvailable individually)
         if let (Some(tim), Some(ext)) = (post.tim, post.ext.as_ref()) {
             let filename = post.filename.clone().unwrap_or_else(|| format!("{}", tim));
             if let Err(e) =
@@ -146,6 +148,34 @@ pub async fn import_fourchan_thread(state: &AppState, url: &str) -> Result<Strin
                 tracing::warn!("Failed to upload image for post {}: {}", post.no, e);
             }
         }
+    }
+
+    // After importing all posts, broadcast a complete thread snapshot to peers
+    let complete_details = thread_service
+        .get_thread(&graph_thread_id)
+        .context("failed to get imported thread for broadcast")?
+        .context("imported thread not found")?;
+
+    // Serialize to check message size
+    let json_bytes = serde_json::to_vec(&complete_details)
+        .context("failed to serialize thread snapshot")?;
+    let size_kb = json_bytes.len() as f64 / 1024.0;
+
+    tracing::info!(
+        thread_id = %graph_thread_id,
+        post_count = complete_details.posts.len(),
+        peer_count = complete_details.peers.len(),
+        size_bytes = json_bytes.len(),
+        size_kb = format!("{:.2}", size_kb),
+        "📢 broadcasting complete imported thread snapshot to peers"
+    );
+
+    if let Err(err) = state.network.publish_thread_snapshot(complete_details).await {
+        tracing::warn!(
+            error = ?err,
+            thread_id = %graph_thread_id,
+            "failed to broadcast imported thread snapshot"
+        );
     }
 
     Ok(graph_thread_id)

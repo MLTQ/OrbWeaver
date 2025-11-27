@@ -57,10 +57,24 @@ All three binaries share the same runtime directories, so copying any executable
 
 ## Networking Strategy
 - **Transport**: A single Iroh router per node that accepts both the custom `graphchan/0` gossip ALPN and `/iroh-bytes/4` for blob transfers. If `GRAPHCHAN_RELAY_URL` is set, the underlying endpoint binds with `RelayMode::Custom` so traffic is routed via the configured relay.
-- **Sessions**: Incoming and outgoing QUIC connections are wrapped in `ConnectionEntry` records kept in an `RwLock`. Connection lifetime is monitored and entries are pruned when streams close.
-- **Events**: A Tokio `mpsc` channel buffers outbound `NetworkEvent`s. Each event is framed as `EventEnvelope {version, topic, payload}` (JSON) and dispatched over fresh unidirectional streams managed by the router. Payloads cover thread snapshots, post updates, `FileAvailable` announcements (with blob tickets), and on-demand requests/chunks for legacy peers.
-- **Friendcodes**: The API decodes friendcodes into `EndpointAddr` values and instructs the network layer to dial the peer immediately. Addresses may be socket addresses or relay URLs.
-- **Next steps**: Harden ticket redemption with retries/deduping and extend the ingest worker to fetch blobs automatically when tickets arrive.
+- **Gossip Protocol**: Uses `iroh-gossip` for P2P message broadcasting. All peers subscribe to the `graphchan-global` topic at startup. When peers connect via friendcode, additional topic subscriptions are created with the peer as a bootstrap node to establish gossip mesh connectivity. Messages are automatically deduplicated by iroh-gossip, and neighbor up/down events track mesh connectivity.
+- **Events**: A Tokio `mpsc` channel buffers outbound `NetworkEvent`s. Each event is framed as `EventEnvelope {version, topic, payload}` (JSON) and broadcast to all connected peers via gossip. Payloads include:
+  - `ThreadSnapshot(ThreadDetails)` - complete thread with posts and peer metadata
+  - `PostUpdate(PostView)` - single post update
+  - `FileAvailable(FileAnnouncement)` - announces a file with its `BlobTicket` for download
+  - `ProfileUpdate(ProfileUpdate)` - peer profile/avatar updates
+  - Legacy `FileRequest`/`FileChunk` retained for compatibility but no longer used
+- **File Synchronization**: Full iroh-blobs integration with active blob downloads:
+  1. **Upload**: Files are stored in the local `FsStore` (content-addressed by Blake3 hash), with metadata persisted to SQLite including the blob hash and a `BlobTicket` containing the uploader's endpoint address.
+  2. **Announcement**: `FileAvailable` gossip message broadcasts the ticket to all peers.
+  3. **Download**: When a peer receives a `FileAvailable` with a ticket:
+     - Checks if blob exists locally (`blob_store.has(hash)`)
+     - If missing, uses `blob_store.downloader(&endpoint).download(hash, peer_id)` to actively pull the blob from the peer specified in the ticket
+     - Exports blob to `files/downloads/{file_id}` via `blob_store.export(hash, path)`
+     - Updates SQLite with path, size, and checksum
+  4. **Deferred Download**: If a `FileAvailable` arrives before its post exists (race condition), the file record is saved and download is deferred until `ThreadSnapshot` creates the post.
+- **Peer Ingestion**: When receiving a `ThreadSnapshot`, peers from the snapshot are ingested first, then stub peer records are created for any missing post authors to satisfy foreign key constraints before posts are inserted.
+- **Friendcodes**: The API decodes friendcodes into `EndpointAddr` values and instructs the network layer to dial the peer immediately, then subscribes to the global gossip topic with that peer as a bootstrap node to establish mesh connectivity. Addresses may be socket addresses or relay URLs.
 
 ## Database Schema Highlights
 - `threads(id, title, creator_peer_id, created_at, pinned)`
@@ -84,13 +98,36 @@ The Axum router exposes:
 - `/peers/self` (GET)
 Handlers construct services on demand, perform validation, persist through repositories, then emit network events to notify peers. Incoming gossip is applied asynchronously via the ingest worker, which upserts threads/posts/files into SQLite so the REST surface reflects remote changes.
 
-## Request Lifecycle Example
-1. Client `POST /threads` with title/body.
-2. `ThreadService` validates input, writes thread (and optional seed post) via repositories.
-3. Response returns the materialised thread with posts.
-4. Handler calls `NetworkHandle::publish_thread_snapshot`, which queues a gossip event for connected peers.
+## Request Lifecycle Examples
 
-File uploads follow the same pattern with an added blob stage: bytes are written under `files/uploads/`, imported into the `FsStore`, metadata (including blob hash and ticket placeholder) is inserted, and a `FileAvailable` gossip message carrying a `BlobTicket` is queued. Peers missing the blob redeem the ticket via `/iroh-bytes/4`; legacy nodes still fall back to the `FileRequest`/`FileChunk` flow. Attachments returned by `/posts/{id}/files` now include a `ticket` field and a `present` flag so callers can decide whether to download or wait for replication.
+### Thread Creation with Attachments
+1. Client `POST /threads` with multipart form data (title, body, optional files).
+2. `ThreadService` validates input, writes thread and seed post via repositories.
+3. For each attachment:
+   - File bytes are imported into `FsStore` via `blob_store.add_bytes()`, obtaining a Blake3 hash
+   - Metadata is persisted to SQLite: `{id, post_id, path, original_name, mime, blob_id, size_bytes, checksum, ticket}`
+   - A `BlobTicket` is created with the local endpoint address and blob hash
+   - `FileAvailable` gossip message is broadcast with the ticket
+4. `ThreadSnapshot` is broadcast to all peers via gossip
+5. Response returns the complete `ThreadDetails` with posts and file metadata
+
+### File Download on Remote Peer
+1. Peer receives `FileAvailable` gossip message with `BlobTicket`
+2. `apply_file_announcement` saves file record to SQLite
+3. If post exists, spawns `download_blob` task:
+   - Checks if blob exists locally: `blob_store.has(hash)`
+   - If missing, downloads from peer: `blob_store.downloader(&endpoint).download(hash, peer_id)`
+   - Exports to downloads directory: `blob_store.export(hash, path)`
+   - Updates SQLite with final path, size, checksum
+4. If post doesn't exist yet (race condition), download is deferred
+5. When `ThreadSnapshot` arrives and creates the post, deferred download is triggered
+
+### Handling Race Conditions
+The gossip protocol provides no ordering guarantees, so:
+- **FileAvailable before ThreadSnapshot**: File record is saved, download deferred until post exists
+- **Missing peer records**: Stub peers are created automatically with `trust_state: "unknown"` before inserting posts
+- **Duplicate messages**: iroh-gossip handles deduplication automatically
+- **Blob already exists**: Download is skipped, file is exported from local store directly
 
 ## Desktop Bundle & Portability
 - The workspace now ships a `graphchan_desktop` binary that links both crates. It bootstraps a `GraphchanNode` via the shared `node` module, spawns the Axum/iroh services on a dedicated Tokio runtime, and sets `GRAPHCHAN_API_URL` to the bound localhost port before launching the egui UI.
@@ -99,11 +136,12 @@ File uploads follow the same pattern with an added blob stage: bytes are written
 - When the GUI exits, the desktop launcher aborts the Axum server task and calls `NetworkHandle::shutdown()` to tear down the embedded router cleanly, ensuring no stray QUIC endpoints stay bound between sessions.
 
 ## Known Gaps / Future Work
-1. **Gossip robustness** – Add deduplication, retries/backoff, and telemetry around ingest failures.
-2. **Blob redemption tests** – Add automated coverage that exercises ticket issuance, persistence, and redemption across multiple nodes.
-3. **API polish** – Add pagination/search, richer error mapping, and authentication hooks.
-4. **Observability** – Expand logging, metrics, and tracing to aid operators once nodes run long-lived.
-5. **Integration testing** – Extend the ignored REST harness into a multi-node scenario that uploads via REST/CLI and verifies blob tickets replicate end to end.
+1. **Blob download retry logic** – Currently blob downloads fail silently if the peer is unreachable; add exponential backoff and retry queue for failed downloads.
+2. **Legacy FileRequest/FileChunk removal** – The old gossip-based file transfer code is retained for compatibility but no longer used; can be removed once all nodes are updated.
+3. **Blob redemption tests** – Add automated multi-node integration tests that exercise ticket issuance, gossip propagation, and active blob downloads end to end.
+4. **API polish** – Add pagination/search, richer error mapping, and authentication hooks.
+5. **Observability** – Expand logging, metrics, and tracing to aid operators once nodes run long-lived.
+6. **Peer discovery improvements** – Currently requires manual friendcode exchange; explore DHT or rendezvous for automatic peer discovery.
 
 ## Documentation & Tooling
 - Architectural intent lives here; design rationales and roadmap details are in `Docs/Design.md` and `Docs/ImplementationPlan.md`.

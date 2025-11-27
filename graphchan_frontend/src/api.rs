@@ -161,6 +161,31 @@ impl ApiClient {
         format!("{}/files/{}", self.base_url, file_id)
     }
 
+    pub fn import_thread(&self, url: &str) -> Result<String> {
+        let api_url = self.url("/import")?;
+        #[derive(serde::Serialize)]
+        struct ImportRequest {
+            url: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct ImportResponse {
+            id: String,
+        }
+
+        let request = ImportRequest {
+            url: url.to_string(),
+        };
+        let response = self
+            .client
+            .post(api_url)
+            .json(&request)
+            .timeout(Duration::from_secs(300)) // 5 minute timeout for large imports
+            .send()?
+            .error_for_status()?;
+        let wrapper: ImportResponse = response.json()?;
+        Ok(wrapper.id)
+    }
+
     fn url(&self, path: &str) -> Result<Url> {
         let mut url = Url::parse(&self.base_url).context("invalid base URL")?;
         url.set_path(path.trim_start_matches('/'));

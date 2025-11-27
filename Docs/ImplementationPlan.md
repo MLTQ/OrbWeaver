@@ -57,41 +57,56 @@
 - Established Axum server with shared state, JSON health output, and integration hooks to `FileService`/`ThreadService`.
 - **Migrated to iroh-gossip 0.94.0** - Replaced custom gossip protocol with production-ready topic-based pub/sub using Plumtree/HyParView algorithms.
 - Gossip layer now uses `iroh_gossip::net::Gossip` with topic subscriptions, automatic neighbor management, and built-in message deduplication.
-- Ingest worker (`network/ingest.rs`) applies inbound snapshots/posts, tracks missing blobs, issues `FileRequest`s, and stores returned `FileChunk`s under `files/downloads/` with checksum verification.
+- **✅ Full iroh-blobs integration (November 2025)**:
+  - Files stored in content-addressed `FsStore` with Blake3 hashing
+  - `BlobTicket` creation and broadcast via `FileAvailable` gossip messages
+  - Active blob downloads: `blob_store.downloader(&endpoint).download(hash, peer_id)`
+  - Export to downloads directory: `blob_store.export(hash, path)`
+  - Handles race conditions (file announcements before posts exist)
+  - Supports files of any size without gossip message limits
+  - **Deprecated** legacy `FileRequest`/`FileChunk` protocol (retained for compatibility)
+- Ingest worker (`network/ingest.rs`) applies inbound snapshots/posts with proper foreign key handling:
+  - Creates stub peer records for missing authors automatically
+  - Defers blob downloads until posts exist
+  - Handles out-of-order gossip message delivery
 - Added an interactive CLI (`graphchan_backend cli`) to manage friendcodes, inspect threads, and post messages without a REST client.
-- File uploads now stream into the `FsStore`, retain MIME hints, enforce optional size caps (`GRAPHCHAN_MAX_UPLOAD_BYTES`), expose blob tickets/presence via API/CLI, and provide interactive `upload`/`download` commands for manual verification.
-- Two-node integration harness (`two_node_gossip_replication`) proves friendcode exchange, bi-directional post replication, and attachment request/response flows end-to-end (blob ticket validation still manual).
+- Two-node manual testing proves end-to-end P2P image synchronization with iroh-blobs working.
 - Added documentation (`Docs/Architecture.md`, `Docs/NetworkingPlan.md`, `Docs/ImplementationPlan.md`) capturing current design decisions and roadmap.
 - Unit tests (`cargo test`) pass; REST integration harness exists (ignored pending network sync).
 - **Frontend**: Fixed build errors, egui 0.27 API compatibility, and borrow checker issues in graphchan_frontend.
 - **Frontend**: Graph view now renders per-post reply edges over a dotted canvas background (currently limited to one parent edge per post while importer/back-end fixes roll out).
+- **Frontend**: Image display working for both local and remote peer attachments.
 - **Desktop bundle**: Introduced the `graphchan_desktop` crate which spins up a `GraphchanNode`, serves the REST API locally, and launches the egui UI against that embedded backend so users can run a single portable executable without manual configuration.
 
 ## Next Actions
 1. **Frontend Enhancements**:
    - Add peer/friendcode management UI (display local friendcode, add peers dialog).
    - Implement persistent settings (save API URL to localStorage or config file).
-   - Add image thumbnails for attachments using `egui_extras::image`.
+   - ✅ ~~Add image thumbnails for attachments~~ **COMPLETE**
    - Implement file upload UI (multipart form support).
-   
-2. **Gossip hardening**:
-   - Add deduplication/backoff, surface telemetry for queued/failed deliveries, and persist replication stats.
-   - Monitor iroh-gossip metrics for network health.
-   
-3. **Blob ticket validation**:
-   - Add unit tests for `FileService` (store writes + `persist_ticket`), ingest ticket handling, and downloader happy-path coverage.
-   - Extend the ignored REST harness to assert tickets appear in responses and a second node can redeem them.
-   
-4. **Encoding & signatures**:
-   - Switch to CBOR/MessagePack for more efficient serialization.
-   - Add versioning + optional GPG signatures to `EventEnvelope` for tamper detection.
-   
-5. **Multi-node integration harness**:
-   - Automate a two-node scenario that exchanges friendcodes, posts files, and verifies blob replication end to end.
-   
+
+2. **Blob download reliability**:
+   - Add retry logic with exponential backoff for failed downloads
+   - Queue failed downloads for later retry
+   - Add user-triggered refresh to retry failed downloads
+
+3. **Automated testing**:
+   - Add automated multi-node integration tests for blob replication
+   - Test race conditions (FileAvailable before ThreadSnapshot)
+   - Test foreign key constraint handling (missing peer records)
+   - Add CI coverage for two-node gossip scenarios
+
+4. **Code cleanup**:
+   - Remove legacy `FileRequest`/`FileChunk` handlers once all nodes updated
+   - Clean up deprecated gossip-based file transfer code
+
+5. **Encoding & signatures**:
+   - Switch to CBOR/MessagePack for more efficient serialization (optional)
+   - Add versioning + optional GPG signatures to `EventEnvelope` for tamper detection
+
 6. **REST/API polish**:
-   - Pagination/search/auth, better error mapping.
-   - Derive advertised addresses from the live endpoint rather than env hints.
+   - Pagination/search/auth, better error mapping
+   - Derive advertised addresses from the live endpoint rather than env hints
 
 ## Frontend Roadmap
 
