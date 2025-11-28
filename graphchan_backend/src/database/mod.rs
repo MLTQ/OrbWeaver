@@ -41,6 +41,7 @@ pub(crate) const MIGRATIONS: &str = r#"
         creator_peer_id TEXT,
         created_at TEXT NOT NULL,
         pinned INTEGER DEFAULT 0,
+        thread_hash TEXT,
         FOREIGN KEY (creator_peer_id) REFERENCES peers(id)
     );
 
@@ -119,6 +120,7 @@ impl Database {
             self.ensure_files_schema_locked(conn)?;
             self.ensure_avatar_column(conn)?;
             self.ensure_thread_blob_ticket_column(conn)?;
+            self.ensure_thread_hash_column(conn)?;
             Ok(())
         })?;
         Ok(self.newly_created)
@@ -285,6 +287,25 @@ impl Database {
         }
         if !has_blob_ticket {
             conn.execute("ALTER TABLE threads ADD COLUMN blob_ticket TEXT", [])?;
+        }
+        Ok(())
+    }
+
+    fn ensure_thread_hash_column(&self, conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare("PRAGMA table_info(threads)")?;
+        let mut has_thread_hash = false;
+        let rows = stmt.query_map([], |row| {
+            let name: String = row.get(1)?;
+            Ok(name)
+        })?;
+        for row in rows {
+            if row? == "thread_hash" {
+                has_thread_hash = true;
+                break;
+            }
+        }
+        if !has_thread_hash {
+            conn.execute("ALTER TABLE threads ADD COLUMN thread_hash TEXT", [])?;
         }
         Ok(())
     }

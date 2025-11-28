@@ -128,6 +128,7 @@ impl ThreadService {
             creator_peer_id: input.creator_peer_id.clone(),
             created_at: created_at.clone(),
             pinned: input.pinned.unwrap_or(false),
+            thread_hash: None, // Will be calculated after posts are added
         };
 
         let initial_post_body = input.body.clone();
@@ -332,4 +333,32 @@ mod tests {
         assert_eq!(fetched.posts.len(), 1);
         assert_eq!(fetched.posts[0].body, "Reply");
     }
+}
+
+/// Calculate a hash for a single post (for sync purposes)
+pub fn calculate_post_hash(post: &PostView) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(post.id.as_bytes());
+    hasher.update(post.body.as_bytes());
+    hasher.update(post.created_at.as_bytes());
+    if let Some(updated) = &post.updated_at {
+        hasher.update(updated.as_bytes());
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+/// Calculate a thread hash from all post hashes (for sync detection)
+pub fn calculate_thread_hash(posts: &[PostView]) -> String {
+    let mut hasher = blake3::Hasher::new();
+
+    // Sort posts by created_at to ensure consistent ordering
+    let mut sorted_posts: Vec<&PostView> = posts.iter().collect();
+    sorted_posts.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+    for post in sorted_posts {
+        let post_hash = calculate_post_hash(post);
+        hasher.update(post_hash.as_bytes());
+    }
+
+    hasher.finalize().to_hex().to_string()
 }

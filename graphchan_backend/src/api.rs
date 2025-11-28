@@ -622,11 +622,25 @@ async fn add_peer(
     let friendcode = request.friendcode.trim();
     match service.register_friendcode(friendcode) {
         Ok(peer) => {
-            if let Ok(payload) = decode_friendcode(friendcode) {
-                if let Err(err) = state.network.connect_friendcode(&payload).await {
-                    tracing::warn!(error = ?err, "failed to connect to peer after registering friendcode");
+            // Connect to the peer and get their iroh peer ID
+            let iroh_peer_id = if let Ok(payload) = decode_friendcode(friendcode) {
+                match state.network.connect_friendcode(&payload).await {
+                    Ok(peer_id) => Some(peer_id),
+                    Err(err) => {
+                        tracing::warn!(error = ?err, "failed to connect to peer after registering friendcode");
+                        None
+                    }
                 }
+            } else {
+                None
+            };
+
+            // Subscribe to this peer's topic to receive their announcements
+            // Use the iroh peer ID as bootstrap to help establish gossip connectivity
+            if let Err(err) = state.network.subscribe_to_peer(&peer.id, iroh_peer_id).await {
+                tracing::warn!(error = ?err, peer_id = %peer.id, "failed to subscribe to peer topic");
             }
+
             Ok((StatusCode::CREATED, Json(peer)))
         }
         Err(err) if err.to_string().contains("decode friendcode") => {

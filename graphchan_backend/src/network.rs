@@ -75,13 +75,8 @@ impl NetworkHandle {
         let event_worker_gossip = gossip.clone();
         let event_worker_topics = Arc::new(RwLock::new(HashMap::new()));
 
-        // Subscribe to global topic at startup so we can broadcast even before adding friends
-        // When friends are added via connect_friendcode, the endpoint connection + shared topic
-        // will allow gossip to discover neighbors
-        let global_topic_id = TopicId::from_bytes(*blake3::hash(b"graphchan-global").as_bytes());
-        let global_topic = gossip.subscribe(global_topic_id, vec![]).await?;
-        event_worker_topics.write().await.insert("graphchan-global".to_string(), global_topic);
-        tracing::info!("subscribed to global gossip topic");
+        // No longer using global topic - peer-based gossip only
+        // Each peer will subscribe to their friends' peer-{id} topics
 
         let event_worker_topics_clone = event_worker_topics.clone();
         let event_worker = tokio::spawn(async move {
@@ -106,20 +101,8 @@ impl NetworkHandle {
             .await;
         });
 
-        let gossip_receiver_worker_gossip = gossip.clone();
-        let gossip_receiver_worker_topics = event_worker_topics.clone();
-        let gossip_receiver_worker_tx = inbound_tx.clone();
-        tokio::spawn(async move {
-            if let Err(err) = events::run_gossip_receiver_loop(
-                gossip_receiver_worker_gossip,
-                gossip_receiver_worker_topics,
-                gossip_receiver_worker_tx,
-            )
-            .await
-            {
-                tracing::error!(error = ?err, "gossip receiver loop failed");
-            }
-        });
+        // No longer need global receiver loop - each subscribe_to_peer/subscribe_to_thread
+        // spawns its own receiver task
 
         let blob_protocol = BlobsProtocol::new(&blob_store, None);
         let router = Router::builder(endpoint.as_ref().clone())
@@ -140,6 +123,27 @@ impl NetworkHandle {
             blobs: blob_store.clone(),
         };
         tracing::info!(peer_id = %handle.peer_id(), "iroh endpoint started");
+
+        // Get our own identity to subscribe to our own peer topic
+        if let Ok(Some((fingerprint, _, _))) = database.get_identity() {
+            tracing::info!(peer_id = %fingerprint, "subscribing to own peer topic");
+            handle.subscribe_to_peer(&fingerprint, None).await?;
+        }
+
+        // Subscribe to all existing friends' peer topics
+        let peer_service = crate::peers::PeerService::new(database.clone());
+        if let Ok(peers) = peer_service.list_peers() {
+            for peer in peers {
+                // Don't re-subscribe to ourselves
+                if Some(&peer.id) != database.get_identity().ok().flatten().as_ref().map(|(f, _, _)| f) {
+                    tracing::info!(peer_id = %peer.id, "subscribing to friend's peer topic on startup");
+                    // On startup we don't have an active connection, so no bootstrap peer
+                    // The gossip network will find neighbors through DHT discovery
+                    handle.subscribe_to_peer(&peer.id, None).await?;
+                }
+            }
+        }
+
         Ok(handle)
     }
 
@@ -199,6 +203,9 @@ impl NetworkHandle {
             .unwrap_or(&snapshot.thread.created_at)
             .to_string();
 
+        // Calculate thread hash from all posts
+        let thread_hash = crate::threading::calculate_thread_hash(&snapshot.posts);
+
         // Create lightweight announcement
         let announcement = events::ThreadAnnouncement {
             thread_id: snapshot.thread.id.clone(),
@@ -211,6 +218,7 @@ impl NetworkHandle {
             has_images,
             created_at: snapshot.thread.created_at.clone(),
             last_activity,
+            thread_hash,
         };
 
         tracing::info!(
@@ -222,6 +230,9 @@ impl NetworkHandle {
 
         let event = NetworkEvent::Broadcast(EventPayload::ThreadAnnouncement(announcement));
         self.publisher.send(event).await.ok();
+
+        // Subscribe to this thread's topic to receive future updates
+        self.subscribe_to_thread(&snapshot.thread.id).await?;
 
         Ok(())
     }
@@ -258,6 +269,123 @@ impl NetworkHandle {
         Ok(())
     }
 
+    /// Subscribe to a peer's topic to receive their announcements.
+    /// Call this when adding a friend or on startup for existing friends.
+    ///
+    /// If bootstrap_peer is provided, it will be used to help discover gossip neighbors.
+    pub async fn subscribe_to_peer(&self, peer_id: &str, bootstrap_peer: Option<iroh::PublicKey>) -> Result<()> {
+        let topic_name = format!("peer-{}", peer_id);
+        let topic_id = TopicId::from_bytes(*blake3::hash(topic_name.as_bytes()).as_bytes());
+
+        let bootstrap_peers = bootstrap_peer.map(|p| vec![p]).unwrap_or_default();
+
+        tracing::info!(
+            peer_id = %peer_id,
+            topic = %topic_name,
+            has_bootstrap = bootstrap_peer.is_some(),
+            "subscribing to peer topic"
+        );
+
+        // Subscribe to receive messages from this peer's topic
+        let mut receiver = self.gossip.subscribe(topic_id, bootstrap_peers).await?;
+        let inbound_tx = self.inbound_tx.clone();
+
+        // Spawn a task to forward messages from this peer's topic to the ingest loop
+        tokio::spawn(async move {
+            use futures_util::StreamExt;
+            while let Some(event_result) = receiver.next().await {
+                match event_result {
+                    Ok(iroh_gossip::api::Event::Received(message)) => {
+                        match serde_json::from_slice::<events::EventEnvelope>(&message.content) {
+                            Ok(envelope) => {
+                                let gossip = events::InboundGossip {
+                                    peer_id: Some(message.delivered_from.to_string()),
+                                    payload: envelope.payload,
+                                };
+                                if inbound_tx.send(gossip).await.is_err() {
+                                    tracing::warn!(topic = %topic_name, "inbound channel closed, stopping peer topic receiver");
+                                    break;
+                                }
+                            }
+                            Err(err) => {
+                                tracing::warn!(error = ?err, topic = %topic_name, "failed to deserialize message on peer topic");
+                            }
+                        }
+                    }
+                    Ok(iroh_gossip::api::Event::NeighborUp(neighbor_id)) => {
+                        tracing::info!(peer = %neighbor_id.fmt_short(), topic = %topic_name, "neighbor up on peer topic");
+                    }
+                    Ok(iroh_gossip::api::Event::NeighborDown(neighbor_id)) => {
+                        tracing::info!(peer = %neighbor_id.fmt_short(), topic = %topic_name, "neighbor down on peer topic");
+                    }
+                    Ok(iroh_gossip::api::Event::Lagged) => {
+                        tracing::warn!(topic = %topic_name, "gossip receiver lagged on peer topic");
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = ?err, topic = %topic_name, "error in peer topic receiver");
+                    }
+                }
+            }
+            tracing::info!(topic = %topic_name, "peer topic receiver loop ended");
+        });
+
+        Ok(())
+    }
+
+    /// Subscribe to a thread-specific topic to receive PostUpdates and FileAnnouncements.
+    /// Call this after downloading a thread to start receiving updates.
+    pub async fn subscribe_to_thread(&self, thread_id: &str) -> Result<()> {
+        let topic_name = format!("thread-{}", thread_id);
+        let topic_id = TopicId::from_bytes(*blake3::hash(topic_name.as_bytes()).as_bytes());
+
+        tracing::info!(thread_id = %thread_id, topic = %topic_name, "subscribing to thread topic for receiving updates");
+
+        // Subscribe to receive messages on this thread's topic
+        let mut receiver = self.gossip.subscribe(topic_id, vec![]).await?;
+        let inbound_tx = self.inbound_tx.clone();
+
+        // Spawn a task to forward messages from this topic to the ingest loop
+        tokio::spawn(async move {
+            use futures_util::StreamExt;
+            while let Some(event_result) = receiver.next().await {
+                match event_result {
+                    Ok(iroh_gossip::api::Event::Received(message)) => {
+                        match serde_json::from_slice::<events::EventEnvelope>(&message.content) {
+                            Ok(envelope) => {
+                                let gossip = events::InboundGossip {
+                                    peer_id: Some(message.delivered_from.to_string()),
+                                    payload: envelope.payload,
+                                };
+                                if inbound_tx.send(gossip).await.is_err() {
+                                    tracing::warn!(topic = %topic_name, "inbound channel closed, stopping thread topic receiver");
+                                    break;
+                                }
+                            }
+                            Err(err) => {
+                                tracing::warn!(error = ?err, topic = %topic_name, "failed to deserialize message on thread topic");
+                            }
+                        }
+                    }
+                    Ok(iroh_gossip::api::Event::NeighborUp(peer_id)) => {
+                        tracing::debug!(peer = %peer_id.fmt_short(), topic = %topic_name, "neighbor up on thread topic");
+                    }
+                    Ok(iroh_gossip::api::Event::NeighborDown(peer_id)) => {
+                        tracing::debug!(peer = %peer_id.fmt_short(), topic = %topic_name, "neighbor down on thread topic");
+                    }
+                    Ok(iroh_gossip::api::Event::Lagged) => {
+                        tracing::warn!(topic = %topic_name, "gossip receiver lagged, some messages may have been dropped");
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = ?err, topic = %topic_name, "error in thread topic receiver");
+                    }
+                }
+            }
+            tracing::info!(topic = %topic_name, "thread topic receiver loop ended");
+        });
+
+        Ok(())
+    }
+
     /// Returns the list of currently connected peer IDs.
     pub async fn connected_peer_ids(&self) -> Vec<String> {
         // For iroh-gossip, we can't easily query all neighbors from all topics
@@ -266,7 +394,7 @@ impl NetworkHandle {
         Vec::new()
     }
 
-    pub async fn connect_friendcode(&self, payload: &FriendCodePayload) -> Result<()> {
+    pub async fn connect_friendcode(&self, payload: &FriendCodePayload) -> Result<iroh::PublicKey> {
         let addr = build_endpoint_addr(payload)?;
         let peer_id = addr.id;
 
@@ -274,73 +402,7 @@ impl NetworkHandle {
         self.endpoint.connect(addr.clone(), GRAPHCHAN_ALPN).await.context("failed to connect to peer")?;
         tracing::info!(peer = %peer_id.fmt_short(), "✅ endpoint connected!");
 
-        // Create a new subscription with this peer as bootstrap to establish gossip connectivity
-        // Note: This creates a parallel subscription alongside the one from startup
-        // Both will receive messages, but the inbound channel deduplicates
-        let global_topic_id = TopicId::from_bytes(*blake3::hash(b"graphchan-global").as_bytes());
-        let mut peer_topic = self.gossip.subscribe(global_topic_id, vec![peer_id]).await?;
-
-        tracing::info!(
-            peer = %peer_id.fmt_short(),
-            "subscribed to global topic with peer as bootstrap, spawning receiver"
-        );
-
-        // Spawn a receiver task for this subscription (parallel to the main receiver loop)
-        let inbound_tx = self.inbound_tx.clone();
-        tokio::spawn(async move {
-            use futures_util::StreamExt;
-            tracing::info!("peer-specific gossip receiver started");
-            while let Some(event_result) = peer_topic.next().await {
-                match event_result {
-                    Ok(iroh_gossip::api::Event::Received(message)) => {
-                        let msg_size = message.content.len();
-                        match serde_json::from_slice::<events::EventEnvelope>(&message.content) {
-                            Ok(envelope) => {
-                                let peer_id = Some(message.delivered_from.to_string());
-                                tracing::debug!(
-                                    from_peer = %message.delivered_from.fmt_short(),
-                                    size_bytes = msg_size,
-                                    "peer subscription received message"
-                                );
-                                if let Err(err) = inbound_tx
-                                    .send(events::InboundGossip {
-                                        peer_id,
-                                        payload: envelope.payload,
-                                    })
-                                    .await
-                                {
-                                    tracing::warn!(error = ?err, "failed to forward inbound gossip from peer subscription");
-                                    break;
-                                }
-                            }
-                            Err(err) => {
-                                tracing::warn!(
-                                    error = ?err,
-                                    size_bytes = msg_size,
-                                    "⚠️  failed to decode in peer subscription - message may be too large"
-                                );
-                            }
-                        }
-                    }
-                    Ok(iroh_gossip::api::Event::NeighborUp(pid)) => {
-                        tracing::info!(peer = %pid.fmt_short(), "🎉 GOSSIP NEIGHBOR UP on peer subscription!");
-                    }
-                    Ok(iroh_gossip::api::Event::NeighborDown(pid)) => {
-                        tracing::info!(peer = %pid.fmt_short(), "❌ GOSSIP NEIGHBOR DOWN on peer subscription");
-                    }
-                    Ok(iroh_gossip::api::Event::Lagged) => {
-                        tracing::warn!("peer subscription lagged");
-                    }
-                    Err(err) => {
-                        tracing::error!(error = ?err, "peer subscription error");
-                        break;
-                    }
-                }
-            }
-            tracing::info!("peer-specific gossip receiver ended");
-        });
-
-        Ok(())
+        Ok(peer_id)
     }
 
     pub async fn shutdown(&self) {

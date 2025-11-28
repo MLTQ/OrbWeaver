@@ -21,6 +21,7 @@ pub struct ThreadRecord {
     pub creator_peer_id: Option<String>,
     pub created_at: String,
     pub pinned: bool,
+    pub thread_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
