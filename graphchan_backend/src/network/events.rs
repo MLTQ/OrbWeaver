@@ -47,6 +47,7 @@ pub struct ThreadAnnouncement {
     pub has_images: bool,
     pub created_at: String,
     pub last_activity: String,       // Most recent post timestamp
+    pub thread_hash: String,         // Hash of all post hashes - for sync detection
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -291,12 +292,20 @@ fn envelope_for(payload: EventPayload) -> EventEnvelope {
 
 fn topic_for_payload(payload: &EventPayload) -> String {
     match payload {
-        // Route everything to global topic so all connected peers receive them
-        EventPayload::ThreadAnnouncement(_) => "graphchan-global".to_string(),
-        EventPayload::PostUpdate(_) => "graphchan-global".to_string(),
-        EventPayload::FileAvailable(_) => "graphchan-global".to_string(),
-        EventPayload::FileRequest(_) => "graphchan-global".to_string(),
-        EventPayload::FileChunk(_) => "graphchan-global".to_string(),
-        EventPayload::ProfileUpdate(_) => "graphchan-global".to_string(),
+        // Announcements go to the announcer's peer topic - only their friends receive it
+        EventPayload::ThreadAnnouncement(announcement) => {
+            format!("peer-{}", announcement.announcer_peer_id)
+        }
+        EventPayload::ProfileUpdate(update) => {
+            format!("peer-{}", update.peer_id)
+        }
+
+        // Thread-specific messages - only sent to peers subscribed to that thread
+        EventPayload::PostUpdate(post) => format!("thread-{}", post.thread_id),
+        EventPayload::FileAvailable(file) => format!("thread-{}", file.thread_id),
+
+        // These shouldn't be used with the current blob-based file transfer
+        EventPayload::FileRequest(_) => "deprecated-file-request".to_string(),
+        EventPayload::FileChunk(_) => "deprecated-file-chunk".to_string(),
     }
 }

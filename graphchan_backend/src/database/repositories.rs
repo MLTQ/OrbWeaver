@@ -70,15 +70,16 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
     fn create(&self, record: &ThreadRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO threads (id, title, creator_peer_id, created_at, pinned)
-            VALUES (?1, ?2, ?3, ?4, ?5)
+            INSERT INTO threads (id, title, creator_peer_id, created_at, pinned, thread_hash)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
             "#,
             params![
                 record.id,
                 record.title,
                 record.creator_peer_id,
                 record.created_at,
-                if record.pinned { 1 } else { 0 }
+                if record.pinned { 1 } else { 0 },
+                record.thread_hash
             ],
         )?;
         Ok(())
@@ -87,20 +88,22 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
     fn upsert(&self, record: &ThreadRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO threads (id, title, creator_peer_id, created_at, pinned)
-            VALUES (?1, ?2, ?3, ?4, ?5)
+            INSERT INTO threads (id, title, creator_peer_id, created_at, pinned, thread_hash)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
             ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 creator_peer_id = excluded.creator_peer_id,
                 created_at = excluded.created_at,
-                pinned = excluded.pinned
+                pinned = excluded.pinned,
+                thread_hash = excluded.thread_hash
             "#,
             params![
                 record.id,
                 record.title,
                 record.creator_peer_id,
                 record.created_at,
-                if record.pinned { 1 } else { 0 }
+                if record.pinned { 1 } else { 0 },
+                record.thread_hash
             ],
         )?;
         Ok(())
@@ -111,7 +114,7 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
             .conn
             .query_row(
                 r#"
-                SELECT id, title, creator_peer_id, created_at, pinned
+                SELECT id, title, creator_peer_id, created_at, pinned, thread_hash
                 FROM threads
                 WHERE id = ?1
                 "#,
@@ -123,6 +126,7 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
                         creator_peer_id: row.get(2)?,
                         created_at: row.get(3)?,
                         pinned: row.get::<_, i64>(4)? != 0,
+                        thread_hash: row.get(5)?,
                     })
                 },
             )
@@ -133,7 +137,7 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
     fn list_recent(&self, limit: usize) -> Result<Vec<ThreadRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, title, creator_peer_id, created_at, pinned
+            SELECT id, title, creator_peer_id, created_at, pinned, thread_hash
             FROM threads
             ORDER BY datetime(created_at) DESC
             LIMIT ?1
@@ -146,6 +150,7 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
                 creator_peer_id: row.get(2)?,
                 created_at: row.get(3)?,
                 pinned: row.get::<_, i64>(4)? != 0,
+                thread_hash: row.get(5)?,
             })
         })?;
 
@@ -535,6 +540,7 @@ mod tests {
             creator_peer_id: Some(peer.id.clone()),
             created_at: "2024-01-01T00:00:00Z".into(),
             pinned: false,
+            thread_hash: None,
         };
         repos.threads().create(&thread).unwrap();
 
@@ -581,6 +587,7 @@ mod tests {
             creator_peer_id: Some(peer.id.clone()),
             created_at: "2024-01-01T00:00:00Z".into(),
             pinned: false,
+            thread_hash: None,
         };
         repos.threads().create(&thread).unwrap();
 

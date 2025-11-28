@@ -125,12 +125,51 @@ fn apply_thread_announcement(
         // Check if we already have this thread
         let existing = repos.threads().get(&announcement.thread_id)?;
         if let Some(existing_thread) = existing {
-            tracing::debug!(
-                thread_id = %announcement.thread_id,
-                existing_title = %existing_thread.title,
-                "thread already exists - skipping announcement"
-            );
-            return Ok(());
+            // Compare hashes to detect if we need to sync
+            match (&existing_thread.thread_hash, &announcement.thread_hash) {
+                (Some(local_hash), remote_hash) if local_hash == remote_hash => {
+                    tracing::debug!(
+                        thread_id = %announcement.thread_id,
+                        hash = %local_hash,
+                        "thread hash matches - already in sync"
+                    );
+                    return Ok(());
+                }
+                (Some(local_hash), remote_hash) => {
+                    tracing::info!(
+                        thread_id = %announcement.thread_id,
+                        local_hash = %local_hash,
+                        remote_hash = %remote_hash,
+                        "thread hash mismatch - will re-sync on next view"
+                    );
+                    // Update the thread record with new hash and ticket
+                    // The actual sync will happen when user views the thread
+                    let updated_thread = ThreadRecord {
+                        id: announcement.thread_id.clone(),
+                        title: announcement.title.clone(),
+                        creator_peer_id: Some(announcement.creator_peer_id.clone()),
+                        created_at: announcement.created_at.clone(),
+                        pinned: existing_thread.pinned,
+                        thread_hash: Some(announcement.thread_hash.clone()),
+                    };
+                    repos.threads().upsert(&updated_thread)?;
+
+                    // Update the ticket for downloading
+                    let ticket_str = announcement.ticket.to_string();
+                    repos.conn().execute(
+                        "INSERT OR REPLACE INTO thread_tickets (thread_id, ticket) VALUES (?, ?)",
+                        rusqlite::params![announcement.thread_id, ticket_str],
+                    )?;
+                    return Ok(());
+                }
+                (None, _) => {
+                    tracing::debug!(
+                        thread_id = %announcement.thread_id,
+                        "thread exists but has no hash - treating as out of sync"
+                    );
+                    // Fall through to update the thread
+                }
+            }
         }
 
         // Create stub peer for creator if needed
@@ -158,6 +197,7 @@ fn apply_thread_announcement(
             creator_peer_id: Some(announcement.creator_peer_id.clone()),
             created_at: announcement.created_at.clone(),
             pinned: false,
+            thread_hash: Some(announcement.thread_hash.clone()),
         };
         repos.threads().upsert(&thread_record)?;
 
@@ -254,18 +294,49 @@ fn apply_thread_snapshot(
         }
 
         // Now upsert thread and posts
+        // Calculate hash from the posts we're applying
+        let thread_hash = crate::threading::calculate_thread_hash(&posts);
+
         let thread_record = ThreadRecord {
             id: thread.id.clone(),
             title: thread.title.clone(),
             creator_peer_id: thread.creator_peer_id.clone(),
             created_at: thread.created_at.clone(),
             pinned: thread.pinned,
+            thread_hash: Some(thread_hash),
         };
         repos.threads().upsert(&thread_record)?;
 
         let posts_repo = repos.posts();
-        for post in posts {
+        let files_repo = repos.files();
+
+        // Delete the preview placeholder post if it exists
+        let preview_post_id = format!("{}-preview", thread.id);
+        if let Err(err) = repos.conn().execute(
+            "DELETE FROM posts WHERE id = ?1",
+            rusqlite::params![preview_post_id],
+        ) {
+            tracing::warn!(error = ?err, post_id = %preview_post_id, "failed to delete preview post");
+        }
+
+        for post in &posts {
             upsert_post(&posts_repo, &post)?;
+
+            // Also save file metadata from the post
+            for file in &post.files {
+                let file_record = crate::database::models::FileRecord {
+                    id: file.id.clone(),
+                    post_id: file.post_id.clone(),
+                    path: file.path.clone(),
+                    original_name: file.original_name.clone(),
+                    mime: file.mime.clone(),
+                    blob_id: file.blob_id.clone(),
+                    size_bytes: file.size_bytes,
+                    checksum: file.checksum.clone(),
+                    ticket: file.ticket.clone(),
+                };
+                files_repo.upsert(&file_record)?;
+            }
         }
 
         Ok(())
@@ -750,10 +821,13 @@ pub async fn apply_thread_from_download(
     thread_details: ThreadDetails,
     blobs: &FsStore,
 ) -> Result<()> {
+    let thread_id = thread_details.thread.id.clone();
+
     // We don't need the publisher for on-demand downloads since we don't re-broadcast
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
     let endpoint = network.endpoint();
 
+    // Apply the thread to database
     apply_thread_snapshot(
         database,
         paths,
@@ -761,7 +835,12 @@ pub async fn apply_thread_from_download(
         thread_details,
         blobs,
         &endpoint,
-    )
+    )?;
+
+    // Subscribe to thread-specific topic to receive future PostUpdates and FileAnnouncements
+    network.subscribe_to_thread(&thread_id).await?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -796,6 +875,7 @@ mod tests {
                     creator_peer_id: None,
                     created_at: now_utc_iso(),
                     pinned: false,
+                    thread_hash: None,
                 })?;
                 repos.posts().create(&PostRecord {
                     id: "post-1".into(),
