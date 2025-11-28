@@ -309,6 +309,16 @@ fn apply_thread_snapshot(
 
         let posts_repo = repos.posts();
         let files_repo = repos.files();
+
+        // Delete the preview placeholder post if it exists
+        let preview_post_id = format!("{}-preview", thread.id);
+        if let Err(err) = repos.conn().execute(
+            "DELETE FROM posts WHERE id = ?1",
+            rusqlite::params![preview_post_id],
+        ) {
+            tracing::warn!(error = ?err, post_id = %preview_post_id, "failed to delete preview post");
+        }
+
         for post in &posts {
             upsert_post(&posts_repo, &post)?;
 
