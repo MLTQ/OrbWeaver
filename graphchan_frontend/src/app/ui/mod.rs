@@ -5,3 +5,4 @@ pub mod drawer;
 pub mod graph;
 pub mod images;
 pub mod thread;
+pub mod friends;

@@ -161,7 +161,9 @@ impl GraphchanApp {
                             .inner_margin(egui::vec2(12.0, 8.0))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
-                                    ui.label(RichText::new(&post.id).monospace());
+                                    if ui.button(RichText::new(&post.id).monospace()).clicked() {
+                                        Self::quote_post(state, &post.id);
+                                    }
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {

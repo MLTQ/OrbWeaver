@@ -180,25 +180,7 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                     }
 
                     ui.add_space(20.0);
-                    ui.separator();
-                    ui.add_space(20.0);
 
-                    ui.heading("Add Friend");
-                    ui.label("Enter a friendcode to connect with a peer:");
-                    ui.text_edit_singleline(&mut state.friendcode_input);
-
-                    ui.horizontal(|ui| {
-                        if ui.button("Add Friend").clicked() && !state.adding_peer && !state.friendcode_input.trim().is_empty() {
-                            state.adding_peer = true;
-                            state.error = None;
-                            next_action = Some(Action::AddPeer(state.friendcode_input.trim().to_string()));
-                        }
-
-                        if state.adding_peer {
-                            ui.spinner();
-                            ui.label("Adding...");
-                        }
-                    });
                 } else {
                     ui.spinner();
                     ui.label("Loading identity...");

@@ -743,6 +743,12 @@ impl eframe::App for GraphchanApp {
                 if ui.button("Import 4chan…").clicked() {
                     self.importer.open = true;
                 }
+                if ui.button("Catalog").clicked() {
+                    self.view = ViewState::Catalog;
+                }
+                if ui.button("Friends").clicked() {
+                    self.view = ViewState::Friends;
+                }
                 if ui.selectable_label(self.show_identity, "Identity").clicked() {
                     self.show_identity = !self.show_identity;
                 }
@@ -772,11 +778,16 @@ impl eframe::App for GraphchanApp {
         let view_type = match &self.view {
             ViewState::Catalog => "catalog",
             ViewState::Thread(_) => "thread",
+            ViewState::Friends => "friends",
         };
 
         if view_type == "catalog" {
             egui::CentralPanel::default().show(ctx, |ui| {
                 self.render_catalog(ui);
+            });
+        } else if view_type == "friends" {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui::friends::render_friends_page(self, ui);
             });
         } else if view_type == "thread" {
             // Extract thread state temporarily

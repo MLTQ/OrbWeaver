@@ -24,6 +24,7 @@ pub struct ImporterState {
 pub enum ViewState {
     Catalog,
     Thread(ThreadState),
+    Friends,
 }
 
 #[derive(Default)]
