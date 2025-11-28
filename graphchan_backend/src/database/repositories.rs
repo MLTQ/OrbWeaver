@@ -56,6 +56,10 @@ impl<'conn> SqliteRepositories<'conn> {
     pub fn files(&self) -> impl FileRepository + '_ {
         SqliteFileRepository { conn: self.conn }
     }
+
+    pub fn conn(&self) -> &'conn Connection {
+        self.conn
+    }
 }
 
 struct SqliteThreadRepository<'conn> {

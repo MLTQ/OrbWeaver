@@ -23,6 +23,7 @@ use axum::{Json, Router};
 use iroh_blobs::store::fs::FsStore;
 use iroh_blobs::ticket::BlobTicket;
 use iroh_blobs::{BlobFormat, Hash};
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -100,6 +101,7 @@ pub async fn serve_http(
         .route("/health", get(health_handler))
         .route("/threads", get(list_threads).post(create_thread))
         .route("/threads/:id", get(get_thread))
+        .route("/threads/:id/download", post(download_thread))
         .route("/threads/:id/posts", post(create_post))
         .route("/posts/:id/files", get(list_post_files))
         .route("/posts/:id/files", post(upload_post_file))
@@ -170,6 +172,92 @@ async fn get_thread(
         Some(thread) => Ok(Json(thread)),
         None => Err(ApiError::NotFound(format!("thread {id} not found"))),
     }
+}
+
+async fn download_thread(
+    State(state): State<AppState>,
+    Path(thread_id): Path<String>,
+) -> Result<Json<ThreadDetails>, ApiError> {
+    tracing::info!(thread_id = %thread_id, "📥 downloading thread from peer");
+
+    // Get the blob ticket for this thread
+    let ticket_str: Option<String> = state.database.with_repositories(|repos| {
+        repos.conn().query_row(
+            "SELECT ticket FROM thread_tickets WHERE thread_id = ?1",
+            rusqlite::params![thread_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .context("failed to query thread_tickets")
+    })
+    .map_err(ApiError::Internal)?;
+
+    let Some(ticket_str) = ticket_str else {
+        return Err(ApiError::NotFound(format!("no download ticket found for thread {thread_id}")));
+    };
+
+    // Parse the blob ticket
+    let ticket = BlobTicket::from_str(&ticket_str)
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("invalid blob ticket: {}", e)))?;
+
+    // Download the blob
+    tracing::info!(thread_id = %thread_id, "downloading blob from peer");
+    let hash = ticket.hash();
+    let endpoint = state.network.endpoint();
+
+    // Check if we already have the blob
+    let has_blob = state.blobs.has(hash).await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("failed to check blob existence: {}", e)))?;
+
+    if !has_blob {
+        // Download from peer
+        let downloader = state.blobs.downloader(&endpoint);
+        downloader.download(hash, Some(ticket.addr().id))
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("blob download failed: {}", e)))?;
+    }
+
+    // Read the blob data
+    let mut reader = state.blobs.reader(hash);
+    let mut blob_data = Vec::new();
+    tokio::io::copy(&mut reader, &mut blob_data)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("failed to read blob: {}", e)))?;
+
+    // Deserialize as ThreadDetails
+    let thread_details: ThreadDetails = serde_json::from_slice(&blob_data)
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("invalid thread data: {}", e)))?;
+
+    tracing::info!(
+        thread_id = %thread_id,
+        posts = thread_details.posts.len(),
+        "✓ downloaded thread, applying to database"
+    );
+
+    // Apply the thread to the database using apply_thread_snapshot
+    crate::network::ingest::apply_thread_from_download(
+        &state.database,
+        &state.config.paths,
+        &state.network,
+        thread_details.clone(),
+        &state.blobs,
+    )
+    .await
+    .map_err(ApiError::Internal)?;
+
+    // Delete the ticket after successful download
+    state.database.with_repositories(|repos| {
+        repos.conn().execute(
+            "DELETE FROM thread_tickets WHERE thread_id = ?1",
+            rusqlite::params![thread_id],
+        )
+        .context("failed to delete thread ticket")
+    })
+    .map_err(ApiError::Internal)?;
+
+    tracing::info!(thread_id = %thread_id, "✓ thread download complete");
+
+    Ok(Json(thread_details))
 }
 
 async fn create_thread(
@@ -281,8 +369,8 @@ async fn create_thread(
         }
     }
     
-    // Broadcast thread snapshot
-    state.network.publish_thread_snapshot(details.clone()).await.ok();
+    // Broadcast thread announcement
+    state.network.publish_thread_announcement(details.clone(), &state.identity.gpg_fingerprint).await.ok();
 
     Ok(Json(details))
 }
@@ -313,21 +401,9 @@ async fn create_post(
                 );
             }
 
-            // Also broadcast the full thread snapshot so our followers get it
-            // This "takes on" the thread and propagates it to peers who follow us
-            let thread_service = ThreadService::with_file_paths(
-                state.database.clone(),
-                state.config.paths.clone(),
-            );
-            if let Ok(Some(thread_details)) = thread_service.get_thread(&post.thread_id) {
-                if let Err(err) = state.network.publish_thread_snapshot(thread_details).await {
-                    tracing::warn!(
-                        error = ?err,
-                        thread_id = %post.thread_id,
-                        "failed to rebroadcast thread snapshot after post"
-                    );
-                }
-            }
+            // Note: We only broadcast the PostUpdate, not the full thread.
+            // If a peer doesn't have the thread yet, they'll see the post references it
+            // and can request the thread on-demand.
 
             Ok((StatusCode::CREATED, Json(PostResponse { post })))
         }

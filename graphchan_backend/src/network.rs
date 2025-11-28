@@ -1,6 +1,6 @@
 use crate::config::{GraphchanPaths, NetworkConfig};
 mod events;
-mod ingest;
+pub mod ingest;
 
 use crate::database::Database;
 use crate::identity::{load_iroh_secret, FriendCodePayload};
@@ -40,7 +40,7 @@ pub struct NetworkHandle {
     _ingest_worker: Arc<JoinHandle<()>>,
     _router: Arc<Router>,
     topics: Arc<RwLock<HashMap<String, GossipTopic>>>,
-    _blob_store: FsStore,
+    blobs: FsStore,
 }
 
 impl NetworkHandle {
@@ -137,7 +137,7 @@ impl NetworkHandle {
             _ingest_worker: Arc::new(ingest_worker),
             _router: router.clone(),
             topics: event_worker_topics,
-            _blob_store: blob_store.clone(),
+            blobs: blob_store.clone(),
         };
         tracing::info!(peer_id = %handle.peer_id(), "iroh endpoint started");
         Ok(handle)
@@ -165,10 +165,64 @@ impl NetworkHandle {
         self.endpoint.clone()
     }
 
-    /// Broadcasts a full thread snapshot (including posts) to connected peers.
-    pub async fn publish_thread_snapshot(&self, snapshot: ThreadDetails) -> Result<()> {
-        let event = NetworkEvent::Broadcast(EventPayload::ThreadSnapshot(snapshot));
+    /// Broadcasts a thread announcement (metadata + blob ticket).
+    /// Always stores full thread as blob, sends lightweight announcement via gossip.
+    pub async fn publish_thread_announcement(&self, snapshot: ThreadDetails, local_peer_id: &str) -> Result<()> {
+        // Store complete thread as blob
+        let json_bytes = serde_json::to_vec(&snapshot)?;
+        let size = json_bytes.len();
+
+        let outcome = self.blobs
+            .add_bytes(json_bytes)
+            .await
+            .context("failed to add thread to blob store")?;
+
+        let hash = outcome.hash;
+
+        // Create ticket for downloading
+        let addr = self.current_addr();
+        let ticket = iroh_blobs::ticket::BlobTicket::new(addr, hash, iroh_blobs::BlobFormat::Raw);
+
+        // Extract preview (first 140 chars of OP body)
+        let preview = snapshot.posts.first()
+            .and_then(|p| Some(p.body.chars().take(140).collect::<String>()))
+            .unwrap_or_default();
+
+        // Check if thread has any images
+        let has_images = snapshot.posts.iter()
+            .any(|p| !p.files.is_empty());
+
+        // Get last activity timestamp
+        let last_activity = snapshot.posts.iter()
+            .map(|p| p.created_at.as_str())
+            .max()
+            .unwrap_or(&snapshot.thread.created_at)
+            .to_string();
+
+        // Create lightweight announcement
+        let announcement = events::ThreadAnnouncement {
+            thread_id: snapshot.thread.id.clone(),
+            creator_peer_id: snapshot.thread.creator_peer_id.clone().unwrap_or_else(|| local_peer_id.to_string()),
+            announcer_peer_id: local_peer_id.to_string(),
+            title: snapshot.thread.title.clone(),
+            preview,
+            ticket,
+            post_count: snapshot.posts.len(),
+            has_images,
+            created_at: snapshot.thread.created_at.clone(),
+            last_activity,
+        };
+
+        tracing::info!(
+            thread_id = %snapshot.thread.id,
+            post_count = snapshot.posts.len(),
+            size_kb = format!("{:.2}", size as f64 / 1024.0),
+            "📢 broadcasting thread announcement (full thread stored as blob)"
+        );
+
+        let event = NetworkEvent::Broadcast(EventPayload::ThreadAnnouncement(announcement));
         self.publisher.send(event).await.ok();
+
         Ok(())
     }
 

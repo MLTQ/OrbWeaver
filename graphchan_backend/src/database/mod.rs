@@ -80,6 +80,12 @@ pub(crate) const MIGRATIONS: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_post_relationships_child ON post_relationships(child_id);
     CREATE INDEX IF NOT EXISTS idx_files_post ON files(post_id);
 
+    CREATE TABLE IF NOT EXISTS thread_tickets (
+        thread_id TEXT PRIMARY KEY,
+        ticket TEXT NOT NULL,
+        FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE
+    );
+
     -- Migrations for new fields
     -- ALTER TABLE peers ADD COLUMN avatar_file_id TEXT;
     -- ALTER TABLE peers ADD COLUMN username TEXT;
@@ -112,6 +118,7 @@ impl Database {
             self.ensure_node_identity_schema_locked(conn)?;
             self.ensure_files_schema_locked(conn)?;
             self.ensure_avatar_column(conn)?;
+            self.ensure_thread_blob_ticket_column(conn)?;
             Ok(())
         })?;
         Ok(self.newly_created)
@@ -259,6 +266,25 @@ impl Database {
         }
         if !has_avatar {
             conn.execute("ALTER TABLE peers ADD COLUMN avatar_file_id TEXT", [])?;
+        }
+        Ok(())
+    }
+
+    fn ensure_thread_blob_ticket_column(&self, conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare("PRAGMA table_info(threads)")?;
+        let mut has_blob_ticket = false;
+        let rows = stmt.query_map([], |row| {
+            let name: String = row.get(1)?;
+            Ok(name)
+        })?;
+        for row in rows {
+            if row? == "blob_ticket" {
+                has_blob_ticket = true;
+                break;
+            }
+        }
+        if !has_blob_ticket {
+            conn.execute("ALTER TABLE threads ADD COLUMN blob_ticket TEXT", [])?;
         }
         Ok(())
     }

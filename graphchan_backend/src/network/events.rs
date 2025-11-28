@@ -25,12 +25,28 @@ pub struct EventEnvelope {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EventPayload {
-    ThreadSnapshot(ThreadDetails),
+    ThreadAnnouncement(ThreadAnnouncement),
     PostUpdate(PostView),
     FileAvailable(FileAnnouncement),
     FileRequest(FileRequest),
     FileChunk(FileChunk),
     ProfileUpdate(ProfileUpdate),
+}
+
+/// Announces that a thread exists and where to download it.
+/// Only broadcast when YOU create/import a thread, not when you download one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadAnnouncement {
+    pub thread_id: String,
+    pub creator_peer_id: String,
+    pub announcer_peer_id: String,  // Who's broadcasting this (may differ from creator)
+    pub title: String,
+    pub preview: String,             // First ~140 chars of OP body
+    pub ticket: BlobTicket,          // Where to download full ThreadDetails
+    pub post_count: usize,           // Number of posts (version number)
+    pub has_images: bool,
+    pub created_at: String,
+    pub last_activity: String,       // Most recent post timestamp
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,7 +180,7 @@ async fn broadcast_to_topic(
     let size = bytes.len();
 
     let payload_type = match &envelope.payload {
-        EventPayload::ThreadSnapshot(_) => "ThreadSnapshot",
+        EventPayload::ThreadAnnouncement(_) => "ThreadAnnouncement",
         EventPayload::PostUpdate(_) => "PostUpdate",
         EventPayload::FileAvailable(_) => "FileAnnouncement",
         EventPayload::FileRequest(_) => "FileRequest",
@@ -210,7 +226,7 @@ pub async fn run_gossip_receiver_loop(
                     Ok(envelope) => {
                         let peer_id = Some(message.delivered_from.to_string());
                         let payload_type = match &envelope.payload {
-                            EventPayload::ThreadSnapshot(_) => "ThreadSnapshot",
+                            EventPayload::ThreadAnnouncement(_) => "ThreadAnnouncement",
                             EventPayload::PostUpdate(_) => "PostUpdate",
                             EventPayload::FileAvailable(_) => "FileAnnouncement",
                             EventPayload::FileRequest(_) => "FileRequest",
@@ -276,7 +292,7 @@ fn envelope_for(payload: EventPayload) -> EventEnvelope {
 fn topic_for_payload(payload: &EventPayload) -> String {
     match payload {
         // Route everything to global topic so all connected peers receive them
-        EventPayload::ThreadSnapshot(_) => "graphchan-global".to_string(),
+        EventPayload::ThreadAnnouncement(_) => "graphchan-global".to_string(),
         EventPayload::PostUpdate(_) => "graphchan-global".to_string(),
         EventPayload::FileAvailable(_) => "graphchan-global".to_string(),
         EventPayload::FileRequest(_) => "graphchan-global".to_string(),

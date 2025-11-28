@@ -64,6 +64,12 @@ impl ApiClient {
         Ok(response.json()?)
     }
 
+    pub fn download_thread(&self, thread_id: &str) -> Result<ThreadDetails> {
+        let url = self.url(&format!("/threads/{thread_id}/download"))?;
+        let response = self.client.post(url).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
     pub fn create_thread(&self, input: &CreateThreadInput, files: &[std::path::PathBuf]) -> Result<ThreadDetails> {
         let url = self.url("/threads")?;
         let mut form = reqwest::blocking::multipart::Form::new();

@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 use blake3::Hasher;
 use iroh::endpoint::Endpoint;
 use iroh_blobs::store::fs::FsStore;
+use iroh_blobs::ticket::BlobTicket;
 use std::fs;
 use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -52,7 +53,16 @@ fn handle_message(
     endpoint: &Arc<Endpoint>,
 ) -> Result<()> {
     match payload {
-        EventPayload::ThreadSnapshot(snapshot) => apply_thread_snapshot(database, paths, publisher, snapshot, blobs, endpoint),
+        EventPayload::ThreadAnnouncement(announcement) => {
+            tracing::info!(
+                thread_id = %announcement.thread_id,
+                title = %announcement.title,
+                post_count = announcement.post_count,
+                announcer = %announcement.announcer_peer_id,
+                "📢 received thread announcement (will download on-demand)"
+            );
+            apply_thread_announcement(database, announcement)
+        }
         EventPayload::PostUpdate(post) => apply_post_update(database, post),
         EventPayload::FileAvailable(announcement) => {
             let fetch_needed = apply_file_announcement(database, paths, &announcement)?;
@@ -102,6 +112,83 @@ fn apply_profile_update(database: &Database, update: ProfileUpdate) -> Result<()
     let service = PeerService::new(database.clone());
     service.update_profile(&update.peer_id, update.avatar_file_id, update.username, update.bio)?;
     Ok(())
+}
+
+/// Stores just the announcement metadata - the full thread will be downloaded on-demand
+fn apply_thread_announcement(
+    database: &Database,
+    announcement: crate::network::events::ThreadAnnouncement,
+) -> Result<()> {
+    use crate::database::models::{PeerRecord, ThreadRecord, PostRecord};
+
+    database.with_repositories(|repos| {
+        // Check if we already have this thread
+        let existing = repos.threads().get(&announcement.thread_id)?;
+        if let Some(existing_thread) = existing {
+            tracing::debug!(
+                thread_id = %announcement.thread_id,
+                existing_title = %existing_thread.title,
+                "thread already exists - skipping announcement"
+            );
+            return Ok(());
+        }
+
+        // Create stub peer for creator if needed
+        let peers_repo = repos.peers();
+        if peers_repo.get(&announcement.creator_peer_id)?.is_none() {
+            let stub_peer = PeerRecord {
+                id: announcement.creator_peer_id.clone(),
+                alias: None,
+                username: Some(format!("Unknown ({})", &announcement.creator_peer_id[..8])),
+                bio: None,
+                friendcode: None,
+                iroh_peer_id: None,
+                gpg_fingerprint: Some(announcement.creator_peer_id.clone()),
+                last_seen: None,
+                avatar_file_id: None,
+                trust_state: "unknown".into(),
+            };
+            peers_repo.upsert(&stub_peer)?;
+        }
+
+        // Create thread entry with minimal info
+        let thread_record = ThreadRecord {
+            id: announcement.thread_id.clone(),
+            title: announcement.title.clone(),
+            creator_peer_id: Some(announcement.creator_peer_id.clone()),
+            created_at: announcement.created_at.clone(),
+            pinned: false,
+        };
+        repos.threads().upsert(&thread_record)?;
+
+        // Create a placeholder OP post with the preview
+        // This lets the thread show up in catalog with preview text
+        let op_post = PostRecord {
+            id: format!("{}-preview", announcement.thread_id),
+            thread_id: announcement.thread_id.clone(),
+            author_peer_id: Some(announcement.creator_peer_id.clone()),
+            body: format!("{}...", announcement.preview),
+            created_at: announcement.created_at.clone(),
+            updated_at: None,
+        };
+        repos.posts().upsert(&op_post)?;
+
+        // Store the BlobTicket for later download
+        let ticket_str = announcement.ticket.to_string();
+        repos.conn().execute(
+            "INSERT OR REPLACE INTO thread_tickets (thread_id, ticket) VALUES (?, ?)",
+            rusqlite::params![announcement.thread_id, ticket_str],
+        )?;
+
+        tracing::info!(
+            thread_id = %announcement.thread_id,
+            title = %announcement.title,
+            post_count = announcement.post_count,
+            "✅ saved thread announcement with ticket (full thread available on-demand)"
+        );
+
+        Ok(())
+    })
 }
 
 fn apply_thread_snapshot(
@@ -489,6 +576,70 @@ fn apply_file_chunk(database: &Database, paths: &GraphchanPaths, chunk: FileChun
     Ok(())
 }
 
+async fn download_thread_snapshot_blob(
+    database: &Database,
+    paths: &GraphchanPaths,
+    publisher: &Sender<NetworkEvent>,
+    ticket: BlobTicket,
+    blob_store: FsStore,
+    endpoint: Arc<Endpoint>,
+) -> Result<()> {
+    let hash = ticket.hash();
+
+    tracing::info!(
+        hash = %hash.fmt_short(),
+        peer = %ticket.addr().id.fmt_short(),
+        "downloading thread snapshot blob via iroh-blobs"
+    );
+
+    // Check if blob already exists
+    let has_blob = blob_store.has(hash).await.context("failed to check blob existence")?;
+
+    if !has_blob {
+        // Download the blob from the peer
+        let downloader = blob_store.downloader(&endpoint);
+        downloader
+            .download(hash, Some(ticket.addr().id))
+            .await
+            .context("failed to download thread snapshot blob")?;
+
+        tracing::info!(
+            hash = %hash.fmt_short(),
+            "✅ thread snapshot blob downloaded successfully"
+        );
+    } else {
+        tracing::info!("thread snapshot blob already in local store");
+    }
+
+    // Read blob bytes - we need to export to a temporary file first
+    let temp_dir = std::env::temp_dir();
+    let temp_path = temp_dir.join(format!("thread_snapshot_{}.json", hash.fmt_short()));
+
+    blob_store
+        .export(hash, temp_path.clone())
+        .await
+        .context("failed to export thread snapshot blob")?;
+
+    let blob_bytes = std::fs::read(&temp_path)
+        .context("failed to read exported thread snapshot")?;
+
+    // Clean up temp file
+    let _ = std::fs::remove_file(&temp_path);
+
+    // Deserialize the ThreadDetails
+    let snapshot: crate::threading::ThreadDetails = serde_json::from_slice(&blob_bytes)
+        .context("failed to deserialize thread snapshot from blob")?;
+
+    tracing::info!(
+        thread_id = %snapshot.thread.id,
+        post_count = snapshot.posts.len(),
+        "deserialized thread snapshot from blob - applying to database"
+    );
+
+    // Apply the snapshot using existing logic
+    apply_thread_snapshot(database, paths, publisher, snapshot, &blob_store, &endpoint)
+}
+
 async fn download_blob(
     database: &Database,
     paths: &GraphchanPaths,
@@ -588,6 +739,29 @@ async fn download_blob(
     })?;
 
     Ok(())
+}
+
+/// Public wrapper for applying a downloaded thread to the database.
+/// This is called when a user manually downloads a thread on-demand.
+pub async fn apply_thread_from_download(
+    database: &Database,
+    paths: &GraphchanPaths,
+    network: &crate::network::NetworkHandle,
+    thread_details: ThreadDetails,
+    blobs: &FsStore,
+) -> Result<()> {
+    // We don't need the publisher for on-demand downloads since we don't re-broadcast
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let endpoint = network.endpoint();
+
+    apply_thread_snapshot(
+        database,
+        paths,
+        &tx,
+        thread_details,
+        blobs,
+        &endpoint,
+    )
 }
 
 #[cfg(test)]

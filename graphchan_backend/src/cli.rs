@@ -377,9 +377,9 @@ impl CliSession {
         let details = self.thread_service.create_thread(input)?;
         println!("Created thread {}", details.thread.id);
         self.network
-            .publish_thread_snapshot(details.clone())
+            .publish_thread_announcement(details.clone(), &self.identity.gpg_fingerprint)
             .await
-            .inspect_err(|err| tracing::warn!(error = ?err, "failed to gossip thread"))
+            .inspect_err(|err| tracing::warn!(error = ?err, "failed to broadcast thread announcement"))
             .ok();
         if let Some(last) = details.posts.last() {
             self.last_seen_posts
