@@ -3,6 +3,7 @@ mod events;
 pub mod ingest;
 
 use crate::database::Database;
+use crate::database::repositories::{ThreadRepository, PostRepository, PeerRepository};
 use crate::identity::{load_iroh_secret, FriendCodePayload};
 use crate::threading::{PostView, ThreadDetails};
 use anyhow::{Context, Result};
@@ -41,6 +42,7 @@ pub struct NetworkHandle {
     _router: Arc<Router>,
     topics: Arc<RwLock<HashMap<String, GossipTopic>>>,
     blobs: FsStore,
+    database: Database,
 }
 
 impl NetworkHandle {
@@ -121,6 +123,7 @@ impl NetworkHandle {
             _router: router.clone(),
             topics: event_worker_topics,
             blobs: blob_store.clone(),
+            database: database.clone(),
         };
         tracing::info!(peer_id = %handle.peer_id(), "iroh endpoint started");
 
@@ -286,8 +289,19 @@ impl NetworkHandle {
             "subscribing to peer topic"
         );
 
-        // Subscribe to receive messages from this peer's topic
-        let mut receiver = self.gossip.subscribe(topic_id, bootstrap_peers).await?;
+        // Create two subscriptions to this topic:
+        // 1. For receiving (consumed by the spawned task below)
+        // 2. For broadcasting (stored in topics map for the event worker)
+        let receiver_topic = self.gossip.subscribe(topic_id, bootstrap_peers.clone()).await?;
+        let broadcaster_topic = self.gossip.subscribe(topic_id, bootstrap_peers).await?;
+
+        // Store broadcaster in topics map
+        {
+            let mut topics_guard = self.topics.write().await;
+            topics_guard.insert(topic_name.clone(), broadcaster_topic);
+        }
+
+        let mut receiver = receiver_topic;
         let inbound_tx = self.inbound_tx.clone();
 
         // Spawn a task to forward messages from this peer's topic to the ingest loop
@@ -338,10 +352,63 @@ impl NetworkHandle {
         let topic_name = format!("thread-{}", thread_id);
         let topic_id = TopicId::from_bytes(*blake3::hash(topic_name.as_bytes()).as_bytes());
 
-        tracing::info!(thread_id = %thread_id, topic = %topic_name, "subscribing to thread topic for receiving updates");
+        // Get all peers involved in this thread to use as bootstrap nodes
+        let bootstrap_peers = self.database.with_repositories(|repos| {
+            let mut peer_ids = Vec::new();
 
-        // Subscribe to receive messages on this thread's topic
-        let mut receiver = self.gossip.subscribe(topic_id, vec![]).await?;
+            // Get thread creator
+            if let Ok(Some(thread)) = repos.threads().get(thread_id) {
+                if let Some(creator_id) = thread.creator_peer_id {
+                    if let Ok(Some(peer)) = repos.peers().get(&creator_id) {
+                        if let Some(iroh_id) = peer.iroh_peer_id {
+                            if let Ok(pub_key) = iroh_id.parse::<iroh::PublicKey>() {
+                                peer_ids.push(pub_key);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Get all post authors
+            if let Ok(posts) = repos.posts().list_for_thread(thread_id) {
+                for post in posts {
+                    if let Some(author_id) = post.author_peer_id {
+                        if let Ok(Some(peer)) = repos.peers().get(&author_id) {
+                            if let Some(iroh_id) = peer.iroh_peer_id {
+                                if let Ok(pub_key) = iroh_id.parse::<iroh::PublicKey>() {
+                                    if !peer_ids.contains(&pub_key) {
+                                        peer_ids.push(pub_key);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Ok::<Vec<iroh::PublicKey>, anyhow::Error>(peer_ids)
+        }).unwrap_or_default();
+
+        tracing::info!(
+            thread_id = %thread_id,
+            topic = %topic_name,
+            bootstrap_count = bootstrap_peers.len(),
+            "subscribing to thread topic for receiving updates"
+        );
+
+        // Create two subscriptions to this topic:
+        // 1. For receiving (consumed by the spawned task below)
+        // 2. For broadcasting (stored in topics map for the event worker)
+        let receiver_topic = self.gossip.subscribe(topic_id, bootstrap_peers.clone()).await?;
+        let broadcaster_topic = self.gossip.subscribe(topic_id, bootstrap_peers).await?;
+
+        // Store broadcaster in topics map
+        {
+            let mut topics_guard = self.topics.write().await;
+            topics_guard.insert(topic_name.clone(), broadcaster_topic);
+        }
+
+        let mut receiver = receiver_topic;
         let inbound_tx = self.inbound_tx.clone();
 
         // Spawn a task to forward messages from this topic to the ingest loop
