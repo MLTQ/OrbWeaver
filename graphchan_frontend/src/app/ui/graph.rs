@@ -258,6 +258,10 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
     if response.dragged_by(egui::PointerButton::Secondary) || response.dragged_by(egui::PointerButton::Middle) {
         state.graph_offset += response.drag_delta();
     }
+    
+    if response.clicked() {
+        state.selected_post = None;
+    }
 
     let world_to_screen = move |p: egui::Pos2| {
         center + offset + egui::vec2(p.x * zoom, p.y * zoom)
@@ -337,6 +341,26 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
             state.selected_post = Some(layout.post.id.clone());
         }
 
+        let is_neighbor = if let Some(sel_id) = &state.selected_post {
+            if sel_id == &layout.post.id {
+                false // Selected is handled separately
+            } else {
+                // Check if neighbor
+                // Parent of selected?
+                let is_parent_of_selected = state.details.as_ref()
+                    .and_then(|d| d.posts.iter().find(|p| p.id == *sel_id))
+                    .map(|p| p.parent_post_ids.contains(&layout.post.id))
+                    .unwrap_or(false);
+                
+                // Child of selected?
+                let is_child_of_selected = layout.post.parent_post_ids.contains(sel_id);
+                
+                is_parent_of_selected || is_child_of_selected
+            }
+        } else {
+            false
+        };
+
         let _node_response = render_node(
             app,
             ui,
@@ -345,7 +369,8 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
             &api_base,
             rect,
             state.graph_zoom,
-            &children
+            &children,
+            is_neighbor
         );
         
         // Pin Button Overlay
@@ -445,17 +470,21 @@ fn draw_edges(
                 .iter()
                 .any(|id| id == parent_id || id == &post.id);
             let sel = state.selected_post.as_ref();
+            let is_selected_edge = sel == Some(&post.id) || sel == Some(parent_id);
+            
             let color = if is_reply_edge {
                 Color32::from_rgb(255, 190, 92)
-            } else if sel == Some(&post.id) || sel == Some(parent_id) {
-                Color32::from_rgb(110, 190, 255)
+            } else if is_selected_edge {
+                Color32::from_rgb(250, 208, 108) // Yellow for selected edges
             } else {
                 Color32::from_rgb(90, 110, 170)
             };
-
+            
+            let stroke_width = if is_reply_edge || is_selected_edge { 3.4 * zoom } else { 2.0 * zoom };
+            
             painter.line_segment(
                 [start, end],
-                egui::Stroke::new(if is_reply_edge { 3.4 * zoom } else { 2.0 * zoom }, color),
+                egui::Stroke::new(stroke_width, color),
             );
 
             draw_arrow(painter, start, end, color, zoom);

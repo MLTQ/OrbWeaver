@@ -14,7 +14,7 @@ use super::node::{render_node, estimate_node_height, is_image, NodeLayoutData};
 
 const CARD_WIDTH: f32 = 720.0; // Match 4chan width for familiarity
 const CARD_HORIZONTAL_SPACING: f32 = 50.0; // More space between cards
-const MIN_BIN_VERTICAL_SPACING: f32 = 50.0; // Minimum spacing between bins
+const MIN_BIN_VERTICAL_SPACING: f32 = 200.0; // Increased spacing for edge lanes
 const LEFT_MARGIN: f32 = 120.0; // Leave room for time axis
 const TOP_MARGIN: f32 = 50.0;
 
@@ -341,7 +341,22 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
     let api_base = app.api.base_url().to_string();
     for layout in layouts {
         let children = children_map.get(&layout.post.id).cloned().unwrap_or_default();
-        render_node(app, ui, state, &layout, &api_base, rect, state.graph_zoom, &children);
+        let is_neighbor = if let Some(sel_id) = &state.selected_post {
+            if sel_id == &layout.post.id {
+                false
+            } else {
+                let is_parent_of_selected = state.details.as_ref()
+                    .and_then(|d| d.posts.iter().find(|p| p.id == *sel_id))
+                    .map(|p| p.parent_post_ids.contains(&layout.post.id))
+                    .unwrap_or(false);
+                let is_child_of_selected = layout.post.parent_post_ids.contains(sel_id);
+                is_parent_of_selected || is_child_of_selected
+            }
+        } else {
+            false
+        };
+
+        render_node(app, ui, state, &layout, &api_base, rect, state.graph_zoom, &children, is_neighbor);
     }
     
     // Restore clip rect
@@ -412,6 +427,7 @@ struct EdgeToDraw {
     color: Color32,
     width: f32,
     child_id: String,
+    parent_id: String,
 }
 
 fn draw_orthogonal_edges(
@@ -444,7 +460,7 @@ fn draw_orthogonal_edges(
                     Color32::from_rgb(60, 65, 80)
                 };
                 
-                let width = if is_hovered || is_selected || is_parent_selected { 2.0 } else { 1.0 };
+                let width = if is_reply_target || is_selected || is_parent_selected { 2.5 } else if is_hovered { 2.0 } else { 1.0 };
 
                 edges.push(EdgeToDraw {
                     start_y: parent_rect.bottom(),
@@ -454,53 +470,114 @@ fn draw_orthogonal_edges(
                     color,
                     width,
                     child_id: layout.post.id.clone(),
+                    parent_id: parent_id.clone(),
                 });
             }
         }
     }
 
-    // Sort edges by length (shorter on top) and then by child X position
-    // This helps with visual clutter
-    edges.sort_by(|a, b| {
-        let len_a = (a.end_y - a.start_y).abs();
-        let len_b = (b.end_y - b.start_y).abs();
-        len_b.partial_cmp(&len_a).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    // Calculate Port Offsets
+    // 1. Group edges by parent (outgoing) and child (incoming)
+    let mut outgoing: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut incoming: HashMap<String, Vec<usize>> = HashMap::new();
 
-    for edge in edges {
-        // Orthogonal routing:
-        // 1. Down from parent bottom center
-        // 2. Horizontal to child X
-        // 3. Down to child top center
+    for (i, edge) in edges.iter().enumerate() {
+        outgoing.entry(edge.parent_id.clone()).or_default().push(i);
+        incoming.entry(edge.child_id.clone()).or_default().push(i);
+    }
+
+    // 2. Sort edges to minimize crossing
+    for (_, indices) in outgoing.iter_mut() {
+        indices.sort_by(|&a, &b| {
+            edges[a].child_rect.center().x.partial_cmp(&edges[b].child_rect.center().x).unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+    for (_, indices) in incoming.iter_mut() {
+        indices.sort_by(|&a, &b| {
+            edges[a].parent_rect.center().x.partial_cmp(&edges[b].parent_rect.center().x).unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+
+    // 3. Calculate offsets for each edge index
+    let mut start_offsets: HashMap<usize, f32> = HashMap::new();
+    let mut end_offsets: HashMap<usize, f32> = HashMap::new();
+    let port_spacing = 10.0;
+
+    for indices in outgoing.values() {
+        let count = indices.len();
+        let total_width = (count as f32 - 1.0) * port_spacing;
+        let start_x = -total_width / 2.0;
+        for (i, &edge_idx) in indices.iter().enumerate() {
+            start_offsets.insert(edge_idx, start_x + (i as f32) * port_spacing);
+        }
+    }
+    for indices in incoming.values() {
+        let count = indices.len();
+        let total_width = (count as f32 - 1.0) * port_spacing;
+        let start_x = -total_width / 2.0;
+        for (i, &edge_idx) in indices.iter().enumerate() {
+            end_offsets.insert(edge_idx, start_x + (i as f32) * port_spacing);
+        }
+    }
+
+    // Group edges by their vertical span (start_y, end_y) for Lane Logic
+    let mut groups: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, edge) in edges.iter().enumerate() {
+        let key = ((edge.start_y) as i64, (edge.end_y) as i64);
+        groups.entry(key).or_default().push(i);
+    }
+
+    for (_, indices) in groups.iter_mut() {
+        // Sort by child X to keep lines orderly
+        indices.sort_by(|&a, &b| edges[a].child_rect.center().x.partial_cmp(&edges[b].child_rect.center().x).unwrap_or(std::cmp::Ordering::Equal));
         
-        let start = edge.parent_rect.center_bottom();
-        let end = edge.child_rect.center_top();
+        let count = indices.len();
+        if count == 0 { continue; }
         
-        // Midpoint Y for the horizontal segment
-        // We want to avoid overlapping with other nodes.
-        // Simple heuristic: halfway between parent bottom and child top
-        let mid_y = start.y + (end.y - start.y) * 0.5;
+        let first_edge = &edges[indices[0]];
+        let start_y = first_edge.start_y;
+        let end_y = first_edge.end_y;
+        let span = end_y - start_y;
+        let center_y = start_y + span * 0.5;
         
-        let p1 = egui::pos2(start.x, mid_y);
-        let p2 = egui::pos2(end.x, mid_y);
+        // Distribute lanes
+        let spacing = 12.0;
+        let total_height = (count as f32 - 1.0) * spacing;
+        let start_offset = -total_height / 2.0;
         
-        let stroke = egui::Stroke::new(edge.width, edge.color);
-        
-        // Draw 3 segments
-        painter.line_segment([start, p1], stroke);
-        painter.line_segment([p1, p2], stroke);
-        painter.line_segment([p2, end], stroke);
-        
-        // Arrowhead at end
-        let arrow_size = 4.0;
-        painter.line_segment(
-            [end, end + egui::vec2(-arrow_size, -arrow_size)],
-            stroke,
-        );
-        painter.line_segment(
-            [end, end + egui::vec2(arrow_size, -arrow_size)],
-            stroke,
-        );
+        for (i, &edge_idx) in indices.iter().enumerate() {
+            let edge = &edges[edge_idx];
+            let offset = start_offset + (i as f32) * spacing;
+            let mid_y = (center_y + offset).min(end_y - 20.0).max(start_y + 20.0);
+            
+            // Apply Port Offsets
+            let start_x_off = *start_offsets.get(&edge_idx).unwrap_or(&0.0);
+            let end_x_off = *end_offsets.get(&edge_idx).unwrap_or(&0.0);
+
+            let start = edge.parent_rect.center_bottom() + egui::vec2(start_x_off, 0.0);
+            let end = edge.child_rect.center_top() + egui::vec2(end_x_off, 0.0);
+            
+            let p1 = egui::pos2(start.x, mid_y);
+            let p2 = egui::pos2(end.x, mid_y);
+            
+            let stroke = egui::Stroke::new(edge.width, edge.color);
+            
+            // Draw 3 segments
+            painter.line_segment([start, p1], stroke);
+            painter.line_segment([p1, p2], stroke);
+            painter.line_segment([p2, end], stroke);
+            
+            // Arrowhead at end
+            let arrow_size = 4.0;
+            painter.line_segment(
+                [end, end + egui::vec2(-arrow_size, -arrow_size)],
+                stroke,
+            );
+            painter.line_segment(
+                [end, end + egui::vec2(arrow_size, -arrow_size)],
+                stroke,
+            );
+        }
     }
 }
 

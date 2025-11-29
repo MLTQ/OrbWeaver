@@ -51,6 +51,7 @@ pub fn render_node(
     viewport: egui::Rect,
     zoom: f32,
     children: &[String],
+    is_neighbor: bool,
 ) -> egui::Response {
     let rect_node = layout.rect;
     let selected = state.selected_post.as_ref() == Some(&layout.post.id);
@@ -72,11 +73,13 @@ pub fn render_node(
         Color32::from_rgb(30, 30, 38)
     };
 
-    let stroke_width = (if hovered { 2.5 } else { 1.5 }) * zoom;
+    let stroke_width = (if hovered || selected || is_neighbor { 2.5 } else { 1.5 }) * zoom;
     let stroke_color = if reply_target {
         Color32::from_rgb(255, 190, 92)
     } else if selected {
         Color32::from_rgb(250, 208, 108)
+    } else if is_neighbor {
+        Color32::from_rgb(200, 180, 80) // Slightly dimmer yellow for neighbors
     } else if hovered {
         Color32::from_rgb(120, 140, 200)
     } else {
@@ -109,6 +112,17 @@ pub fn render_node(
         style.spacing.icon_width_inner *= zoom;
         style.spacing.icon_spacing *= zoom;
         ui.set_style(style);
+
+        // Capture clicks on the node background/body
+        let interact = ui.interact(rect_node, ui.id().with("node_interact"), egui::Sense::click());
+        if interact.clicked() {
+            state.selected_post = Some(layout.post.id.clone());
+            if state.locked_hover_post.as_ref() == Some(&layout.post.id) {
+                state.locked_hover_post = None;
+            } else {
+                state.locked_hover_post = Some(layout.post.id.clone());
+            }
+        }
 
         egui::Frame::none()
             .inner_margin(Margin::same(10.0 * zoom))

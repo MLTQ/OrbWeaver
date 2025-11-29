@@ -248,11 +248,19 @@ pub fn render_sugiyama(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Th
                 let control1 = start + egui::vec2(0.0, 50.0 * state.graph_zoom);
                 let control2 = end - egui::vec2(0.0, 50.0 * state.graph_zoom);
                 
+                let is_selected_edge = state.selected_post.as_ref() == Some(&layout.post.id) || state.selected_post.as_ref() == Some(parent_id);
+                let color = if is_selected_edge {
+                    Color32::from_rgb(250, 208, 108)
+                } else {
+                    Color32::from_rgb(100, 150, 200)
+                };
+                let stroke_width = if is_selected_edge { 2.5 * state.graph_zoom } else { 1.5 * state.graph_zoom };
+
                 let cubic = egui::epaint::CubicBezierShape::from_points_stroke(
                     [start, control1, control2, end],
                     false,
                     Color32::TRANSPARENT,
-                    egui::Stroke::new(1.5 * state.graph_zoom, Color32::from_rgb(100, 150, 200))
+                    egui::Stroke::new(stroke_width, color)
                 );
                 canvas.add(cubic);
             }
@@ -263,6 +271,22 @@ pub fn render_sugiyama(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Th
     
     for layout in layouts {
         let children = children_map.get(&layout.post.id).cloned().unwrap_or_default();
+        
+        let is_neighbor = if let Some(sel_id) = &state.selected_post {
+            if sel_id == &layout.post.id {
+                false
+            } else {
+                let is_parent_of_selected = state.details.as_ref()
+                    .and_then(|d| d.posts.iter().find(|p| p.id == *sel_id))
+                    .map(|p| p.parent_post_ids.contains(&layout.post.id))
+                    .unwrap_or(false);
+                let is_child_of_selected = layout.post.parent_post_ids.contains(sel_id);
+                is_parent_of_selected || is_child_of_selected
+            }
+        } else {
+            false
+        };
+
         render_node(
             app,
             ui,
@@ -271,7 +295,8 @@ pub fn render_sugiyama(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Th
             &api_base,
             rect,
             state.graph_zoom,
-            &children
+            &children,
+            is_neighbor
         );
     }
     
