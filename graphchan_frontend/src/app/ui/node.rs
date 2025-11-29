@@ -344,7 +344,7 @@ pub fn estimate_node_size(ui: &egui::Ui, post: &PostView, has_preview: bool, has
     
     let content_width = longest_line_width + 30.0; // + Padding
     let min_width = 300.0;
-    let max_width = 600.0;
+    let max_width = 1200.0;
     let width = content_width.clamp(min_width, max_width);
     
     let height = estimate_node_height(ui, post, has_preview, has_children, 1.0, width);

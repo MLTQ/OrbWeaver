@@ -88,33 +88,46 @@ pub fn build_sugiyama_layout(posts: &[PostView], sizes: &HashMap<String, egui::V
     }
     
     // 3. Coordinate Assignment
-    for (rank, layer_nodes) in layers {
-        let mut layer_width = 0.0;
-        for node_id in &layer_nodes {
-             let size = sizes.get(node_id).cloned().unwrap_or(egui::vec2(300.0, 150.0));
-             layer_width += size.x + NODE_SPACING;
-        }
-        // Remove last spacing
-        if !layer_nodes.is_empty() {
-            layer_width -= NODE_SPACING;
-        }
+    let layer_spacing = 100.0;
+    let node_spacing = 80.0;
+    let mut current_y = 0.0;
 
-        let mut current_x = -layer_width / 2.0;
-        
-        for node_id in layer_nodes.iter() {
-            let size = sizes.get(node_id).cloned().unwrap_or(egui::vec2(300.0, 150.0));
-            let x = current_x + size.x / 2.0;
-            let y = rank as f32 * LAYER_HEIGHT;
+    for rank in 0..=max_rank {
+        if let Some(layer_nodes) = layers.get(&rank) {
+            // Calculate max height for this layer
+            let max_h = layer_nodes.iter()
+                .map(|id| sizes.get(id).map(|s| s.y).unwrap_or(150.0))
+                .fold(0.0f32, |a, b| a.max(b));
             
-            nodes.insert(node_id.clone(), GraphNode {
-                pos: egui::pos2(x, y),
-                vel: egui::vec2(0.0, 0.0),
-                size,
-                dragging: false,
-                pinned: false,
-            });
+            let mut layer_width = 0.0;
+            for node_id in layer_nodes {
+                 let size = sizes.get(node_id).cloned().unwrap_or(egui::vec2(300.0, 150.0));
+                 layer_width += size.x + node_spacing;
+            }
+            if !layer_nodes.is_empty() {
+                layer_width -= node_spacing;
+            }
+    
+            let mut current_x = -layer_width / 2.0;
             
-            current_x += size.x + NODE_SPACING;
+            for node_id in layer_nodes.iter() {
+                let size = sizes.get(node_id).cloned().unwrap_or(egui::vec2(300.0, 150.0));
+                let x = current_x + size.x / 2.0;
+                // Align top of nodes to the current_y
+                let y = current_y + size.y / 2.0;
+                
+                nodes.insert(node_id.clone(), GraphNode {
+                    pos: egui::pos2(x, y),
+                    vel: egui::vec2(0.0, 0.0),
+                    size,
+                    dragging: false,
+                    pinned: false,
+                });
+                
+                current_x += size.x + node_spacing;
+            }
+            
+            current_y += max_h + layer_spacing;
         }
     }
 
