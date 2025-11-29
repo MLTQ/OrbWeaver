@@ -327,3 +327,27 @@ pub fn estimate_node_height(ui: &egui::Ui, post: &PostView, has_preview: bool, h
     if has_children { height += 20.0 * zoom; }
     height + (20.0 * zoom) // Footer/Padding
 }
+
+pub fn estimate_node_size(ui: &egui::Ui, post: &PostView, has_preview: bool, has_children: bool) -> egui::Vec2 {
+    use eframe::egui::{FontId, TextStyle};
+    
+    // Calculate Width (Unscaled)
+    let body_size = ui.style().text_styles.get(&TextStyle::Body).map(|f| f.size).unwrap_or(14.0);
+    let font_id = FontId::proportional(body_size);
+    
+    let longest_line_width = ui.fonts(|fonts| {
+        post.body.lines()
+            .map(|line| fonts.layout_no_wrap(line.to_string(), font_id.clone(), Color32::WHITE).size().x)
+            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or(0.0)
+    });
+    
+    let content_width = longest_line_width + 30.0; // + Padding
+    let min_width = 300.0;
+    let max_width = 600.0;
+    let width = content_width.clamp(min_width, max_width);
+    
+    let height = estimate_node_height(ui, post, has_preview, has_children, 1.0, width);
+    
+    egui::vec2(width, height)
+}

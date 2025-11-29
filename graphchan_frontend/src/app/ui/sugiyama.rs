@@ -3,13 +3,13 @@ use eframe::egui::{self, Color32};
 use crate::models::PostView;
 use super::super::state::{GraphNode, ThreadState};
 use super::super::GraphchanApp;
-use super::node::{render_node, NodeLayoutData};
+use super::node::{render_node, estimate_node_size, is_image, NodeLayoutData};
 
 const NODE_WIDTH: f32 = 300.0;
 const LAYER_HEIGHT: f32 = 200.0;
 const NODE_SPACING: f32 = 50.0;
 
-pub fn build_sugiyama_layout(posts: &[PostView]) -> HashMap<String, GraphNode> {
+pub fn build_sugiyama_layout(posts: &[PostView], sizes: &HashMap<String, egui::Vec2>) -> HashMap<String, GraphNode> {
     if posts.is_empty() {
         return HashMap::new();
     }
@@ -89,20 +89,32 @@ pub fn build_sugiyama_layout(posts: &[PostView]) -> HashMap<String, GraphNode> {
     
     // 3. Coordinate Assignment
     for (rank, layer_nodes) in layers {
-        let layer_width = layer_nodes.len() as f32 * (NODE_WIDTH + NODE_SPACING);
-        let start_x = -layer_width / 2.0;
+        let mut layer_width = 0.0;
+        for node_id in &layer_nodes {
+             let size = sizes.get(node_id).cloned().unwrap_or(egui::vec2(300.0, 150.0));
+             layer_width += size.x + NODE_SPACING;
+        }
+        // Remove last spacing
+        if !layer_nodes.is_empty() {
+            layer_width -= NODE_SPACING;
+        }
+
+        let mut current_x = -layer_width / 2.0;
         
-        for (i, node_id) in layer_nodes.iter().enumerate() {
-            let x = start_x + i as f32 * (NODE_WIDTH + NODE_SPACING);
+        for node_id in layer_nodes.iter() {
+            let size = sizes.get(node_id).cloned().unwrap_or(egui::vec2(300.0, 150.0));
+            let x = current_x + size.x / 2.0;
             let y = rank as f32 * LAYER_HEIGHT;
             
             nodes.insert(node_id.clone(), GraphNode {
                 pos: egui::pos2(x, y),
                 vel: egui::vec2(0.0, 0.0),
-                size: egui::vec2(NODE_WIDTH, 150.0),
+                size,
                 dragging: false,
                 pinned: false,
             });
+            
+            current_x += size.x + NODE_SPACING;
         }
     }
 
@@ -115,8 +127,35 @@ pub fn render_sugiyama(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Th
         None => return,
     };
 
+    // Pre-calculate children for each node
+    let mut children_map: HashMap<String, Vec<String>> = HashMap::new();
+    for post in &posts {
+        for parent_id in &post.parent_post_ids {
+            children_map.entry(parent_id.clone()).or_default().push(post.id.clone());
+        }
+    }
+
+    // Calculate sizes for all posts
+    let mut sizes = HashMap::new();
+    for post in &posts {
+        // Prefer post.files over state.attachments
+        let attachments = if !post.files.is_empty() {
+            Some(post.files.clone())
+        } else {
+            state.attachments.get(&post.id).cloned()
+        };
+        let has_preview = attachments
+            .as_ref()
+            .map(|files| files.iter().any(is_image))
+            .unwrap_or(false);
+        let has_children = children_map.contains_key(&post.id);
+        
+        let size = estimate_node_size(ui, post, has_preview, has_children);
+        sizes.insert(post.id.clone(), size);
+    }
+
     if state.sugiyama_nodes.is_empty() || state.sugiyama_nodes.len() != posts.len() {
-        state.sugiyama_nodes = build_sugiyama_layout(&posts);
+        state.sugiyama_nodes = build_sugiyama_layout(&posts, &sizes);
     }
 
     let available_rect = ui.available_rect_before_wrap();
@@ -132,32 +171,51 @@ pub fn render_sugiyama(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Th
     let mut total_zoom_factor = 1.0;
     if scroll_delta != 0.0 { total_zoom_factor *= 1.0 + scroll_delta * 0.001; }
     if zoom_delta != 1.0 { total_zoom_factor *= zoom_delta; }
+    
     if total_zoom_factor != 1.0 {
         let old_zoom = state.graph_zoom;
         state.graph_zoom = (state.graph_zoom * total_zoom_factor).clamp(0.01, 10.0);
+        
         if let Some(pointer_pos) = ui.ctx().pointer_hover_pos() {
             if rect.contains(pointer_pos) {
-                let pointer_rel = pointer_pos - rect.min;
+                // Zoom towards mouse
+                let center = rect.center();
+                let pointer_rel = pointer_pos - center - state.graph_offset;
                 let zoom_ratio = state.graph_zoom / old_zoom;
-                state.graph_offset = pointer_rel - (pointer_rel - state.graph_offset) * zoom_ratio;
+                state.graph_offset += pointer_rel - pointer_rel * zoom_ratio;
             }
         }
     }
+    
     if response.dragged_by(egui::PointerButton::Secondary) || response.dragged_by(egui::PointerButton::Middle) {
         state.graph_offset += response.drag_delta();
     }
 
+    // Correct center offset calculation
     let center_offset = rect.center().to_vec2() + state.graph_offset;
 
     // Layouts
     let mut layouts = Vec::new();
     for post in &posts {
         if let Some(node) = state.sugiyama_nodes.get(&post.id) {
-            let screen_pos = rect.min + center_offset + (node.pos.to_vec2() * state.graph_zoom);
-            let width = NODE_WIDTH * state.graph_zoom;
-            let height = 120.0 * state.graph_zoom;
+            // node.pos is relative to (0,0) center of the layout
+            // We need to map it to screen space: Center + Offset + Pos * Zoom
+            // Note: center_offset is (Center + Offset) as Vec2.
+            // But rect.min needs to be added if we use absolute coordinates?
+            // rect.center() is absolute.
+            // So ScreenPos = rect.center() + offset + node.pos * zoom.
+            // My center_offset is rect.center().to_vec2() + offset.
+            // So ScreenPos = center_offset.to_pos2() + node.pos * zoom.
+            // Wait, center_offset is Vec2.
+            // Pos2 + Vec2 = Pos2.
+            // So (0,0) + center_offset = Center + Offset.
+            // ScreenPos = (Pos2::ZERO + center_offset) + node.pos * zoom.
             
-            let rect_node = egui::Rect::from_min_size(screen_pos, egui::vec2(width, height));
+            let screen_center = egui::pos2(0.0, 0.0) + center_offset + (node.pos.to_vec2() * state.graph_zoom);
+            let size = node.size * state.graph_zoom;
+            
+            let top_left = screen_center - size / 2.0;
+            let rect_node = egui::Rect::from_min_size(top_left, size);
             
             layouts.push(NodeLayoutData {
                 post: post.clone(),
@@ -188,17 +246,8 @@ pub fn render_sugiyama(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Th
         }
     }
 
-    // Nodes
     let api_base = app.api.base_url().to_string();
     
-    // Pre-calculate children for each node for the renderer
-    let mut children_map: HashMap<String, Vec<String>> = HashMap::new();
-    for post in posts {
-        for parent_id in &post.parent_post_ids {
-            children_map.entry(parent_id.clone()).or_default().push(post.id.clone());
-        }
-    }
-
     for layout in layouts {
         let children = children_map.get(&layout.post.id).cloned().unwrap_or_default();
         render_node(

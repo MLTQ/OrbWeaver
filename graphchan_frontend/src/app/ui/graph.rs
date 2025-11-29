@@ -11,7 +11,7 @@ use crate::models::{PostView};
 
 use super::super::state::{GraphNode, ThreadState};
 use super::super::{GraphchanApp};
-use super::node::{render_node, estimate_node_height, is_image, NodeLayoutData};
+use super::node::{render_node, estimate_node_size, is_image, NodeLayoutData};
 
 
 pub(crate) fn build_initial_graph(posts: &[PostView]) -> HashMap<String, GraphNode> {
@@ -186,8 +186,7 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
             let has_children = children_map.contains_key(&post.id);
             
             // Using 1.0 zoom for physics size calculation
-            let height = estimate_node_height(ui, post, has_preview, has_children, 1.0, 320.0);
-            node.size = egui::vec2(320.0, height);
+            node.size = estimate_node_size(ui, post, has_preview, has_children);
         }
     }
 
