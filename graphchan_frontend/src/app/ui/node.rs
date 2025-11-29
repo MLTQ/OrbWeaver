@@ -314,56 +314,12 @@ pub fn is_image(file: &FileResponse) -> bool {
 
 pub fn estimate_node_height(ui: &egui::Ui, post: &PostView, has_preview: bool, has_children: bool, zoom: f32, card_width: f32) -> f32 {
     use eframe::egui::FontId;
-    
     let text_width = (card_width - 20.0) * zoom;
-    let font_id = FontId::proportional(13.0 * zoom);
-    
-    // Simulate render_post_body wrapping
-    let mut text_height = 0.0;
-    let space_width = ui.fonts(|f| f.layout_no_wrap(" ".to_string(), font_id.clone(), Color32::WHITE).size().x);
-    let line_spacing = ui.spacing().item_spacing.y * zoom; // scaled spacing
-    let row_height = ui.fonts(|f| f.row_height(&font_id));
-    
-    for line in post.body.lines() {
-        let mut current_x = 0.0;
-        let mut rows = 1;
-        
-        for (i, word) in line.split(' ').enumerate() {
-            let word_width = ui.fonts(|f| f.layout_no_wrap(word.to_string(), font_id.clone(), Color32::WHITE).size().x);
-            
-            if i > 0 {
-                // Add space
-                if current_x + space_width > text_width {
-                    current_x = 0.0;
-                    rows += 1;
-                }
-                current_x += space_width;
-            }
-            
-            if current_x + word_width > text_width {
-                if current_x > 0.0 {
-                    current_x = 0.0;
-                    rows += 1;
-                }
-            }
-            current_x += word_width;
-        }
-        
-        text_height += rows as f32 * row_height;
-        // Add spacing between paragraphs if multiple lines? 
-        // render_post_body creates a new horizontal_wrapped for each line.
-        // horizontal_wrapped adds item_spacing.y between them?
-        // No, horizontal_wrapped is a Ui block.
-        // ui.vertical puts them one after another.
-        // So yes, item_spacing.y is added between paragraphs.
-    }
-    
-    // Add spacing between paragraphs
-    let num_paragraphs = post.body.lines().count();
-    if num_paragraphs > 1 {
-        text_height += (num_paragraphs - 1) as f32 * line_spacing;
-    }
-
+    let text_height = ui.fonts(|fonts| {
+        let body = post.body.clone();
+        let galley = fonts.layout(body, FontId::proportional(13.0 * zoom), Color32::WHITE, text_width);
+        galley.size().y
+    });
     let mut height = (50.0 * zoom) + text_height;
     height += 25.0 * zoom; // Header
     if !post.parent_post_ids.is_empty() { height += 20.0 * zoom; }

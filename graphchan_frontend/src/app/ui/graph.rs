@@ -307,7 +307,38 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
     for layout in layouts {
         let children = children_map.get(&layout.post.id).cloned().unwrap_or_default();
         
-        let node_response = render_node(
+        // Interaction handled here to ensure it works
+        let drag_id = ui.make_persistent_id(format!("graph_node_drag_{}", layout.post.id));
+        let drag_handle = ui.interact(layout.rect, drag_id, egui::Sense::click_and_drag());
+
+        if drag_handle.drag_started() {
+             if let Some(node) = state.graph_nodes.get_mut(&layout.post.id) {
+                node.dragging = true;
+            }
+            state.graph_dragging = true;
+        }
+        
+        if drag_handle.dragged() {
+            if let Some(node) = state.graph_nodes.get_mut(&layout.post.id) {
+                if node.dragging {
+                    let zoom_scale = state.graph_zoom * scale;
+                    node.pos += drag_handle.drag_delta() / zoom_scale;
+                }
+            }
+        }
+        
+        if drag_handle.drag_stopped() {
+            if let Some(node) = state.graph_nodes.get_mut(&layout.post.id) {
+                node.dragging = false;
+            }
+            state.graph_dragging = false;
+        }
+
+        if drag_handle.clicked() {
+            state.selected_post = Some(layout.post.id.clone());
+        }
+
+        let _node_response = render_node(
             app,
             ui,
             state,
@@ -318,48 +349,7 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
             &children
         );
         
-        // Handle dragging
-        // We need to check if the node is being dragged.
-        // render_node returns a response for the whole node rect.
-        // But we also want to support dragging via specific handles if needed, or just the whole node.
-        // render_node's response covers the whole node.
-        
-        if node_response.drag_started() {
-             if let Some(node) = state.graph_nodes.get_mut(&layout.post.id) {
-                node.dragging = true;
-            }
-            state.graph_dragging = true;
-        }
-        
-        if node_response.dragged() {
-            if let Some(node) = state.graph_nodes.get_mut(&layout.post.id) {
-                if node.dragging {
-                    // Update position
-                    // We need to convert drag delta to world coordinates
-                    // drag_delta is in screen pixels
-                    // world_pos = (screen_pos - center - offset) / zoom
-                    // delta_world = delta_screen / zoom
-                    
-                    let zoom_scale = state.graph_zoom * scale;
-                    node.pos += node_response.drag_delta() / zoom_scale;
-                }
-            }
-        }
-        
-        if node_response.drag_stopped() {
-            if let Some(node) = state.graph_nodes.get_mut(&layout.post.id) {
-                node.dragging = false;
-            }
-            state.graph_dragging = false;
-        }
-        
-        // Pinning logic?
-        // render_node doesn't have a pin button.
-        // We might want to add it to render_node or overlay it here.
-        // Let's overlay it here for now as it's specific to graph view (pinned nodes don't move in physics).
-        // Actually, render_node handles the UI content. If we want to add a pin button, we should probably add it to render_node or allow custom actions.
-        // For now, let's just add a small button on top right of the node rect?
-        
+        // Pin Button Overlay
         let pin_rect = egui::Rect::from_min_size(
             layout.rect.max - egui::vec2(20.0 * state.graph_zoom, 20.0 * state.graph_zoom),
             egui::vec2(20.0 * state.graph_zoom, 20.0 * state.graph_zoom)
@@ -398,9 +388,20 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
 
             ui.separator();
             
-            let icon = if state.sim_paused { "▶" } else { "⏸" };
+            let sim_active = state.sim_start_time
+                .get_or_insert_with(Instant::now)
+                .elapsed()
+                .as_secs_f32() < 5.0;
+            let running = sim_active && !state.sim_paused && !state.graph_dragging;
+
+            let icon = if running { "⏸" } else { "▶" };
             if ui.button(icon).clicked() {
-                state.sim_paused = !state.sim_paused;
+                if running {
+                    state.sim_paused = true;
+                } else {
+                    state.sim_paused = false;
+                    state.sim_start_time = Some(Instant::now());
+                }
             }
 
             if ui.button("Reset Layout").clicked() {
