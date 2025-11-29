@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Timelike, Utc};
-use eframe::egui::{self, Color32, Margin, Pos2, RichText};
+use eframe::egui::{self, Color32};
 use log;
 
-use crate::models::{FileResponse, PostView};
+use crate::models::{PostView};
 
 use super::super::state::{GraphNode, ThreadState};
 use super::super::{format_timestamp, GraphchanApp};
+use super::node::{render_node, estimate_node_height, is_image, NodeLayoutData};
 
 /// Configuration for chronological layout
 
@@ -21,12 +22,6 @@ const TOP_MARGIN: f32 = 50.0;
 struct ChronoBin {
     timestamp: DateTime<Utc>,
     post_ids: Vec<String>,
-}
-
-struct NodeLayoutData {
-    post: PostView,
-    rect: egui::Rect,
-    attachments: Option<Vec<FileResponse>>,
 }
 
 /// Build chronological layout positions for posts
@@ -222,7 +217,7 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
 
     if total_zoom_factor != 1.0 {
         let old_zoom = state.graph_zoom;
-        state.graph_zoom = (state.graph_zoom * total_zoom_factor).clamp(0.2, 4.0);
+        state.graph_zoom = (state.graph_zoom * total_zoom_factor).clamp(0.01, 10.0);
         
         // Zoom towards mouse cursor if hovered
         if let Some(pointer_pos) = ui.ctx().pointer_hover_pos() {
@@ -284,7 +279,7 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
                 let has_children = children_map.contains_key(&post.id);
 
                 // Calculate unzoomed height
-                let unzoomed_height = estimate_node_height(ui, post, has_preview, has_children, 1.0);
+                let unzoomed_height = estimate_node_height(ui, post, has_preview, has_children, 1.0, CARD_WIDTH);
                 max_height_in_bin = max_height_in_bin.max(unzoomed_height);
 
                 let x = LEFT_MARGIN + (idx as f32) * (CARD_WIDTH + CARD_HORIZONTAL_SPACING);
@@ -346,14 +341,14 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
     let api_base = app.api.base_url().to_string();
     for layout in layouts {
         let children = children_map.get(&layout.post.id).cloned().unwrap_or_default();
-        render_node(app, ui, state, layout, &api_base, rect, state.graph_zoom, children);
+        render_node(app, ui, state, &layout, &api_base, rect, state.graph_zoom, &children);
     }
     
     // Restore clip rect
     ui.set_clip_rect(original_clip);
 
     // Render Controls in the reserved bottom area
-    ui.allocate_ui_at_rect(control_rect, |ui| {
+    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(control_rect), |ui| {
         ui.horizontal(|ui| {
             ui.label(format!(
                 "Chronological View | Nodes: {}",
@@ -408,374 +403,6 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
     });
 }
 
-fn render_node(
-    app: &mut GraphchanApp,
-    ui: &mut egui::Ui,
-    state: &mut ThreadState,
-    layout: NodeLayoutData,
-    api_base: &str,
-    viewport: egui::Rect,
-    zoom: f32,
-    children: Vec<String>,
-) {
-    let rect_node = layout.rect;
-    let selected = state.selected_post.as_ref() == Some(&layout.post.id);
-    let reply_target = state.reply_to.iter().any(|id| id == &layout.post.id);
-    
-    // Check if mouse is hovering OR if this post is locked as hovered
-    let naturally_hovered = ui.ctx().pointer_hover_pos()
-        .map(|pos| rect_node.contains(pos))
-        .unwrap_or(false);
-    let locked_hover = state.locked_hover_post.as_ref() == Some(&layout.post.id);
-    let hovered = naturally_hovered || locked_hover;
-
-    let fill_color = if reply_target {
-        Color32::from_rgb(40, 52, 85)
-    } else if selected {
-        Color32::from_rgb(58, 48, 24)
-    } else if hovered {
-        Color32::from_rgb(42, 45, 60)  // Lighter on hover
-    } else {
-        Color32::from_rgb(30, 30, 38)
-    };
-
-    let stroke_width = (if hovered { 2.5 } else { 1.5 }) * zoom;
-    let stroke_color = if reply_target {
-        Color32::from_rgb(255, 190, 92)
-    } else if selected {
-        Color32::from_rgb(250, 208, 108)
-    } else if hovered {
-        Color32::from_rgb(120, 140, 200)  // Bright blue on hover
-    } else {
-        Color32::from_rgb(80, 90, 130)
-    };
-
-    // Paint the background and stroke explicitly to match rect_node
-    // This ensures the visual box matches the edge connection points exactly,
-    // even if the content inside is smaller than the estimated height.
-    let rounding = egui::Rounding::same(10.0 * zoom);
-    ui.painter().rect(
-        rect_node,
-        rounding,
-        fill_color,
-        egui::Stroke::new(stroke_width, stroke_color),
-    );
-
-    let response = ui.allocate_ui_at_rect(rect_node, |ui| {
-        // Use a transparent frame just for padding/margins
-        egui::Frame::none()
-            .inner_margin(Margin::same(10.0 * zoom))
-            .show(ui, |ui| {
-                // Clip to the intersection of the node rect and the viewport (CentralPanel)
-                // This prevents drawing over the TopBottomPanel
-                ui.set_clip_rect(rect_node.intersect(viewport));
-                
-                ui.vertical(|ui| {
-                    // Use bottom_up layout to anchor replies to the bottom
-                    ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                        if !children.is_empty() {
-                            // Padding from bottom edge
-                            ui.add_space(4.0 * zoom);
-                            
-                            ui.horizontal_wrapped(|ui| {
-                                // Don't set max_width - let frame's inner_margin handle spacing
-                                ui.label(RichText::new("↪ Replies:").size(11.0 * zoom).color(Color32::GRAY));
-                                for child_id in children {
-                                    render_post_link(ui, state, &child_id, zoom, viewport);
-                                }
-                            });
-                            
-                            // Spacing between content and replies
-                            ui.add_space(4.0 * zoom);
-                        }
-
-                        // Render the rest of the content top-down in the remaining space
-                        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                            render_node_header(app, ui, state, &layout.post, zoom);
-
-                            // Show incoming edges (posts this replies to)
-                            if !layout.post.parent_post_ids.is_empty() {
-                                ui.add_space(4.0 * zoom);
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.label(RichText::new("↩ Replying to:").size(11.0 * zoom).color(Color32::GRAY));
-                                    for parent in &layout.post.parent_post_ids {
-                                        render_post_link(ui, state, parent, zoom, viewport);
-                                    }
-                                });
-                            }
-
-                            ui.add_space(6.0 * zoom);
-                            ui.label(
-                                egui::RichText::new(&layout.post.body)
-                                    .size(13.0 * zoom)
-                                    .color(Color32::from_rgb(220, 220, 230)),
-                            );
-
-                            render_node_attachments(app, ui, layout.attachments.as_ref(), api_base, zoom);
-
-                            ui.add_space(6.0 * zoom);
-                            render_node_actions(ui, state, &layout.post, zoom);
-                        });
-                    });
-                });
-            })
-    }).response;
-
-    // Handle click to select and toggle locked hover
-    if response.clicked() {
-        state.selected_post = Some(layout.post.id.clone());
-        // Toggle locked hover - if already locked on this post, unlock it
-        if state.locked_hover_post.as_ref() == Some(&layout.post.id) {
-            state.locked_hover_post = None;
-        } else {
-            state.locked_hover_post = Some(layout.post.id.clone());
-        }
-    }
-}
-
-fn render_post_link(
-    ui: &mut egui::Ui,
-    state: &mut ThreadState,
-    target_id: &str,
-    zoom: f32,
-    viewport: egui::Rect,
-) {
-    let short_id = if target_id.len() > 8 { &target_id[..8] } else { target_id };
-    let link = ui.link(RichText::new(format!(">>{}", short_id)).size(11.0 * zoom));
-    
-    if link.clicked() {
-        state.selected_post = Some(target_id.to_string());
-        
-        // Center view on target
-        if let Some(node) = state.graph_nodes.get(target_id) {
-            let center = viewport.center();
-            let target_x = node.pos.x * zoom;
-            let target_y = node.pos.y * zoom;
-            
-            // Center on the node (approximating size as half card width)
-            let half_width = (CARD_WIDTH * zoom) / 2.0;
-            let half_height = (100.0 * zoom) / 2.0; 
-            
-            state.graph_offset.x = (center.x - viewport.left()) - (target_x + half_width);
-            state.graph_offset.y = (center.y - viewport.top()) - (target_y + half_height);
-        }
-    }
-    
-    link.on_hover_ui(|ui| {
-        if let Some(details) = &state.details {
-            if let Some(post) = details.posts.iter().find(|p| p.id == target_id) {
-                ui.set_max_width(300.0);
-                ui.horizontal(|ui| {
-                    let author = post.author_peer_id.as_deref().unwrap_or("Anon");
-                    ui.label(RichText::new(author).strong());
-                    ui.label(RichText::new(format_timestamp(&post.created_at)).color(Color32::GRAY));
-                });
-                ui.separator();
-                let preview_len = post.body.len().min(200);
-                let preview = &post.body[..preview_len];
-                ui.label(format!("{}{}", preview, if post.body.len() > 200 { "..." } else { "" }));
-            } else {
-                ui.label("Post not found");
-            }
-        }
-    });
-}
-
-fn render_node_header(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut ThreadState, post: &PostView, zoom: f32) {
-    ui.horizontal(|ui| {
-        // Avatar
-        if let Some(author_id) = &post.author_peer_id {
-            let peer = app.peers.get(author_id).cloned();
-            if let Some(avatar_id) = peer.as_ref().and_then(|p| p.avatar_file_id.clone()) {
-                if let Some(texture) = app.image_textures.get(&avatar_id) {
-                    ui.add(egui::Image::from_texture(texture).max_width(24.0 * zoom).rounding(12.0 * zoom));
-                } else if let Some(pending) = app.image_pending.remove(&avatar_id) {
-                    let color = egui::ColorImage::from_rgba_unmultiplied(pending.size, &pending.pixels);
-                    let tex = ui.ctx().load_texture(&avatar_id, color, egui::TextureOptions::default());
-                    app.image_textures.insert(avatar_id.clone(), tex.clone());
-                    ui.add(egui::Image::from_texture(&tex).max_width(24.0 * zoom).rounding(12.0 * zoom));
-                } else if !app.image_loading.contains(&avatar_id) && !app.image_errors.contains_key(&avatar_id) {
-                    let url = crate::app::resolve_blob_url(&app.base_url_input, &avatar_id);
-                    app.spawn_load_image(&avatar_id, &url);
-                }
-            }
-
-            // Username/Author (clickable)
-            let name = peer.as_ref().and_then(|p| p.username.as_deref()).unwrap_or(author_id);
-            if ui.add(egui::Link::new(RichText::new(name).strong().size(12.0 * zoom))).clicked() {
-                app.show_identity = true;
-                app.identity_state.inspected_peer = peer;
-            }
-        }
-
-        if ui
-            .button(RichText::new(format!("#{}", post.id)).monospace().size(11.0 * zoom))
-            .clicked()
-        {
-            state.selected_post = Some(post.id.clone());
-        }
-
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(
-                RichText::new(format_timestamp(&post.created_at))
-                    .color(Color32::from_rgb(200, 200, 210))
-                    .size(10.0 * zoom),
-            );
-        });
-    });
-}
-
-fn render_node_actions(ui: &mut egui::Ui, state: &mut ThreadState, post: &PostView, zoom: f32) {
-    ui.horizontal(|ui| {
-        // Scale buttons by scaling their text
-        if ui.button(RichText::new("↩ Reply").size(13.0 * zoom)).clicked() {
-            GraphchanApp::set_reply_target(state, &post.id);
-        }
-        if ui.button(RichText::new("❝ Quote").size(13.0 * zoom)).clicked() {
-            GraphchanApp::quote_post(state, &post.id);
-        }
-    });
-}
-
-fn render_node_attachments(
-    app: &mut GraphchanApp,
-    ui: &mut egui::Ui,
-    attachments: Option<&Vec<FileResponse>>,
-    api_base: &str,
-    zoom: f32,
-) {
-    use super::graph::{image_preview, ImagePreview};
-
-    let files = match attachments {
-        Some(list) => list,
-        None => return,
-    };
-
-    if files.is_empty() {
-        return;
-    }
-
-    ui.add_space(6.0 * zoom);
-
-    // Render all attachments, not just images
-    for file in files {
-        let is_image_file = is_image(file);
-
-        if is_image_file {
-            // Render image preview
-            match image_preview(app, ui, file, api_base) {
-                ImagePreview::Ready(tex) => {
-                    let resp = ui.add(
-                        egui::Image::from_texture(&tex)
-                            .maintain_aspect_ratio(true)
-                            .max_width(120.0 * zoom)
-                            .max_height(120.0 * zoom)
-                            .sense(egui::Sense::click()),
-                    );
-
-                    if resp.hovered() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                    }
-
-                    if resp.clicked() {
-                        app.image_viewers.insert(file.id.clone(), true);
-                    }
-                }
-                ImagePreview::Loading => {
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Spinner::new().size(16.0 * zoom));
-                        ui.label(RichText::new("Loading image…").size(12.0 * zoom));
-                    });
-                }
-                ImagePreview::Error(err) => {
-                    ui.colored_label(Color32::LIGHT_RED, RichText::new(format!("Image error: {err}")).size(11.0 * zoom));
-                    // Show download link as fallback
-                    let download_url = crate::app::resolve_download_url(
-                        api_base,
-                        file.download_url.as_deref(),
-                        &file.id,
-                    );
-                    let name = file.original_name.as_deref().unwrap_or("attachment");
-                    ui.hyperlink_to(RichText::new(name).size(11.0 * zoom), download_url);
-                }
-                ImagePreview::None => {}
-            }
-        } else {
-            // Render non-image files as clickable labels
-            let name = file.original_name.as_deref().unwrap_or("attachment");
-            let mime = file.mime.as_deref().unwrap_or("");
-
-            // Show icon based on file type
-            let icon = if mime.starts_with("video/") {
-                "🎥"
-            } else if mime.starts_with("text/") || mime.contains("markdown") {
-                "📄"
-            } else if mime.contains("pdf") {
-                "📕"
-            } else {
-                "📎"
-            };
-
-            let label = if file.present {
-                format!("{} {}", icon, name)
-            } else {
-                format!("{} {} (remote)", icon, name)
-            };
-
-            let response = ui.add(
-                egui::Label::new(RichText::new(label).size(11.0 * zoom).underline().color(Color32::LIGHT_BLUE))
-                    .sense(egui::Sense::click())
-            );
-
-            if response.clicked() {
-                app.open_file_viewer(&file.id, name, mime, api_base);
-            }
-        }
-
-        ui.add_space(4.0 * zoom);
-    }
-}
-
-fn is_image(file: &FileResponse) -> bool {
-    file.present
-        && file
-            .mime
-            .as_deref()
-            .map(|m| m.starts_with("image/"))
-            .unwrap_or(false)
-}
-
-fn estimate_node_height(ui: &egui::Ui, post: &PostView, has_preview: bool, has_children: bool, zoom: f32) -> f32 {
-    use eframe::egui::FontId;
-
-    let text_width = (CARD_WIDTH - 20.0) * zoom;
-    let text_height = ui.fonts(|fonts| {
-        let body = post.body.clone();
-        let galley = fonts.layout(body, FontId::proportional(13.0 * zoom), Color32::WHITE, text_width);
-        galley.size().y
-    });
-
-    // Base padding (header + footer spacing)
-    let mut height = (50.0 * zoom) + text_height;
-    
-    // Header height approx
-    height += 25.0 * zoom;
-
-    if !post.parent_post_ids.is_empty() {
-        height += 20.0 * zoom; // "Replying to:" line
-    }
-    
-    if has_preview {
-        height += 126.0 * zoom; // Image (120) + padding (6)
-    }
-    
-    if has_children {
-        height += 20.0 * zoom; // "Replies:" line
-    }
-    
-    height + (20.0 * zoom) // Bottom padding
-}
-
 /// Draw orthogonal (Manhattan-style) edges between posts
 struct EdgeToDraw {
     start_y: f32,
@@ -796,177 +423,136 @@ fn draw_orthogonal_edges(
 ) {
     let reply_targets = &state.reply_to;
 
-
-
+    // Collect edges to draw
     let mut edges = Vec::new();
 
-    // 1. Collect all edges
     for layout in layouts {
         for parent_id in &layout.post.parent_post_ids {
-            let (parent_rect, child_rect) =
-                match (rect_lookup.get(parent_id), rect_lookup.get(&layout.post.id)) {
-                    (Some(p), Some(c)) => (*p, *c),
-                    _ => continue,
+            if let Some(parent_rect) = rect_lookup.get(parent_id) {
+                let is_reply_target = reply_targets.contains(&layout.post.id);
+                let is_selected = state.selected_post.as_ref() == Some(&layout.post.id);
+                let is_parent_selected = state.selected_post.as_ref() == Some(parent_id);
+                let is_hovered = hovered_post == Some(&layout.post.id) || hovered_post == Some(parent_id);
+                
+                let color = if is_reply_target {
+                    Color32::from_rgb(255, 190, 92)
+                } else if is_selected || is_parent_selected {
+                    Color32::from_rgb(250, 208, 108)
+                } else if is_hovered {
+                    Color32::from_rgb(120, 140, 200)
+                } else {
+                    Color32::from_rgb(60, 65, 80)
                 };
+                
+                let width = if is_hovered || is_selected || is_parent_selected { 2.0 } else { 1.0 };
 
-            let is_reply_edge = reply_targets
-                .iter()
-                .any(|id| id == parent_id || id == &layout.post.id);
-            
-            let is_hovered = hovered_post.map_or(false, |hovered| {
-                hovered == parent_id || hovered == &layout.post.id
-            });
-
-            let sel = state.selected_post.as_ref();
-            let color = if is_reply_edge {
-                Color32::from_rgb(255, 190, 92)
-            } else if is_hovered {
-                Color32::from_rgb(150, 180, 255)
-            } else if sel == Some(&layout.post.id) || sel == Some(parent_id) {
-                Color32::from_rgb(110, 190, 255)
-            } else {
-                Color32::from_rgb(90, 110, 170)
-            };
-
-            let width = (if is_reply_edge { 3.4 } else if is_hovered { 3.0 } else { 2.0 }) * state.graph_zoom;
-
-            edges.push(EdgeToDraw {
-                start_y: parent_rect.bottom(),
-                end_y: child_rect.top(),
-                parent_rect,
-                child_rect,
-                color,
-                width,
-                child_id: layout.post.id.clone(), // Store for sorting
-            });
-        }
-    }
-
-    // 2. Sort edges by start_y (top to bottom), then by child_id for stability
-    edges.sort_by(|a, b| {
-        a.start_y
-            .partial_cmp(&b.start_y)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.child_id.cmp(&b.child_id))
-    });
-
-    // 3. Assign lanes (greedy interval coloring)
-    // lanes[i] stores the y-coordinate where lane i becomes free
-    let mut lanes: Vec<f32> = Vec::new();
-    let lane_spacing = 12.0 * state.graph_zoom;
-    let base_offset = 20.0 * state.graph_zoom;
-
-    for edge in edges {
-        // Find first free lane
-        let mut lane_index = 0;
-        let mut found = false;
-        for (i, free_y) in lanes.iter_mut().enumerate() {
-            if *free_y < edge.start_y {
-                *free_y = edge.end_y;
-                lane_index = i;
-                found = true;
-                break;
+                edges.push(EdgeToDraw {
+                    start_y: parent_rect.bottom(),
+                    end_y: layout.rect.top(),
+                    parent_rect: *parent_rect,
+                    child_rect: layout.rect,
+                    color,
+                    width,
+                    child_id: layout.post.id.clone(),
+                });
             }
         }
-        if !found {
-            lane_index = lanes.len();
-            lanes.push(edge.end_y);
-        }
-
-        // 4. Draw edge using lane
-        // Route to the LEFT of the parent/child
-        // X coordinate for this lane
-        let lane_x = edge.parent_rect.left() - base_offset - (lane_index as f32 * lane_spacing);
-        
-        let start = anchor_bottom(&edge.parent_rect);
-        let end = anchor_top(&edge.child_rect);
-        
-        let corner_radius = 8.0 * state.graph_zoom;
-
-        // Path points
-        let p1 = egui::pos2(start.x, start.y + corner_radius);
-        let p2 = egui::pos2(lane_x, start.y + corner_radius);
-        let p3 = egui::pos2(lane_x, end.y - corner_radius);
-        let p4 = egui::pos2(end.x, end.y - corner_radius);
-
-        // Draw path
-        let points = vec![start, p1, p2, p3, p4, end];
-        
-        // Simplify if points are close (e.g. straight down)
-        // But here we are forcing a lane detour, so we always have these points.
-        // Unless lane_x is actually between parent and child? No, we forced it left.
-        
-        painter.add(egui::Shape::line(
-            points,
-            egui::Stroke::new(edge.width, edge.color),
-        ));
-        
-        draw_arrow(painter, p4, end, edge.color);
     }
-}
 
+    // Sort edges by length (shorter on top) and then by child X position
+    // This helps with visual clutter
+    edges.sort_by(|a, b| {
+        let len_a = (a.end_y - a.start_y).abs();
+        let len_b = (b.end_y - b.start_y).abs();
+        len_b.partial_cmp(&len_a).unwrap_or(std::cmp::Ordering::Equal)
+    });
 
-
-fn anchor_top(rect: &egui::Rect) -> Pos2 {
-    Pos2::new(rect.center().x, rect.top() - 6.0)
-}
-
-fn anchor_bottom(rect: &egui::Rect) -> Pos2 {
-    Pos2::new(rect.center().x, rect.bottom() + 6.0)
-}
-
-fn draw_arrow(painter: &egui::Painter, from: Pos2, to: Pos2, color: Color32) {
-    let dir = (to - from).normalized();
-    let normal = egui::Vec2::new(-dir.y, dir.x);
-    let arrow_size = 8.0;
-
-    let arrow_tip = to;
-    let arrow_left = Pos2::new(
-        to.x - dir.x * arrow_size + normal.x * arrow_size * 0.5,
-        to.y - dir.y * arrow_size + normal.y * arrow_size * 0.5,
-    );
-    let arrow_right = Pos2::new(
-        to.x - dir.x * arrow_size - normal.x * arrow_size * 0.5,
-        to.y - dir.y * arrow_size - normal.y * arrow_size * 0.5,
-    );
-
-    painter.add(egui::Shape::convex_polygon(
-        vec![arrow_tip, arrow_left, arrow_right],
-        color,
-        egui::Stroke::NONE,
-    ));
+    for edge in edges {
+        // Orthogonal routing:
+        // 1. Down from parent bottom center
+        // 2. Horizontal to child X
+        // 3. Down to child top center
+        
+        let start = edge.parent_rect.center_bottom();
+        let end = edge.child_rect.center_top();
+        
+        // Midpoint Y for the horizontal segment
+        // We want to avoid overlapping with other nodes.
+        // Simple heuristic: halfway between parent bottom and child top
+        let mid_y = start.y + (end.y - start.y) * 0.5;
+        
+        let p1 = egui::pos2(start.x, mid_y);
+        let p2 = egui::pos2(end.x, mid_y);
+        
+        let stroke = egui::Stroke::new(edge.width, edge.color);
+        
+        // Draw 3 segments
+        painter.line_segment([start, p1], stroke);
+        painter.line_segment([p1, p2], stroke);
+        painter.line_segment([p2, end], stroke);
+        
+        // Arrowhead at end
+        let arrow_size = 4.0;
+        painter.line_segment(
+            [end, end + egui::vec2(-arrow_size, -arrow_size)],
+            stroke,
+        );
+        painter.line_segment(
+            [end, end + egui::vec2(arrow_size, -arrow_size)],
+            stroke,
+        );
+    }
 }
 
 fn draw_time_axis(
     painter: &egui::Painter,
     posts: &[PostView],
     state: &ThreadState,
-    viewport: egui::Rect,
+    rect: egui::Rect,
 ) {
-    // Draw time labels on the left side for each post's y position
-    for (post_id, node) in &state.graph_nodes {
-        // Find the post to get its timestamp
-        let post = posts.iter().find(|p| &p.id == post_id);
-        if let Some(post) = post {
-            if let Ok(dt) = DateTime::parse_from_rfc3339(&post.created_at) {
-                let utc_dt = dt.with_timezone(&Utc);
-                let time_str = utc_dt.format("%H:%M:%S").to_string();
-                
-                // Calculate screen position with zoom and offset
-                let screen_y = viewport.top() + state.graph_offset.y + node.pos.y * state.graph_zoom;
-                let screen_x = viewport.left() + 10.0; // Fixed position on left
-                
-                // Only draw if on screen
-                if screen_y >= viewport.top() && screen_y <= viewport.bottom() {
-                    painter.text(
-                        Pos2::new(screen_x, screen_y),
-                        egui::Align2::LEFT_CENTER,
-                        time_str,
-                        egui::FontId::monospace(10.0),
-                        Color32::from_rgb(150, 150, 160),
-                    );
-                }
-            }
-        }
-    }
+    if posts.is_empty() { return; }
+    
+    // Find min/max time
+    let times: Vec<i64> = posts.iter()
+        .filter_map(|p| DateTime::parse_from_rfc3339(&p.created_at).ok().map(|dt| dt.timestamp()))
+        .collect();
+        
+    if times.is_empty() { return; }
+    
+    let min_time = *times.iter().min().unwrap();
+    let max_time = *times.iter().max().unwrap();
+    let duration = max_time - min_time;
+    
+    if duration == 0 { return; }
+    
+    // Draw vertical line
+    let line_x = rect.left() + 60.0;
+    painter.line_segment(
+        [egui::pos2(line_x, rect.top() + 20.0), egui::pos2(line_x, rect.bottom() - 20.0)],
+        egui::Stroke::new(1.0, Color32::from_rgb(60, 60, 70))
+    );
+    
+    // Draw ticks?
+    // This is tricky because the layout is not linear in time, it's binned.
+    // The Y position depends on the bin index and content height.
+    // So we can't easily map time to Y without knowing the bin layout.
+    // But we have the bin layout in `state.chronological_nodes`.
+    // We can iterate through nodes and draw time markers for the first node in each bin?
+    
+    // For now, just a simple line to indicate time flow
+    painter.text(
+        egui::pos2(line_x - 10.0, rect.top() + 20.0),
+        egui::Align2::RIGHT_TOP,
+        "Oldest",
+        egui::FontId::proportional(10.0),
+        Color32::GRAY,
+    );
+    
+    painter.text(
+        egui::pos2(line_x - 10.0, rect.bottom() - 20.0),
+        egui::Align2::RIGHT_BOTTOM,
+        "Newest",
+        egui::FontId::proportional(10.0),
+        Color32::GRAY,
+    );
 }

@@ -14,7 +14,7 @@ pub enum ThreadAction {
     OpenThread(String),
 }
 
-fn render_post_body(ui: &mut egui::Ui, body: &str) -> Option<String> {
+pub fn render_post_body(ui: &mut egui::Ui, body: &str) -> Option<String> {
     let mut clicked_thread = None;
     for line in body.lines() {
         ui.horizontal_wrapped(|ui| {
@@ -55,6 +55,7 @@ impl GraphchanApp {
             last_layout_mode: None,
             graph_nodes: HashMap::new(),
             chronological_nodes: HashMap::new(),
+            sugiyama_nodes: HashMap::new(),
             sim_start_time: None,
             selected_post: None,
             graph_zoom: 1.0,
@@ -114,6 +115,7 @@ impl GraphchanApp {
                 ThreadDisplayMode::Chronological,
                 "Timeline",
             );
+            ui.selectable_value(&mut state.display_mode, ThreadDisplayMode::Sugiyama, "Hierarchical");
         });
 
         // Clear layout if mode changed
@@ -143,6 +145,9 @@ impl GraphchanApp {
                 }
             }
             chronological::render_chronological(self, ui, state);
+        } else if state.display_mode == ThreadDisplayMode::Sugiyama {
+            use super::sugiyama;
+            sugiyama::render_sugiyama(self, ui, state);
         } else if state.display_mode == ThreadDisplayMode::List {
             if let Some(details) = &state.details {
             let posts_clone = details.posts.clone();

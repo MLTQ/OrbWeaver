@@ -93,6 +93,7 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                                 state.summary = details.thread.clone();
                                 state.graph_nodes = build_initial_graph(&details.posts);
                                 state.chronological_nodes = HashMap::new();
+                                state.sugiyama_nodes = HashMap::new();
                                 state.sim_start_time = None;
                                 
                                 // Update global peer cache
@@ -173,6 +174,7 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                             last_layout_mode: None,
                             graph_nodes: build_initial_graph(&details.posts),
                             chronological_nodes: HashMap::new(),
+                            sugiyama_nodes: HashMap::new(),
                             sim_start_time: None,
                             selected_post: None,
                             graph_zoom: 1.0,

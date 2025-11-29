@@ -73,7 +73,8 @@ pub struct ThreadState {
     pub display_mode: ThreadDisplayMode,
     pub last_layout_mode: Option<ThreadDisplayMode>,
     pub graph_nodes: HashMap<String, GraphNode>,
-    pub chronological_nodes: HashMap<String, GraphNode>, // Separate state for chronological view
+    pub chronological_nodes: HashMap<String, GraphNode>,
+    pub sugiyama_nodes: HashMap<String, GraphNode>,
     pub sim_start_time: Option<std::time::Instant>,      // Track simulation time per thread
     pub selected_post: Option<String>,
     pub graph_zoom: f32,
@@ -93,6 +94,7 @@ pub enum ThreadDisplayMode {
     List,
     Graph,
     Chronological,
+    Sugiyama,
 }
 
 pub struct GraphNode {

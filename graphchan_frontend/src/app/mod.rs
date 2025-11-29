@@ -822,39 +822,7 @@ impl eframe::App for GraphchanApp {
             let mut temp_state = if let ViewState::Thread(state) = &mut self.view {
                 std::mem::replace(
                     state,
-                    ThreadState {
-                        summary: ThreadSummary {
-                            id: String::new(),
-                            title: String::new(),
-                            creator_peer_id: None,
-                            created_at: String::new(),
-                            pinned: false,
-                        },
-                        details: None,
-                        is_loading: false,
-                        error: None,
-                        new_post_body: String::new(),
-                        new_post_error: None,
-                        new_post_sending: false,
-                        attachments: HashMap::new(),
-                        attachments_loading: HashSet::new(),
-                        attachments_errors: HashMap::new(),
-                        display_mode: ThreadDisplayMode::List,
-                        last_layout_mode: None,
-                        graph_nodes: HashMap::new(),
-                        chronological_nodes: HashMap::new(),
-                        sim_start_time: None,
-                        selected_post: None,
-                        graph_zoom: 1.0,
-                        graph_offset: egui::vec2(0.0, 0.0),
-                        graph_dragging: false,
-                        reply_to: Vec::new(),
-                        time_bin_seconds: 60,
-                        locked_hover_post: None,
-                        repulsion_force: 500.0,
-                        sim_paused: false,
-                        draft_attachments: Vec::new(),
-                    },
+                    ThreadState::default(),
                 )
             } else {
                 unreachable!()
