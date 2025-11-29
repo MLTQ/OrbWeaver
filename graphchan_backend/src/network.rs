@@ -147,6 +147,15 @@ impl NetworkHandle {
             }
         }
 
+        // Subscribe to all existing threads to receive updates
+        let thread_service = crate::threading::ThreadService::new(database.clone());
+        if let Ok(threads) = thread_service.list_threads(10000) {
+            for thread in threads {
+                tracing::info!(thread_id = %thread.id, "subscribing to thread topic on startup");
+                handle.subscribe_to_thread(&thread.id).await?;
+            }
+        }
+
         Ok(handle)
     }
 

@@ -54,27 +54,24 @@ impl GraphchanApp {
             ui.separator();
         }
 
-        let available_width = ui.available_width();
-        let col_width = (available_width / 2.0) - 10.0; // Subtract spacing
-
         ui.columns(2, |columns| {
             // Column 1
             columns[0].vertical(|ui| {
                 ui.heading(title1);
                 ui.add_space(10.0);
-                self.render_thread_list(ui, threads1, col_width);
+                self.render_thread_list(ui, threads1);
             });
 
             // Column 2
             columns[1].vertical(|ui| {
                 ui.heading(title2);
                 ui.add_space(10.0);
-                self.render_thread_list(ui, threads2, col_width);
+                self.render_thread_list(ui, threads2);
             });
         });
     }
 
-    fn render_thread_list(&mut self, ui: &mut egui::Ui, threads: &[ThreadSummary], width: f32) {
+    fn render_thread_list(&mut self, ui: &mut egui::Ui, threads: &[ThreadSummary]) {
         if threads.is_empty() {
             ui.label("No threads found.");
             return;
@@ -88,7 +85,7 @@ impl GraphchanApp {
                     .fill(ui.visuals().extreme_bg_color)
                     .inner_margin(egui::vec2(12.0, 8.0))
                     .show(ui, |ui| {
-                        ui.set_width(width);
+                        ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
                             let title = if thread.title.is_empty() {
                                 "(untitled thread)"

@@ -255,6 +255,11 @@ async fn download_thread(
     })
     .map_err(ApiError::Internal)?;
 
+    // Subscribe to the thread topic to receive future updates
+    if let Err(err) = state.network.subscribe_to_thread(&thread_id).await {
+        tracing::warn!(error = ?err, thread_id = %thread_id, "failed to subscribe to thread topic after download");
+    }
+
     tracing::info!(thread_id = %thread_id, "✓ thread download complete");
 
     Ok(Json(thread_details))
