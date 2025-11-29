@@ -659,15 +659,25 @@ async fn import_thread_handler(
     State(state): State<AppState>,
     Json(request): Json<ImportRequest>,
 ) -> Result<(StatusCode, Json<ImportResponse>), ApiError> {
-    match crate::importer::import_fourchan_thread(&state, &request.url).await {
+    let result = if request.platform.as_deref() == Some("reddit") {
+        crate::importer::import_reddit_thread(&state, &request.url).await
+    } else {
+        crate::importer::import_fourchan_thread(&state, &request.url).await
+    };
+
+    match result {
         Ok(id) => Ok((StatusCode::CREATED, Json(ImportResponse { id }))),
-        Err(err) => Err(ApiError::Internal(err)),
+        Err(e) => {
+            tracing::error!("Import failed: {}", e);
+            Err(ApiError::Internal(e))
+        }
     }
 }
 
 #[derive(Deserialize)]
 struct ImportRequest {
     url: String,
+    platform: Option<String>,
 }
 
 #[derive(Serialize)]

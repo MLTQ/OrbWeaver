@@ -15,3 +15,26 @@ use crate::api::ApiClient;
 pub fn import_fourchan_thread(api: &ApiClient, url: &str) -> Result<String> {
     api.import_thread(url)
 }
+
+pub fn import_reddit_thread(api: &ApiClient, url: &str) -> Result<String> {
+    #[derive(serde::Serialize)]
+    struct ImportRequest {
+        url: String,
+        platform: Option<String>,
+    }
+
+    let req = ImportRequest {
+        url: url.to_string(),
+        platform: Some("reddit".to_string()),
+    };
+
+    let response = api.post_json("/import", &req)?;
+    
+    #[derive(serde::Deserialize)]
+    struct ImportResponse {
+        id: String,
+    }
+    
+    let wrapper: ImportResponse = response.json()?;
+    Ok(wrapper.id)
+}

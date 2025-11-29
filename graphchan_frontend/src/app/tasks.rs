@@ -106,6 +106,24 @@ pub fn import_fourchan(client: ApiClient, tx: Sender<AppMessage>, url: String) {
     });
 }
 
+pub fn import_reddit(
+    api: ApiClient,
+    tx: Sender<AppMessage>,
+    url: String,
+) {
+    std::thread::spawn(move || {
+        let result = crate::importer::import_reddit_thread(&api, &url);
+        match result {
+            Ok(thread_id) => {
+                let _ = tx.send(AppMessage::ThreadImported(thread_id));
+            }
+            Err(err) => {
+                let _ = tx.send(AppMessage::ImportError(err.to_string()));
+            }
+        }
+    });
+}
+
 pub fn load_attachments(
     client: ApiClient,
     tx: Sender<AppMessage>,

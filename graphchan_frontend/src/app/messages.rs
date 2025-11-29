@@ -22,6 +22,9 @@ pub enum AppMessage {
         thread_id: String,
         result: Result<PostView, anyhow::Error>,
     },
+    // Import
+    ThreadImported(String),
+    ImportError(String),
     PostAttachmentsLoaded {
         thread_id: String,
         post_id: String,
@@ -479,6 +482,32 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                     Err(err) => {
                         app.info_banner = Some(format!("Failed to save file: {}", err));
                     }
+                }
+            }
+            AppMessage::ThreadImported(thread_id) => {
+                app.importer.importing = false;
+                app.reddit_importer.importing = false;
+                app.importer.error = None;
+                app.reddit_importer.error = None;
+                app.importer.url.clear();
+                app.reddit_importer.url.clear();
+                
+                // Switch to the new thread
+                app.view = ViewState::Thread(ThreadState::default());
+                app.pending_thread_focus = Some(thread_id.clone());
+                
+                // Trigger load
+                app.spawn_load_thread(&thread_id);
+            }
+            AppMessage::ImportError(err) => {
+                app.importer.importing = false;
+                app.reddit_importer.importing = false;
+                
+                if !app.importer.url.is_empty() {
+                     app.importer.error = Some(err.clone());
+                }
+                if !app.reddit_importer.url.is_empty() {
+                     app.reddit_importer.error = Some(err);
                 }
             }
         }

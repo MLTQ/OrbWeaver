@@ -26,6 +26,14 @@ pub enum ViewState {
     Thread(ThreadState),
     Friends,
     FriendCatalog(PeerView),
+    Import,
+}
+
+#[derive(Default)]
+pub struct RedditImporterState {
+    pub url: String,
+    pub importing: bool,
+    pub error: Option<String>,
 }
 
 #[derive(Default)]
@@ -50,6 +58,7 @@ pub struct AvatarCropperState {
     pub source_path: String,
 }
 
+#[derive(Default)]
 pub struct ThreadState {
     pub summary: ThreadSummary,
     pub details: Option<ThreadDetails>,
@@ -78,8 +87,9 @@ pub struct ThreadState {
     pub draft_attachments: Vec<std::path::PathBuf>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThreadDisplayMode {
+    #[default]
     List,
     Graph,
     Chronological,

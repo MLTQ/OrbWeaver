@@ -192,6 +192,12 @@ impl ApiClient {
         Ok(wrapper.id)
     }
 
+    pub fn post_json<T: serde::Serialize>(&self, path: &str, json: &T) -> Result<reqwest::blocking::Response> {
+        let url = self.url(path)?;
+        let response = self.client.post(url).json(json).send()?.error_for_status()?;
+        Ok(response)
+    }
+
     fn url(&self, path: &str) -> Result<Url> {
         let mut url = Url::parse(&self.base_url).context("invalid base URL")?;
         url.set_path(path.trim_start_matches('/'));

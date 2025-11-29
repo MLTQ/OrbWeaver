@@ -19,7 +19,8 @@ mod ui;
 
 use messages::AppMessage;
 use state::{
-    CreateThreadState, ImporterState, LoadedImage, ThreadDisplayMode, ThreadState, ViewState,
+    CreateThreadState, ImporterState, LoadedImage, RedditImporterState, ThreadDisplayMode, ThreadState,
+    ViewState,
 };
 
 // Maximum number of concurrent image downloads to prevent overwhelming the backend
@@ -90,6 +91,7 @@ pub struct GraphchanApp {
     base_url_input: String,
     info_banner: Option<String>,
     importer: ImporterState,
+    reddit_importer: RedditImporterState,
     pending_thread_focus: Option<String>,
     image_textures: HashMap<String, TextureHandle>,
     image_loading: HashSet<String>,
@@ -240,6 +242,7 @@ impl GraphchanApp {
             base_url_input: default_url,
             info_banner: None,
             importer: ImporterState::default(),
+            reddit_importer: RedditImporterState::default(),
             pending_thread_focus: None,
             image_textures: HashMap::new(),
             image_loading: HashSet::new(),
@@ -740,8 +743,8 @@ impl eframe::App for GraphchanApp {
                 if ui.button("New Thread").clicked() {
                     self.show_create_thread = true;
                 }
-                if ui.button("Import 4chan…").clicked() {
-                    self.importer.open = true;
+                if ui.button("Import").clicked() {
+                    self.view = ViewState::Import;
                 }
                 if ui.button("Catalog").clicked() {
                     self.view = ViewState::Catalog;
@@ -780,11 +783,16 @@ impl eframe::App for GraphchanApp {
             ViewState::Thread(_) => "thread",
             ViewState::Friends => "friends",
             ViewState::FriendCatalog(_) => "friend_catalog",
+            ViewState::Import => "import",
         };
 
         if view_type == "catalog" {
             egui::CentralPanel::default().show(ctx, |ui| {
                 self.render_catalog(ui);
+            });
+        } else if view_type == "import" {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui::import::render_import_page(self, ui);
             });
         } else if view_type == "friends" {
             egui::CentralPanel::default().show(ctx, |ui| {
