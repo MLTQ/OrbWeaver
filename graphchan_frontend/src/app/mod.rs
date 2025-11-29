@@ -779,6 +779,7 @@ impl eframe::App for GraphchanApp {
             ViewState::Catalog => "catalog",
             ViewState::Thread(_) => "thread",
             ViewState::Friends => "friends",
+            ViewState::FriendCatalog(_) => "friend_catalog",
         };
 
         if view_type == "catalog" {
@@ -789,6 +790,25 @@ impl eframe::App for GraphchanApp {
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui::friends::render_friends_page(self, ui);
             });
+        } else if view_type == "friend_catalog" {
+            // Extract peer temporarily
+            let peer = if let ViewState::FriendCatalog(p) = &self.view {
+                p.clone()
+            } else {
+                unreachable!()
+            };
+            
+            egui::CentralPanel::default().show(ctx, |ui| {
+                if ui.button("← Back to Friends").clicked() {
+                    go_back = true;
+                }
+                ui.add_space(10.0);
+                self.render_friend_catalog(ui, &peer);
+            });
+
+            if go_back {
+                self.view = ViewState::Friends;
+            }
         } else if view_type == "thread" {
             // Extract thread state temporarily
             let mut temp_state = if let ViewState::Thread(state) = &mut self.view {

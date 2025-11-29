@@ -6,6 +6,43 @@ use super::super::{format_timestamp, GraphchanApp};
 
 impl GraphchanApp {
     pub(crate) fn render_catalog(&mut self, ui: &mut egui::Ui) {
+        let local_peer_id = self.identity_state.local_peer.as_ref().map(|p| p.id.clone());
+        
+        let (my_threads, network_threads): (Vec<ThreadSummary>, Vec<ThreadSummary>) = self.threads.iter().cloned().partition(|t| {
+            if let Some(local_id) = &local_peer_id {
+                t.creator_peer_id.as_ref() == Some(local_id)
+            } else {
+                false
+            }
+        });
+
+        self.render_catalog_split(ui, "My Threads", &my_threads, "Network Threads", &network_threads);
+    }
+
+    pub(crate) fn render_friend_catalog(&mut self, ui: &mut egui::Ui, peer: &crate::models::PeerView) {
+        let peer_name = peer.username.as_deref().unwrap_or("Friend");
+        
+        let (authored_threads, other_threads): (Vec<ThreadSummary>, Vec<ThreadSummary>) = self.threads.iter().cloned().partition(|t| {
+            t.creator_peer_id.as_ref() == Some(&peer.id)
+        });
+
+        self.render_catalog_split(
+            ui, 
+            &format!("Authored by {}", peer_name), 
+            &authored_threads, 
+            "Network Threads", 
+            &other_threads
+        );
+    }
+
+    fn render_catalog_split(
+        &mut self, 
+        ui: &mut egui::Ui, 
+        title1: &str, 
+        threads1: &[ThreadSummary], 
+        title2: &str, 
+        threads2: &[ThreadSummary]
+    ) {
         if self.threads_loading && self.threads.is_empty() {
             ui.add(egui::Spinner::new());
         }
@@ -16,18 +53,42 @@ impl GraphchanApp {
             }
             ui.separator();
         }
+
+        let available_width = ui.available_width();
+        let col_width = (available_width / 2.0) - 10.0; // Subtract spacing
+
+        ui.columns(2, |columns| {
+            // Column 1
+            columns[0].vertical(|ui| {
+                ui.heading(title1);
+                ui.add_space(10.0);
+                self.render_thread_list(ui, threads1, col_width);
+            });
+
+            // Column 2
+            columns[1].vertical(|ui| {
+                ui.heading(title2);
+                ui.add_space(10.0);
+                self.render_thread_list(ui, threads2, col_width);
+            });
+        });
+    }
+
+    fn render_thread_list(&mut self, ui: &mut egui::Ui, threads: &[ThreadSummary], width: f32) {
+        if threads.is_empty() {
+            ui.label("No threads found.");
+            return;
+        }
+
+        let mut thread_to_open: Option<ThreadSummary> = None;
+
         egui::ScrollArea::vertical().show(ui, |ui| {
-            if self.threads.is_empty() && !self.threads_loading {
-                ui.label("No threads yet. Create one to get started.");
-            }
-
-            let mut thread_to_open: Option<ThreadSummary> = None;
-
-            for thread in &self.threads {
+            for thread in threads {
                 egui::Frame::group(ui.style())
                     .fill(ui.visuals().extreme_bg_color)
                     .inner_margin(egui::vec2(12.0, 8.0))
                     .show(ui, |ui| {
+                        ui.set_width(width);
                         ui.horizontal(|ui| {
                             let title = if thread.title.is_empty() {
                                 "(untitled thread)"
@@ -49,11 +110,12 @@ impl GraphchanApp {
                             ui.label(format!("Created by {peer}"));
                         }
                     });
-            }
-
-            if let Some(thread) = thread_to_open {
-                self.open_thread(thread);
+                ui.add_space(8.0);
             }
         });
+
+        if let Some(thread) = thread_to_open {
+            self.open_thread(thread);
+        }
     }
 }

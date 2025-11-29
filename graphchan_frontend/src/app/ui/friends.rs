@@ -66,8 +66,7 @@ pub fn render_friends_page(app: &mut GraphchanApp, ui: &mut egui::Ui) {
                     
                     // Username (clickable)
                     if ui.link(username).clicked() {
-                        app.show_identity = true;
-                        app.identity_state.inspected_peer = Some(peer.clone());
+                        app.view = crate::app::state::ViewState::FriendCatalog(peer.clone());
                     }
 
                     // Friendcode

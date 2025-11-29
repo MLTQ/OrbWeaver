@@ -3,5 +3,5 @@ members = [
     "graphchan_backend",
     "graphchan_frontend",
     "graphchan_desktop"
-]
+, "graphchan_mcp"]
 resolver = "2"

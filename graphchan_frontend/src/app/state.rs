@@ -25,6 +25,7 @@ pub enum ViewState {
     Catalog,
     Thread(ThreadState),
     Friends,
+    FriendCatalog(PeerView),
 }
 
 #[derive(Default)]
