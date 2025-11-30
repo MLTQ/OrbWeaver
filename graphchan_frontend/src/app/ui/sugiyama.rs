@@ -4,6 +4,7 @@ use crate::models::PostView;
 use super::super::state::{GraphNode, ThreadState};
 use super::super::GraphchanApp;
 use super::node::{render_node, estimate_node_size, is_image, NodeLayoutData};
+use super::input;
 
 const NODE_WIDTH: f32 = 300.0;
 const LAYER_HEIGHT: f32 = 200.0;
@@ -134,7 +135,9 @@ pub fn build_sugiyama_layout(posts: &[PostView], sizes: &HashMap<String, egui::V
     nodes
 }
 
-pub fn render_sugiyama(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut ThreadState) {
+pub(crate) fn render_sugiyama(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut ThreadState) {
+    input::handle_keyboard_input(state, ui);
+
     let posts = match &state.details {
         Some(d) => d.posts.clone(),
         None => return,
@@ -276,6 +279,9 @@ pub fn render_sugiyama(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Th
     let api_base = app.api.base_url().to_string();
     
     for layout in layouts {
+        if !rect.intersects(layout.rect) {
+            continue;
+        }
         let children = children_map.get(&layout.post.id).cloned().unwrap_or_default();
         
         let is_neighbor = if let Some(sel_id) = &state.selected_post {
@@ -293,6 +299,8 @@ pub fn render_sugiyama(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Th
             false
         };
 
+        let is_secondary = state.secondary_selected_post.as_ref() == Some(&layout.post.id);
+
         render_node(
             app,
             ui,
@@ -302,7 +310,8 @@ pub fn render_sugiyama(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Th
             rect,
             state.graph_zoom,
             &children,
-            is_neighbor
+            is_neighbor,
+            is_secondary
         );
     }
     

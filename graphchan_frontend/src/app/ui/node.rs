@@ -53,8 +53,19 @@ pub fn render_node(
     zoom: f32,
     children: &[String],
     is_neighbor: bool,
+    is_secondary: bool,
 ) -> egui::Response {
     let rect_node = layout.rect;
+    
+    // Safety check: if node is not visible or invalid, don't attempt to render inner UI
+    if !rect_node.is_positive() {
+        return ui.allocate_rect(rect_node, egui::Sense::hover());
+    }
+    // Note: rect_node.intersects(viewport) check is important to avoid negative clip rects
+    if !rect_node.intersects(viewport) {
+        return ui.allocate_rect(rect_node, egui::Sense::hover());
+    }
+
     let selected = state.selected_post.as_ref() == Some(&layout.post.id);
     let reply_target = state.reply_to.iter().any(|id| id == &layout.post.id);
     
@@ -68,17 +79,21 @@ pub fn render_node(
         Color32::from_rgb(40, 52, 85)
     } else if selected {
         Color32::from_rgb(58, 48, 24)
+    } else if is_secondary {
+        Color32::from_rgb(35, 35, 45) // Slightly lighter background for secondary
     } else if hovered {
         Color32::from_rgb(42, 45, 60)
     } else {
         Color32::from_rgb(30, 30, 38)
     };
 
-    let stroke_width = (if hovered || selected || is_neighbor { 2.5 } else { 1.5 }) * zoom;
+    let stroke_width = (if hovered || selected || is_neighbor || is_secondary { 2.5 } else { 1.5 }) * zoom;
     let stroke_color = if reply_target {
         Color32::from_rgb(255, 190, 92)
     } else if selected {
         Color32::from_rgb(250, 208, 108)
+    } else if is_secondary {
+        Color32::WHITE // White outline for secondary
     } else if is_neighbor {
         Color32::from_rgb(200, 180, 80) // Slightly dimmer yellow for neighbors
     } else if hovered {
@@ -136,8 +151,9 @@ pub fn render_node(
                             ui.add_space(4.0 * zoom);
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(RichText::new("↪ Replies:").size(11.0 * zoom).color(Color32::GRAY));
-                                for child_id in children {
-                                    render_post_link(ui, state, child_id, zoom, viewport);
+                                for (i, child_id) in children.iter().enumerate() {
+                                    let is_focused = selected && state.focused_link_index == Some(i);
+                                    render_post_link(ui, state, child_id, zoom, viewport, is_focused);
                                 }
                             });
                             ui.add_space(4.0 * zoom);
@@ -151,7 +167,7 @@ pub fn render_node(
                                 ui.horizontal_wrapped(|ui| {
                                     ui.label(RichText::new("↩ Replying to:").size(11.0 * zoom).color(Color32::GRAY));
                                     for parent_id in &layout.post.parent_post_ids {
-                                        render_post_link(ui, state, parent_id, zoom, viewport);
+                                        render_post_link(ui, state, parent_id, zoom, viewport, false);
                                     }
                                 });
                             }
@@ -217,9 +233,11 @@ fn render_node_header(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Thr
     });
 }
 
-fn render_post_link(ui: &mut egui::Ui, state: &mut ThreadState, target_id: &str, zoom: f32, viewport: egui::Rect) {
+fn render_post_link(ui: &mut egui::Ui, state: &mut ThreadState, target_id: &str, zoom: f32, viewport: egui::Rect, is_focused: bool) {
     let short_id = if target_id.len() > 8 { &target_id[..8] } else { target_id };
-    let link = ui.link(RichText::new(format!(">>{}", short_id)).size(11.0 * zoom));
+    let text = RichText::new(format!(">>{}", short_id)).size(11.0 * zoom);
+    let text = if is_focused { text.background_color(Color32::from_rgba_premultiplied(100, 100, 150, 100)) } else { text };
+    let link = ui.link(text);
     
     if link.clicked() {
         state.selected_post = Some(target_id.to_string());

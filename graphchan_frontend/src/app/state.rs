@@ -80,6 +80,10 @@ pub struct ThreadState {
     pub sugiyama_nodes: HashMap<String, GraphNode>,
     #[serde(skip)]
     pub sim_start_time: Option<std::time::Instant>,      // Track simulation time per thread
+    #[serde(skip)]
+    pub secondary_selected_post: Option<String>,
+    #[serde(skip)]
+    pub focused_link_index: Option<usize>,
     pub selected_post: Option<String>,
     pub graph_zoom: f32,
     pub graph_offset: egui::Vec2,
@@ -104,7 +108,7 @@ pub struct ThreadState {
     pub audio_promise: Option<poll_promise::Promise<Result<(String, Vec<u8>), String>>>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Debug)]
 pub enum ThreadDisplayMode {
     #[default]
     List,

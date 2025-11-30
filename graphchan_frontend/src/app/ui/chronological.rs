@@ -9,6 +9,7 @@ use crate::models::{PostView};
 use super::super::state::{GraphNode, ThreadState};
 use super::super::{format_timestamp, GraphchanApp};
 use super::node::{render_node, estimate_node_height, is_image, NodeLayoutData};
+use super::input;
 
 /// Configuration for chronological layout
 
@@ -151,6 +152,8 @@ fn round_down_to_bin_seconds(dt: DateTime<Utc>, bin_seconds: i64) -> DateTime<Ut
 
 /// Render the chronological view
 pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut ThreadState) {
+    input::handle_keyboard_input(state, ui);
+
     let posts = match &state.details {
         Some(d) => d.posts.clone(),
         None => return,
@@ -344,6 +347,9 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
     
     let api_base = app.api.base_url().to_string();
     for layout in layouts {
+        if !rect.intersects(layout.rect) {
+            continue;
+        }
         let children = children_map.get(&layout.post.id).cloned().unwrap_or_default();
         let is_neighbor = if let Some(sel_id) = &state.selected_post {
             if sel_id == &layout.post.id {
@@ -360,7 +366,9 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
             false
         };
 
-        render_node(app, ui, state, &layout, &api_base, rect, state.graph_zoom, &children, is_neighbor);
+        let is_secondary = state.secondary_selected_post.as_ref() == Some(&layout.post.id);
+
+        render_node(app, ui, state, &layout, &api_base, rect, state.graph_zoom, &children, is_neighbor, is_secondary);
     }
     
     // Restore clip rect

@@ -9,3 +9,4 @@ pub mod friends;
 pub mod import;
 pub mod node;
 pub mod sugiyama;
+pub mod input;

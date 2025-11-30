@@ -12,6 +12,7 @@ use crate::models::{PostView};
 use super::super::state::{GraphNode, ThreadState};
 use super::super::{GraphchanApp};
 use super::node::{render_node, estimate_node_size, is_image, NodeLayoutData};
+use super::input;
 
 
 pub(crate) fn build_initial_graph(posts: &[PostView]) -> HashMap<String, GraphNode> {
@@ -141,6 +142,8 @@ fn step_graph_layout(nodes: &mut HashMap<String, GraphNode>, posts: &[PostView],
 }
 
 pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut ThreadState) {
+    input::handle_keyboard_input(state, ui);
+
     let posts = match &state.details {
         Some(d) => d.posts.clone(),
         None => return,
@@ -361,6 +364,8 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
             false
         };
 
+        let is_secondary = state.secondary_selected_post.as_ref() == Some(&layout.post.id);
+
         let _node_response = render_node(
             app,
             ui,
@@ -370,7 +375,8 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
             rect,
             state.graph_zoom,
             &children,
-            is_neighbor
+            is_neighbor,
+            is_secondary
         );
         
         // Pin Button Overlay
