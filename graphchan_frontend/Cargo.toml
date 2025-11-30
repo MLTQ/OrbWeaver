@@ -9,7 +9,7 @@ html2text = "0.4"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
-eframe = { version = "0.29", features = ["glow"] }
+eframe = { version = "0.29", features = ["glow", "persistence"] }
 egui_extras = { version = "0.29", features = ["image"] }
 egui-video = "0.9"
 egui_commonmark = "0.18"
@@ -27,6 +27,7 @@ thiserror = "1"
 uuid = { version = "1", features = ["serde", "v4"] }
 rand = "0.8"
 rfd = "0.14"
+rodio = "0.18.1"
 
 [dev-dependencies]
 pretty_assertions = "1"

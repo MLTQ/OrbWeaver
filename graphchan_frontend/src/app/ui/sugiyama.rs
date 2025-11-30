@@ -161,9 +161,9 @@ pub fn render_sugiyama(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Th
             .as_ref()
             .map(|files| files.iter().any(is_image))
             .unwrap_or(false);
-        let has_children = children_map.contains_key(&post.id);
-        
-        let size = estimate_node_size(ui, post, has_preview, has_children);
+        let children_count = children_map.get(&post.id).map(|c| c.len()).unwrap_or(0);
+            
+        let size = estimate_node_size(ui, post, has_preview, children_count);
         sizes.insert(post.id.clone(), size);
     }
 
@@ -200,8 +200,14 @@ pub fn render_sugiyama(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Th
         }
     }
     
+    // Handle panning
     if response.dragged_by(egui::PointerButton::Secondary) || response.dragged_by(egui::PointerButton::Middle) {
         state.graph_offset += response.drag_delta();
+    }
+    
+    // Clear selection on background click
+    if response.clicked() {
+        state.selected_post = None;
     }
 
     // Correct center offset calculation

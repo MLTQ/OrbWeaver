@@ -163,29 +163,11 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                             summary: summary.clone(),
                             details: Some(details.clone()),
                             is_loading: false,
-                            error: None,
-                            new_post_body: String::new(),
-                            new_post_error: None,
-                            new_post_sending: false,
-                            attachments: HashMap::new(),
-                            attachments_loading: HashSet::new(),
-                            attachments_errors: HashMap::new(),
-                            display_mode: ThreadDisplayMode::List,
-                            last_layout_mode: None,
                             graph_nodes: build_initial_graph(&details.posts),
-                            chronological_nodes: HashMap::new(),
-                            sugiyama_nodes: HashMap::new(),
-                            sim_start_time: None,
-                            selected_post: None,
                             graph_zoom: 1.0,
-                            graph_offset: egui::vec2(0.0, 0.0),
-                            graph_dragging: false,
-                            reply_to: Vec::new(),
-                            time_bin_seconds: 60, // Default to 1 minute bins
-                            locked_hover_post: None,
+                            time_bin_seconds: 60,
                             repulsion_force: 500.0,
-                            sim_paused: false,
-                            draft_attachments: Vec::new(),
+                            ..Default::default()
                         };
                         for post in &details.posts {
                             state

@@ -1,4 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
 
 use eframe::egui;
 
@@ -58,7 +61,7 @@ pub struct AvatarCropperState {
     pub source_path: String,
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct ThreadState {
     pub summary: ThreadSummary,
     pub details: Option<ThreadDetails>,
@@ -75,6 +78,7 @@ pub struct ThreadState {
     pub graph_nodes: HashMap<String, GraphNode>,
     pub chronological_nodes: HashMap<String, GraphNode>,
     pub sugiyama_nodes: HashMap<String, GraphNode>,
+    #[serde(skip)]
     pub sim_start_time: Option<std::time::Instant>,      // Track simulation time per thread
     pub selected_post: Option<String>,
     pub graph_zoom: f32,
@@ -86,9 +90,21 @@ pub struct ThreadState {
     pub repulsion_force: f32,
     pub sim_paused: bool,
     pub draft_attachments: Vec<std::path::PathBuf>,
+    
+    // Audio State
+    #[serde(skip)]
+    pub audio_stream: Option<rodio::OutputStream>,
+    #[serde(skip)]
+    pub audio_handle: Option<rodio::OutputStreamHandle>,
+    #[serde(skip)]
+    pub audio_sink: Option<rodio::Sink>,
+    #[serde(skip)]
+    pub currently_playing: Option<String>, // File ID or Path
+    #[serde(skip)]
+    pub audio_promise: Option<poll_promise::Promise<Result<(String, Vec<u8>), String>>>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ThreadDisplayMode {
     #[default]
     List,
@@ -97,6 +113,7 @@ pub enum ThreadDisplayMode {
     Sugiyama,
 }
 
+#[derive(Default, Serialize, Deserialize)]
 pub struct GraphNode {
     pub pos: egui::Pos2,
     pub vel: egui::Vec2,

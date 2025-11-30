@@ -183,10 +183,10 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
                 .as_ref()
                 .map(|files| files.iter().any(is_image))
                 .unwrap_or(false);
-            let has_children = children_map.contains_key(&post.id);
+            let children_count = children_map.get(&post.id).map(|c| c.len()).unwrap_or(0);
             
             // Using 1.0 zoom for physics size calculation
-            node.size = estimate_node_size(ui, post, has_preview, has_children);
+            node.size = estimate_node_size(ui, post, has_preview, children_count);
         }
     }
 

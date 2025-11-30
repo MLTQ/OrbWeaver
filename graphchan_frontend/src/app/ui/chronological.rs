@@ -230,9 +230,14 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
         }
     }
 
-    // Handle panning with right-click drag
-    if response.dragged_by(egui::PointerButton::Secondary) {
+    // Handle panning
+    if response.dragged_by(egui::PointerButton::Secondary) || response.dragged_by(egui::PointerButton::Middle) {
         state.graph_offset += response.drag_delta();
+    }
+    
+    // Clear selection on background click
+    if response.clicked() {
+        state.selected_post = None;
     }
 
     // Pre-calculate children for all posts
@@ -276,10 +281,9 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
                     .as_ref()
                     .map(|files| files.iter().any(is_image))
                     .unwrap_or(false);
-                let has_children = children_map.contains_key(&post.id);
-
+                let children_count = children_map.get(&post.id).map(|c| c.len()).unwrap_or(0);
                 // Calculate unzoomed height
-                let unzoomed_height = estimate_node_height(ui, post, has_preview, has_children, 1.0, CARD_WIDTH);
+                let unzoomed_height = estimate_node_height(ui, post, has_preview, children_count, 1.0, CARD_WIDTH);
                 max_height_in_bin = max_height_in_bin.max(unzoomed_height);
 
                 let x = LEFT_MARGIN + (idx as f32) * (CARD_WIDTH + CARD_HORIZONTAL_SPACING);
@@ -501,7 +505,7 @@ fn draw_orthogonal_edges(
     // 3. Calculate offsets for each edge index
     let mut start_offsets: HashMap<usize, f32> = HashMap::new();
     let mut end_offsets: HashMap<usize, f32> = HashMap::new();
-    let port_spacing = 10.0;
+    let port_spacing = 10.0 * state.graph_zoom;
 
     for indices in outgoing.values() {
         let count = indices.len();
@@ -541,14 +545,14 @@ fn draw_orthogonal_edges(
         let center_y = start_y + span * 0.5;
         
         // Distribute lanes
-        let spacing = 12.0;
+        let spacing = 12.0 * state.graph_zoom;
         let total_height = (count as f32 - 1.0) * spacing;
         let start_offset = -total_height / 2.0;
         
         for (i, &edge_idx) in indices.iter().enumerate() {
             let edge = &edges[edge_idx];
             let offset = start_offset + (i as f32) * spacing;
-            let mid_y = (center_y + offset).min(end_y - 20.0).max(start_y + 20.0);
+            let mid_y = (center_y + offset).min(end_y - 20.0 * state.graph_zoom).max(start_y + 20.0 * state.graph_zoom);
             
             // Apply Port Offsets
             let start_x_off = *start_offsets.get(&edge_idx).unwrap_or(&0.0);
@@ -568,7 +572,7 @@ fn draw_orthogonal_edges(
             painter.line_segment([p2, end], stroke);
             
             // Arrowhead at end
-            let arrow_size = 4.0;
+            let arrow_size = 4.0 * state.graph_zoom;
             painter.line_segment(
                 [end, end + egui::vec2(-arrow_size, -arrow_size)],
                 stroke,

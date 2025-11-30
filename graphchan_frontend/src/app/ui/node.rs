@@ -1,8 +1,9 @@
 use eframe::egui::{self, Color32, Margin, RichText};
 use crate::models::{FileResponse, PostView};
-use super::super::state::ThreadState;
+use super::super::state::{ThreadState, ViewState};
 use super::super::{format_timestamp, GraphchanApp};
 use super::thread::render_post_body;
+
 
 pub struct NodeLayoutData {
     pub post: PostView,
@@ -265,6 +266,37 @@ fn render_node_actions(ui: &mut egui::Ui, state: &mut ThreadState, post: &PostVi
 }
 
 fn render_node_attachments(app: &mut GraphchanApp, ui: &mut egui::Ui, attachments: Option<&Vec<FileResponse>>, api_base: &str, zoom: f32) {
+    // Handle Audio Promise
+    let mut new_audio_data = None;
+    if let ViewState::Thread(state) = &mut app.view {
+         if state.audio_promise.as_ref().map(|p| p.ready().is_some()).unwrap_or(false) {
+             new_audio_data = state.audio_promise.take().map(|p| p.block_and_take());
+         }
+    }
+    
+    if let Some(Ok((id, data))) = new_audio_data {
+        if let ViewState::Thread(state) = &mut app.view {
+             // Play logic
+             if state.audio_stream.is_none() {
+                 if let Ok((stream, handle)) = rodio::OutputStream::try_default() {
+                     state.audio_stream = Some(stream);
+                     state.audio_handle = Some(handle);
+                 }
+             }
+             if let Some(handle) = &state.audio_handle {
+                if let Ok(sink) = rodio::Sink::try_new(handle) {
+                    let cursor = std::io::Cursor::new(data);
+                    if let Ok(decoder) = rodio::Decoder::new(cursor) {
+                        sink.append(decoder);
+                        sink.play();
+                        state.audio_sink = Some(sink);
+                        state.currently_playing = Some(id);
+                    }
+                }
+            }
+        }
+    }
+
     let files = match attachments {
         Some(list) => list,
         None => return,
@@ -277,7 +309,8 @@ fn render_node_attachments(app: &mut GraphchanApp, ui: &mut egui::Ui, attachment
     ui.add_space(6.0 * zoom);
 
     for file in files {
-        if is_image(file) {
+        let mime = file.mime.as_deref().unwrap_or("");
+        if mime.starts_with("image/") {
             match image_preview(app, ui, file, api_base) {
                 ImagePreview::Ready(tex) => {
                     let resp = ui.add(
@@ -308,6 +341,36 @@ fn render_node_attachments(app: &mut GraphchanApp, ui: &mut egui::Ui, attachment
                 }
                 ImagePreview::None => {}
             }
+        } else if mime.starts_with("audio/") {
+             // Audio Player UI
+             ui.horizontal(|ui| {
+                 let is_playing = if let ViewState::Thread(state) = &app.view {
+                     state.currently_playing.as_deref() == Some(&file.id)
+                 } else { false };
+                 
+                 let icon = if is_playing { "⏸" } else { "▶" };
+                 if ui.button(RichText::new(icon).size(14.0 * zoom)).clicked() {
+                     if let ViewState::Thread(state) = &mut app.view {
+                         if is_playing {
+                             state.audio_sink = None;
+                             state.currently_playing = None;
+                         } else {
+                             // Load and Play
+                             let url = format!("{}/files/{}", api_base, file.id);
+                             let file_id = file.id.clone();
+                             state.audio_promise = Some(poll_promise::Promise::spawn_thread("load_audio", move || {
+                                 let bytes = reqwest::blocking::get(url)
+                                     .map_err(|e| e.to_string())?
+                                     .bytes()
+                                     .map_err(|e| e.to_string())?
+                                     .to_vec();
+                                 Ok((file_id, bytes))
+                             }));
+                         }
+                     }
+                 }
+                 ui.label(RichText::new(file.original_name.as_deref().unwrap_or("audio")).size(12.0 * zoom));
+             });
         } else {
             let name = file.original_name.as_deref().unwrap_or("attachment");
             let mime = file.mime.as_deref().unwrap_or("");
@@ -326,7 +389,7 @@ pub fn is_image(file: &FileResponse) -> bool {
     file.present && file.mime.as_deref().map(|m| m.starts_with("image/")).unwrap_or(false)
 }
 
-pub fn estimate_node_height(ui: &egui::Ui, post: &PostView, has_preview: bool, has_children: bool, zoom: f32, card_width: f32) -> f32 {
+pub fn estimate_node_height(ui: &egui::Ui, post: &PostView, has_preview: bool, children_count: usize, zoom: f32, card_width: f32) -> f32 {
     use eframe::egui::FontId;
     let text_width = (card_width - 20.0) * zoom;
     let text_height = ui.fonts(|fonts| {
@@ -338,11 +401,22 @@ pub fn estimate_node_height(ui: &egui::Ui, post: &PostView, has_preview: bool, h
     height += 25.0 * zoom; // Header
     if !post.parent_post_ids.is_empty() { height += 20.0 * zoom; }
     if has_preview { height += 126.0 * zoom; }
-    if has_children { height += 20.0 * zoom; }
+    
+    if children_count > 0 {
+        // Estimate height of replies section
+        // Approx 80px per child link (10 chars + spacing)
+        let link_width = 80.0 * zoom;
+        let available_width = text_width;
+        let links_per_line = (available_width / link_width).max(1.0).floor();
+        let lines = (children_count as f32 / links_per_line).ceil();
+        let line_height = 15.0 * zoom;
+        height += lines * line_height + (10.0 * zoom); // + padding
+    }
+    
     height + (20.0 * zoom) // Footer/Padding
 }
 
-pub fn estimate_node_size(ui: &egui::Ui, post: &PostView, has_preview: bool, has_children: bool) -> egui::Vec2 {
+pub fn estimate_node_size(ui: &egui::Ui, post: &PostView, has_preview: bool, children_count: usize) -> egui::Vec2 {
     use eframe::egui::{FontId, TextStyle};
     
     // Calculate Width (Unscaled)
@@ -361,7 +435,7 @@ pub fn estimate_node_size(ui: &egui::Ui, post: &PostView, has_preview: bool, has
     let max_width = 1200.0;
     let width = content_width.clamp(min_width, max_width);
     
-    let height = estimate_node_height(ui, post, has_preview, has_children, 1.0, width);
+    let height = estimate_node_height(ui, post, has_preview, children_count, 1.0, width);
     
     egui::vec2(width, height)
 }
