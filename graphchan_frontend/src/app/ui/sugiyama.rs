@@ -135,8 +135,8 @@ pub fn build_sugiyama_layout(posts: &[PostView], sizes: &HashMap<String, egui::V
     nodes
 }
 
-pub(crate) fn render_sugiyama(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut ThreadState) {
-    input::handle_keyboard_input(state, ui);
+pub fn render_sugiyama(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut ThreadState) {
+    input::handle_keyboard_input(app, ui);
 
     let posts = match &state.details {
         Some(d) => d.posts.clone(),
@@ -190,7 +190,7 @@ pub(crate) fn render_sugiyama(app: &mut GraphchanApp, ui: &mut egui::Ui, state: 
     
     if total_zoom_factor != 1.0 {
         let old_zoom = state.graph_zoom;
-        state.graph_zoom = (state.graph_zoom * total_zoom_factor).clamp(0.01, 10.0);
+        state.graph_zoom = (state.graph_zoom * total_zoom_factor).clamp(0.05, 5.0);
         
         if let Some(pointer_pos) = ui.ctx().pointer_hover_pos() {
             if rect.contains(pointer_pos) {
@@ -279,9 +279,6 @@ pub(crate) fn render_sugiyama(app: &mut GraphchanApp, ui: &mut egui::Ui, state: 
     let api_base = app.api.base_url().to_string();
     
     for layout in layouts {
-        if !rect.intersects(layout.rect) {
-            continue;
-        }
         let children = children_map.get(&layout.post.id).cloned().unwrap_or_default();
         
         let is_neighbor = if let Some(sel_id) = &state.selected_post {

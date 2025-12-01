@@ -56,16 +56,6 @@ pub fn render_node(
     is_secondary: bool,
 ) -> egui::Response {
     let rect_node = layout.rect;
-    
-    // Safety check: if node is not visible or invalid, don't attempt to render inner UI
-    if !rect_node.is_positive() {
-        return ui.allocate_rect(rect_node, egui::Sense::hover());
-    }
-    // Note: rect_node.intersects(viewport) check is important to avoid negative clip rects
-    if !rect_node.intersects(viewport) {
-        return ui.allocate_rect(rect_node, egui::Sense::hover());
-    }
-
     let selected = state.selected_post.as_ref() == Some(&layout.post.id);
     let reply_target = state.reply_to.iter().any(|id| id == &layout.post.id);
     

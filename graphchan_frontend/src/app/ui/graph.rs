@@ -44,22 +44,18 @@ pub(crate) fn build_initial_graph(posts: &[PostView]) -> HashMap<String, GraphNo
     nodes
 }
 
-fn step_graph_layout(nodes: &mut HashMap<String, GraphNode>, posts: &[PostView], scale: f32, thread_id: &str, repulsion_force: f32) {
+fn step_graph_layout(
+    nodes: &mut HashMap<String, GraphNode>,
+    ids: &[String],
+    edges: &[(String, String)],
+    _scale: f32,
+    thread_id: &str,
+    repulsion_force: f32
+) {
     let repulsion = repulsion_force / 1000.0; // Scale down for physics
     let attraction = 0.015; // Increased from 0.002 to keep things tighter
     let damping = 0.80; // Increased damping for stability
     let desired = 1.5; // Reduced desired distance
-    
-    let mut edges = Vec::new();
-    for post in posts {
-        for parent in &post.parent_post_ids {
-            if nodes.contains_key(parent) {
-                edges.push((parent.clone(), post.id.clone()));
-            }
-        }
-    }
-
-    let ids: Vec<String> = nodes.keys().cloned().collect();
     
     // 1. Apply Forces
     for i in 0..ids.len() {
@@ -98,8 +94,8 @@ fn step_graph_layout(nodes: &mut HashMap<String, GraphNode>, posts: &[PostView],
 
     for (a, b) in edges {
         let (pa, pb) = {
-            let na = nodes.get(&a).unwrap();
-            let nb = nodes.get(&b).unwrap();
+            let na = nodes.get(a).unwrap();
+            let nb = nodes.get(b).unwrap();
             (na.pos, nb.pos)
         };
         let delta = pb - pa;
@@ -109,15 +105,15 @@ fn step_graph_layout(nodes: &mut HashMap<String, GraphNode>, posts: &[PostView],
         // Spring attraction
         let force = attraction * (dist - desired);
         
-        if a != *thread_id { // Keep thread_id check for edges? No, use pinned.
-            if let Some(node) = nodes.get_mut(&a) {
+        if a != thread_id { // Keep thread_id check for edges? No, use pinned.
+            if let Some(node) = nodes.get_mut(a) {
                 if !node.pinned {
                     node.vel += dir * force;
                 }
             }
         }
-        if b != *thread_id {
-            if let Some(node) = nodes.get_mut(&b) {
+        if b != thread_id {
+            if let Some(node) = nodes.get_mut(b) {
                 if !node.pinned {
                     node.vel -= dir * force;
                 }
@@ -142,7 +138,7 @@ fn step_graph_layout(nodes: &mut HashMap<String, GraphNode>, posts: &[PostView],
 }
 
 pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut ThreadState) {
-    input::handle_keyboard_input(state, ui);
+    input::handle_keyboard_input(app, ui);
 
     let posts = match &state.details {
         Some(d) => d.posts.clone(),
@@ -150,14 +146,7 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
     };
     let thread_id = state.summary.id.clone();
 
-    for post in &posts {
-        debug!(
-            "graph node post={} parents={:?} body_len={}",
-            post.id,
-            post.parent_post_ids,
-            post.body.len()
-        );
-    }
+
 
     // Initialize graph if empty
     if state.graph_nodes.is_empty() || state.graph_nodes.len() != posts.len() {
@@ -194,6 +183,17 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
     }
 
     let scale = 100.0; // 1 unit = 100 pixels
+    
+    // Pre-calculate simulation data once per frame
+    let ids: Vec<String> = state.graph_nodes.keys().cloned().collect();
+    let mut edges = Vec::new();
+    for post in &posts {
+        for parent in &post.parent_post_ids {
+            if state.graph_nodes.contains_key(parent) {
+                edges.push((parent.clone(), post.id.clone()));
+            }
+        }
+    }
 
     // Run simulation for a bit longer initially, or continuously if needed
     let sim_active = state.sim_start_time
@@ -202,8 +202,8 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
         .as_secs_f32() < 5.0;
 
     if sim_active && !state.graph_dragging && !state.sim_paused {
-        for _ in 0..10 { // Run more steps per frame for smoother/faster expansion
-            step_graph_layout(&mut state.graph_nodes, &posts, scale, &thread_id, state.repulsion_force);
+        for _ in 0..2 { // Reduced from 10 to 2 for performance
+            step_graph_layout(&mut state.graph_nodes, &ids, &edges, scale, &thread_id, state.repulsion_force);
         }
         ui.ctx().request_repaint(); // Keep animating
     } else if state.graph_dragging {
@@ -248,7 +248,7 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
             if scroll != 0.0 {
                 let old_zoom = state.graph_zoom;
                 let zoom_factor = (1.0 + scroll * 0.001).clamp(0.5, 3.5);
-                state.graph_zoom = (old_zoom * zoom_factor).clamp(0.01, 10.0);
+                state.graph_zoom = (old_zoom * zoom_factor).clamp(0.05, 5.0);
                 
                 // Zoom towards mouse
                 let pointer_rel = pointer_pos - center - state.graph_offset;

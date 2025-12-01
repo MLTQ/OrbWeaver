@@ -152,7 +152,7 @@ fn round_down_to_bin_seconds(dt: DateTime<Utc>, bin_seconds: i64) -> DateTime<Ut
 
 /// Render the chronological view
 pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut ThreadState) {
-    input::handle_keyboard_input(state, ui);
+    input::handle_keyboard_input(app, ui);
 
     let posts = match &state.details {
         Some(d) => d.posts.clone(),
@@ -160,6 +160,7 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
     };
 
     // Build layout if not already done or if we just switched to this mode
+    // Also rebuild if post count changed (new posts loaded)
     if state.chronological_nodes.is_empty() || state.chronological_nodes.len() != posts.len() {
         state.chronological_nodes = build_chronological_layout(&posts, state.time_bin_seconds);
     }
@@ -178,7 +179,69 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
         available_rect.max
     );
 
+    // Render Controls in the reserved bottom area
+    if control_rect.is_positive() {
+        ui.allocate_ui_at_rect(control_rect, |ui| {
+            ui.push_id("chronological_controls", |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(format!(
+                        "Chronological View | Nodes: {}",
+                        state.chronological_nodes.len()
+                    ));
+                    
+                    ui.separator();
+                    
+                    // Time bin size slider
+                    ui.label("Time Bin:");
+                    let mut bin_minutes = (state.time_bin_seconds / 60) as f32;
+                    let mut rebuild_layout = false;
+                    if ui.add(egui::Slider::new(&mut bin_minutes, 1.0..=1440.0)
+                        .logarithmic(true)
+                        .custom_formatter(|n, _| {
+                            if n < 60.0 {
+                                format!("{:.0} min", n)
+                            } else {
+                                format!("{:.1} hr", n / 60.0)
+                            }
+                        }))
+                        .changed() 
+                    {
+                        let new_bin_seconds = (bin_minutes * 60.0) as i64;
+                        if new_bin_seconds != state.time_bin_seconds {
+                            state.time_bin_seconds = new_bin_seconds;
+                            rebuild_layout = true;
+                        }
+                    }
+                    
+                    if rebuild_layout {
+                        let posts = state.details.as_ref().map(|d| d.posts.clone()).unwrap_or_default();
+                        state.chronological_nodes = build_chronological_layout(&posts, state.time_bin_seconds);
+                    }
+                    
+                    ui.separator();
+                    
+                    // Zoom controls
+                    ui.label("Zoom:");
+                    if ui.button("−").clicked() {
+                        state.graph_zoom = (state.graph_zoom * 0.8).max(0.2);
+                    }
+                    ui.label(format!("{:.1}x", state.graph_zoom));
+                    if ui.button("+").clicked() {
+                        state.graph_zoom = (state.graph_zoom * 1.25).min(4.0);
+                    }
+                    if ui.button("Reset").clicked() {
+                        state.graph_zoom = 1.0;
+                        state.graph_offset = egui::vec2(0.0, 0.0);
+                    }
+                });
+            });
+        });
+    }
+
     // 1. Render Canvas
+    if !canvas_rect.is_positive() {
+        return;
+    }
     let response = ui.allocate_rect(canvas_rect, egui::Sense::click_and_drag());
     let rect = canvas_rect; // Use the allocated rect
     let canvas = ui.painter().with_clip_rect(rect);
@@ -220,7 +283,7 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
 
     if total_zoom_factor != 1.0 {
         let old_zoom = state.graph_zoom;
-        state.graph_zoom = (state.graph_zoom * total_zoom_factor).clamp(0.01, 10.0);
+        state.graph_zoom = (state.graph_zoom * total_zoom_factor).clamp(0.05, 5.0);
         
         // Zoom towards mouse cursor if hovered
         if let Some(pointer_pos) = ui.ctx().pointer_hover_pos() {
@@ -251,76 +314,33 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
         }
     }
 
-    // Dynamic Layout Calculation
-    // We recalculate positions every frame to ensure no overlaps regardless of content size
+    // Build layouts from cached state.chronological_nodes
     let mut layouts = Vec::new();
     
-    // Parse timestamps and sort posts by time (oldest first)
-    let mut timestamped_posts: Vec<(DateTime<Utc>, &PostView)> = posts
-        .iter()
-        .filter_map(|p| match DateTime::parse_from_rfc3339(&p.created_at) {
-            Ok(dt) => Some((dt.with_timezone(&Utc), p)),
-            Err(_) => None,
-        })
-        .collect();
-    timestamped_posts.sort_by_key(|(dt, _)| *dt);
+    for post in &posts {
+        if let Some(node) = state.chronological_nodes.get(&post.id) {
+            // Prefer post.files over state.attachments (post.files has correct present flag)
+            let attachments = if !post.files.is_empty() {
+                Some(post.files.clone())
+            } else {
+                state.attachments.get(&post.id).cloned()
+            };
+            
+            // Calculate screen position
+            // ScreenPos = RectMin + Offset + NodePos * Zoom
+            let top_left = egui::pos2(
+                rect.left() + state.graph_offset.x + node.pos.x * state.graph_zoom,
+                rect.top() + state.graph_offset.y + node.pos.y * state.graph_zoom,
+            );
+            let scaled_size = node.size * state.graph_zoom;
+            let rect_node = egui::Rect::from_min_size(top_left, scaled_size);
 
-    let bins = create_time_bins(&timestamped_posts, state.time_bin_seconds);
-    
-    let mut current_y = TOP_MARGIN;
-    
-    for bin in bins {
-        let mut max_height_in_bin: f32 = 0.0;
-        
-        for (idx, post_id) in bin.post_ids.iter().enumerate() {
-            if let Some(post) = posts.iter().find(|p| &p.id == post_id) {
-                // Prefer post.files over state.attachments (post.files has correct present flag)
-                let attachments = if !post.files.is_empty() {
-                    Some(post.files.clone())
-                } else {
-                    state.attachments.get(&post.id).cloned()
-                };
-                let has_preview = attachments
-                    .as_ref()
-                    .map(|files| files.iter().any(is_image))
-                    .unwrap_or(false);
-                let children_count = children_map.get(&post.id).map(|c| c.len()).unwrap_or(0);
-                // Calculate unzoomed height
-                let unzoomed_height = estimate_node_height(ui, post, has_preview, children_count, 1.0, CARD_WIDTH);
-                max_height_in_bin = max_height_in_bin.max(unzoomed_height);
-
-                let x = LEFT_MARGIN + (idx as f32) * (CARD_WIDTH + CARD_HORIZONTAL_SPACING);
-                let y = current_y;
-
-                // Update stored node position (for reference/persistence if needed)
-                state.graph_nodes.insert(
-                    post.id.clone(),
-                    GraphNode {
-                        pos: egui::pos2(x, y),
-                        vel: egui::vec2(0.0, 0.0),
-                        size: egui::vec2(CARD_WIDTH, unzoomed_height),
-                        dragging: false,
-                        pinned: false,
-                    },
-                );
-
-                // Create layout data
-                let top_left = egui::pos2(
-                    rect.left() + state.graph_offset.x + x * state.graph_zoom,
-                    rect.top() + state.graph_offset.y + y * state.graph_zoom,
-                );
-                let scaled_size = egui::vec2(CARD_WIDTH, unzoomed_height) * state.graph_zoom;
-                let rect_node = egui::Rect::from_min_size(top_left, scaled_size);
-
-                layouts.push(NodeLayoutData {
-                    post: post.clone(),
-                    rect: rect_node,
-                    attachments,
-                });
-            }
+            layouts.push(NodeLayoutData {
+                post: post.clone(),
+                rect: rect_node,
+                attachments,
+            });
         }
-        
-        current_y += max_height_in_bin + MIN_BIN_VERTICAL_SPACING;
     }
 
     // Build lookup for edge routing
@@ -373,61 +393,6 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
     
     // Restore clip rect
     ui.set_clip_rect(original_clip);
-
-    // Render Controls in the reserved bottom area
-    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(control_rect), |ui| {
-        ui.horizontal(|ui| {
-            ui.label(format!(
-                "Chronological View | Nodes: {}",
-                state.chronological_nodes.len()
-            ));
-            
-            ui.separator();
-            
-            // Time bin size slider
-            ui.label("Time Bin:");
-            let mut bin_minutes = (state.time_bin_seconds / 60) as f32;
-            let mut rebuild_layout = false;
-            if ui.add(egui::Slider::new(&mut bin_minutes, 1.0..=1440.0)
-                .logarithmic(true)
-                .custom_formatter(|n, _| {
-                    if n < 60.0 {
-                        format!("{:.0} min", n)
-                    } else {
-                        format!("{:.1} hr", n / 60.0)
-                    }
-                }))
-                .changed() 
-            {
-                let new_bin_seconds = (bin_minutes * 60.0) as i64;
-                if new_bin_seconds != state.time_bin_seconds {
-                    state.time_bin_seconds = new_bin_seconds;
-                    rebuild_layout = true;
-                }
-            }
-            
-            if rebuild_layout {
-                let posts = state.details.as_ref().map(|d| d.posts.clone()).unwrap_or_default();
-                state.chronological_nodes = build_chronological_layout(&posts, state.time_bin_seconds);
-            }
-            
-            ui.separator();
-            
-            // Zoom controls
-            ui.label("Zoom:");
-            if ui.button("−").clicked() {
-                state.graph_zoom = (state.graph_zoom * 0.8).max(0.2);
-            }
-            ui.label(format!("{:.1}x", state.graph_zoom));
-            if ui.button("+").clicked() {
-                state.graph_zoom = (state.graph_zoom * 1.25).min(4.0);
-            }
-            if ui.button("Reset").clicked() {
-                state.graph_zoom = 1.0;
-                state.graph_offset = egui::vec2(0.0, 0.0);
-            }
-        });
-    });
 }
 
 /// Draw orthogonal (Manhattan-style) edges between posts

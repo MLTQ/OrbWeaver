@@ -19,18 +19,32 @@ pub fn render_post_body(ui: &mut egui::Ui, body: &str) -> Option<String> {
     for line in body.lines() {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
-            for (i, word) in line.split(' ').enumerate() {
-                if i > 0 {
-                    ui.label(" ");
-                }
+            
+            let mut current_text = String::new();
+            
+            for word in line.split(' ') {
                 if word.starts_with(">>>") {
+                    // Flush current text
+                    if !current_text.is_empty() {
+                        ui.label(current_text.clone());
+                        current_text.clear();
+                    }
+                    
+                    // Render link
                     let thread_id = &word[3..];
                     if ui.link(word).clicked() {
                         clicked_thread = Some(thread_id.to_string());
                     }
+                    ui.label(" "); // Space after link
                 } else {
-                    ui.label(word);
+                    current_text.push_str(word);
+                    current_text.push(' ');
                 }
+            }
+            
+            // Flush remaining text
+            if !current_text.is_empty() {
+                ui.label(current_text);
             }
         });
     }
@@ -129,8 +143,6 @@ impl GraphchanApp {
             use super::sugiyama;
             sugiyama::render_sugiyama(self, ui, state);
         } else if state.display_mode == ThreadDisplayMode::List {
-            use super::input;
-            input::handle_keyboard_input(state, ui);
             if let Some(details) = &state.details {
             let posts_clone = details.posts.clone();
             let thread_id = state.summary.id.clone();
@@ -139,39 +151,14 @@ impl GraphchanApp {
             let attachments_errors = &state.attachments_errors;
             let api_base = self.api.base_url().to_string();
 
-            // Calculate children map for replies
-            let mut children_map: HashMap<String, Vec<String>> = HashMap::new();
-            for post in &posts_clone {
-                for parent in &post.parent_post_ids {
-                    children_map.entry(parent.clone()).or_default().push(post.id.clone());
-                }
-            }
-            // Sort children for consistent order
-            for children in children_map.values_mut() {
-                children.sort();
-            }
-
             egui::ScrollArea::vertical()
                 .id_source("thread-posts")
                 .show(ui, |ui| {
                     for post in &posts_clone {
-                        let is_selected = state.selected_post.as_ref() == Some(&post.id);
-                        let is_secondary = state.secondary_selected_post.as_ref() == Some(&post.id);
-                        
-                        let mut frame = egui::Frame::group(ui.style())
-                            .inner_margin(egui::vec2(12.0, 8.0));
-                            
-                        if is_selected {
-                            frame = frame.fill(Color32::from_rgb(58, 48, 24))
-                                         .stroke(egui::Stroke::new(2.0, Color32::from_rgb(250, 208, 108)));
-                        } else if is_secondary {
-                            frame = frame.fill(Color32::from_rgb(35, 35, 45))
-                                         .stroke(egui::Stroke::new(2.0, Color32::WHITE));
-                        } else {
-                            frame = frame.fill(ui.visuals().extreme_bg_color);
-                        }
-
-                        let response = frame.show(ui, |ui| {
+                        egui::Frame::group(ui.style())
+                            .fill(ui.visuals().extreme_bg_color)
+                            .inner_margin(egui::vec2(12.0, 8.0))
+                            .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     if ui.button(RichText::new(&post.id).monospace()).clicked() {
                                         Self::quote_post(state, &post.id);
@@ -234,46 +221,9 @@ impl GraphchanApp {
                                         self.render_file_attachment(ui, file, &api_base);
                                     }
                                 }
-                                
-                                // Render Replies Footer
-                                if let Some(children) = children_map.get(&post.id) {
-                                    ui.separator();
-                                    ui.horizontal_wrapped(|ui| {
-                                        ui.label(RichText::new("Replies:").strong());
-                                        for (i, child_id) in children.iter().enumerate() {
-                                            let short_id = if child_id.len() > 8 { &child_id[..8] } else { child_id };
-                                            let label = if is_selected && i < 10 {
-                                                format!(">>{} ({})", short_id, (i + 1) % 10)
-                                            } else {
-                                                format!(">>{}", short_id)
-                                            };
-                                            
-                                            let mut text = RichText::new(label);
-                                            if state.focused_link_index == Some(i) && is_selected {
-                                                text = text.background_color(Color32::from_rgba_premultiplied(100, 100, 150, 100));
-                                            }
-                                            
-                                            if ui.link(text).clicked() {
-                                                state.selected_post = Some(child_id.clone());
-                                                state.secondary_selected_post = None;
-                                                state.focused_link_index = None;
-                                            }
-                                        }
-                                    });
-                                }
                             });
-                        
-                        // Handle click on the post frame to select
-                        if ui.interact(response.response.rect, response.response.id, egui::Sense::click()).clicked() {
-                            state.selected_post = Some(post.id.clone());
-                            state.secondary_selected_post = None;
-                            state.focused_link_index = None;
-                        }
-                        
-                        // Auto-scroll to selected post
-                        if is_selected {
-                            ui.scroll_to_rect(response.response.rect, Some(egui::Align::Center));
-                        }
+
+
                     }
                 });
         }

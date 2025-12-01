@@ -108,7 +108,7 @@ pub struct ThreadState {
     pub audio_promise: Option<poll_promise::Promise<Result<(String, Vec<u8>), String>>>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ThreadDisplayMode {
     #[default]
     List,
