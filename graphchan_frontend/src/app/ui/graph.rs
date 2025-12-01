@@ -215,27 +215,27 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
     let canvas = ui.painter().with_clip_rect(rect);
     canvas.rect_filled(rect, 0.0, Color32::from_rgb(12, 13, 20));
     
-    // Grid pattern
-    let grid_size = 50.0 * state.graph_zoom;
-    let grid_color = Color32::from_rgba_premultiplied(70, 72, 95, 40);
+    // Dot grid pattern
+    let dot_spacing = 50.0 * state.graph_zoom;
+    let dot_color = Color32::from_rgba_premultiplied(70, 72, 95, 60);
+    
     // Calculate grid offset based on camera
     let center = rect.center();
     let offset = state.graph_offset;
-    let zoom = state.graph_zoom * scale; 
+    let zoom = state.graph_zoom * scale;
     
-    // Draw grid
-    if grid_size > 5.0 {
-        let mut x = (center.x + offset.x) % grid_size;
-        if x < rect.left() { x += grid_size; }
+    // Draw dots
+    if dot_spacing > 10.0 {
+        let mut x = (center.x + offset.x) % dot_spacing;
+        if x < rect.left() { x += dot_spacing; }
         while x < rect.right() {
-            canvas.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(1.0, grid_color));
-            x += grid_size;
-        }
-        let mut y = (center.y + offset.y) % grid_size;
-        if y < rect.top() { y += grid_size; }
-        while y < rect.bottom() {
-            canvas.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], egui::Stroke::new(1.0, grid_color));
-            y += grid_size;
+            let mut y = (center.y + offset.y) % dot_spacing;
+            if y < rect.top() { y += dot_spacing; }
+            while y < rect.bottom() {
+                canvas.circle_filled(egui::pos2(x, y), 1.5, dot_color);
+                y += dot_spacing;
+            }
+            x += dot_spacing;
         }
     }
 

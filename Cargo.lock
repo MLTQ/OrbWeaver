@@ -2747,6 +2747,7 @@ dependencies = [
  "egui_commonmark",
  "egui_extras",
  "env_logger",
+ "ffmpeg-the-third",
  "html2text 0.4.5",
  "image",
  "lazy_static",
