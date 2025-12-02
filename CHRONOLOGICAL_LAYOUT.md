@@ -20,12 +20,13 @@ Added a new "Timeline" view mode for thread visualization that arranges posts ch
   - Route-around logic for complex cases (child above/beside parent)
 
 **Layout Parameters:**
+Parameters like `BIN_MINUTES` are now configurable via the UI stored in `ThreadState`.
+Default values:
 ```rust
-const BIN_MINUTES: i64 = 5;             // Time grouping interval
-const CARD_WIDTH: f32 = 320.0;           // Node width
-const CARD_HORIZONTAL_SPACING: f32 = 30.0; // Gap between nodes
-const BIN_VERTICAL_SPACING: f32 = 60.0;    // Gap between time bins
-const EDGE_CLEARANCE: f32 = 15.0;        // Space for routing around cards
+const DEFAULT_BIN_MINUTES: i64 = 5;
+const CARD_WIDTH: f32 = 320.0;
+const CARD_HORIZONTAL_SPACING: f32 = 30.0;
+const BIN_VERTICAL_SPACING: f32 = 60.0;
 ```
 
 ### 3. Edge Routing Logic
@@ -72,11 +73,13 @@ parent_rect, child_rect
 1. Open any thread
 2. Click "Timeline" button in view selector
 3. Pan with right-click drag
-4. Posts arranged in time-descending order with clean orthogonal connections
+4. Zoom with scroll wheel
+5. Adjust time bin size with slider
+6. Posts arranged in time-descending order with clean orthogonal connections
 
 ## Future Enhancements
-- [ ] Configurable time bin size (UI setting)
-- [ ] Zoom support (currently fixed scale)
+- [x] Configurable time bin size (UI setting)
+- [x] Zoom support
 - [ ] Smart edge bundling for dense graphs
 - [ ] Horizontal timeline scrubber
 - [ ] Collapsible time bins

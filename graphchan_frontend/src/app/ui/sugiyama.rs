@@ -136,7 +136,8 @@ pub fn build_sugiyama_layout(posts: &[PostView], sizes: &HashMap<String, egui::V
 }
 
 pub fn render_sugiyama(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut ThreadState) {
-    input::handle_keyboard_input(app, ui);
+    // Keyboard input is now handled in app/mod.rs update()
+    // input::handle_keyboard_input(app, ui);
 
     let posts = match &state.details {
         Some(d) => d.posts.clone(),

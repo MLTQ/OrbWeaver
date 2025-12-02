@@ -34,7 +34,7 @@ All three binaries share the same runtime directories, so copying any executable
 ## Module Layout
 - `bootstrap`: Creates runtime directories, opens the database, applies migrations, and ensures the local identity exists. Inserts/updates the corresponding rows in `node_identity` and `peers`.
 - `config`: Loads configuration from the environment (`GRAPHCHAN_API_PORT`, `GRAPHCHAN_PUBLIC_ADDRS`, `GRAPHCHAN_RELAY_URL`) and materialises the filesystem layout.
-- `identity`: Manages GPG key generation (`gpg --homedir keys/gpg`), persists the Iroh secret key, and encodes/decodes friendcodes (`version:1`, `{peer_id, gpg_fingerprint, addresses[]}`).
+- `identity`: Manages GPG key generation (embedded `sequoia-openpgp` library), persists the Iroh secret key, and encodes/decodes friendcodes (`version:1`, `{peer_id, gpg_fingerprint, addresses[]}`).
 - `database`: Embeds migrations and exposes rusqlite-based repository traits for threads, posts, peers, and files.
 - `threading`: Implements thread CRUD and post insertion, including DAG edge management and view models consumed by the API.
 - `files`: Streams uploads into the local `FsStore`, keeps path metadata in SQLite, mirrors bytes under `files/uploads/`, and persists blob tickets/checksums for redistribution.
@@ -50,7 +50,7 @@ All three binaries share the same runtime directories, so copying any executable
 1. `graphchan_backend serve` loads configuration via `GraphchanConfig::from_env`.
 2. `bootstrap::initialize` ensures directories exist and connects to SQLite.
 3. Migrations execute on first run, and schema drift (e.g., new columns) is handled idempotently.
-4. GPG keys are generated if missing; the fingerprint is written to `keys/gpg/fingerprint.txt` and exported to `public.asc`/`private.asc`.
+4. GPG keys are generated internally using `sequoia-openpgp` if missing; the fingerprint is written to `keys/gpg/fingerprint.txt` and exported to `public.asc`/`private.asc`.
 5. An Iroh secret key is generated (versioned JSON) if `keys/iroh.key` is absent.
 6. A friendcode combining `{peer_id, gpg_fingerprint, advertised addresses}` is produced and stored in both `node_identity` and the local `peers` row.
 7. The Iroh endpoint boots (respecting relay configuration) and the Axum HTTP server starts listening.

@@ -23,7 +23,7 @@
    - Centralize migrations and config loaders (`GraphchanConfig`, `GraphchanPaths`, `NetworkConfig`).
    - Provide deterministic constructors for tests; keep env overrides.
 2. **Identity & Bootstrap**
-   - Shell out to `gpg --quick-generate-key` / `--quick-add-key` (ed25519 + cv25519).
+   - Use embedded `sequoia-openpgp` library to generate Ed25519/Cv25519 keys (no external `gpg` dependency).
    - Serialize Iroh secret key (base64 JSON) via `iroh_base::SecretKey`.
    - Persist `node_identity` + auto-register local peer row.
 3. **Database Repositories**
@@ -110,65 +110,21 @@
 
 ## Frontend Roadmap
 
-### Completed (November 2025)
-- ✅ Fixed egui 0.27 API compatibility issues (`.margin()` → `.inner_margin()`).
-- ✅ Resolved Rust borrow checker conflicts in dialog rendering and view state management.
-- ✅ Basic thread catalog with create/view/reply functionality.
-- ✅ File attachment display with download links.
-- ✅ 4chan thread importer.
-- ✅ Configurable API base URL.
+### Completed (December 2025)
+- ✅ **View Modes**: Graph, Sugiyama, Timeline.
+- ✅ **Rich Media**: Video (with audio), Images, Markdown, PDF.
+- ✅ **Navigation**: Keyboard support, Camera centering.
+- ✅ **Peer Management**: Identity drawer, Friendcode display.
+- ✅ **Portability**: Static linking, Embedded GPG.
 
-### Quick Wins (Priority 1)
-- **Peer Management UI**: 
-  - Display local friendcode in a copyable text box.
-  - "Add Peer" dialog to paste and register friendcodes.
-  - Show online/offline status for known peers.
-- **Persistent Settings**:
-  - Save API URL to config file or browser storage equivalent.
-  - Remember window size/position.
-- ✅ **Image Thumbnails**: **COMPLETE**
-  - ✅ Inline image display for attachments using `image` crate.
-  - ✅ Support for PNG, JPEG, GIF formats.
-  - ✅ Max width 400px with shrink-to-fit.
-  - ✅ Fallback to download links for non-images.
-- **File Upload UI**:
-  - Multipart form support for attaching files to posts.
-  - Drag-and-drop file upload area.
-  - Progress indicators for upload/download.
-
-### Medium Term (Priority 2)
-- **DAG Visualization**:
-  - Basic post relationship graph using parent_post_ids.
-  - Indentation or tree view for reply chains.
-  - Interactive node selection to highlight relationships.
-- **Better Error Handling**:
-  - Toast notifications instead of inline error text.
-  - Retry mechanisms with exponential backoff.
-  - Network status indicator.
-- **Pagination & Search**:
-  - Paginate thread catalog (currently loads all threads).
-  - Search threads by title/content.
-  - Filter by date, author, or tags.
-- **Real-time Updates**:
-  - Poll backend for new posts/threads.
-  - Optional: WebSocket or SSE for push updates.
-
-### Long Term (Priority 3)
-- **Advanced Graph Layout** (port from p2pchan):
-  - Force-directed graph for complex DAG visualization.
-  - Zoomable/pannable canvas.
-  - Collapse/expand sub-threads.
+### Remaining
+- **Advanced Graph Layout**:
+  - [ ] Smart edge bundling for dense graphs.
+  - [ ] Minimap overview.
 - **Rich Media Support**:
-  - Video/audio playback.
-  - PDF/document viewers.
-  - Code syntax highlighting.
-- **Multi-Window/Tabs**:
-  - Open multiple threads in separate windows or tabs.
-  - Split-pane view for catalog + thread.
-- **Offline Mode**:
-  - Cache threads/posts for offline viewing.
-  - Queue posts to send when connection restored.
-- **Theming & Accessibility**:
-  - Dark/light mode toggle.
-  - Font size customization.
-  - Keyboard navigation.
+  - [ ] Full PDF page rendering (currently just viewer/save).
+  - [ ] Video thumbnail generation.
+- **UX Polish**:
+  - [ ] Draft post autosave.
+  - [ ] Attachment drag-and-drop.
+  - [ ] Search/Pagination in catalog.

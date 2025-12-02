@@ -58,16 +58,11 @@ A new "Timeline" view mode for threads that arranges posts chronologically with 
 - Panning lets you navigate long threads efficiently
 
 ## Configuration
-Currently uses fixed settings:
-- Time bins: 5 minutes
-- Card width: 320px
-- Horizontal spacing: 30px
-- Vertical bin spacing: 60px
-
-(Future versions may make these configurable via UI)
+- **Time Bin**: Adjustable via slider (1 minute to 24 hours)
+- **Zoom**: Fully supported (Scroll wheel, Pinch, or +/- buttons)
+- **Reset**: Button to reset zoom and offset
 
 ## Known Limitations
-- No zoom support yet (coming soon)
 - Very dense threads may need more horizontal space
 - Edge bundling not yet implemented for high-degree nodes
 

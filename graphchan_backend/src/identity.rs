@@ -1,5 +1,5 @@
 use crate::config::GraphchanPaths;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use iroh_base::SecretKey;
 use rand::rng;
@@ -9,8 +9,11 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::Command;
 use uuid::Uuid;
+
+use sequoia_openpgp as openpgp;
+use openpgp::cert::CertBuilder;
+use openpgp::serialize::Serialize as _; // Import trait anonymously to avoid conflict with serde::Serialize
 
 const FINGERPRINT_FILE: &str = "fingerprint.txt";
 
@@ -75,55 +78,27 @@ fn generate_gpg_identity(paths: &GraphchanPaths) -> Result<String> {
     let email = format!("node-{node_id}@graphchan.local");
     let user_id = format!("{uid} <{email}>");
 
-    run_gpg_command(
-        homedir,
-        ["--quick-generate-key", &user_id, "ed25519", "sign", "0"],
-    )
-    .context("failed to generate primary GPG key")?;
+    // Generate a new Cert (Primary Key + Subkeys)
+    // We want Ed25519 for signing (primary) and CV25519 for encryption (subkey)
+    // set_cipher_suite(Cv25519) creates an Ed25519 primary key (Sign, Certify) and a Cv25519 subkey (Encrypt)
+    let (cert, _revocation) = CertBuilder::new()
+        .add_userid(user_id.as_str())
+        .set_cipher_suite(openpgp::cert::CipherSuite::Cv25519)
+        .generate()?;
 
-    let fingerprint = read_gpg_fingerprint(homedir, &user_id)?;
+    let fingerprint = cert.fingerprint().to_string();
 
-    run_gpg_command(
-        homedir,
-        ["--quick-add-key", &fingerprint, "cv25519", "encrypt", "0"],
-    )
-    .context("failed to add encryption subkey")?;
+    // Export Public Key
+    cert.armored().serialize(&mut fs::File::create(&paths.gpg_public_key)?)?;
 
-    export_gpg_key_material(
-        homedir,
-        &fingerprint,
-        &paths.gpg_public_key,
-        &paths.gpg_private_key,
-    )?;
+    // Export Private Key
+    cert.as_tsk().armored().serialize(&mut fs::File::create(&paths.gpg_private_key)?)?;
 
     tighten_permissions(&paths.gpg_private_key.parent().unwrap_or(homedir))?;
     tighten_permissions(&paths.gpg_private_key)?;
     tighten_permissions(&paths.gpg_public_key)?;
 
     Ok(fingerprint)
-}
-
-fn run_gpg_command<'a, I>(homedir: &Path, extra_args: I) -> Result<()>
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    let mut cmd = Command::new("gpg");
-    cmd.arg("--homedir")
-        .arg(homedir)
-        .arg("--batch")
-        .arg("--yes")
-        .arg("--pinentry-mode")
-        .arg("loopback")
-        .arg("--passphrase")
-        .arg("")
-        .args(extra_args);
-    let status = cmd
-        .status()
-        .with_context(|| format!("failed to invoke gpg (homedir: {})", homedir.display()))?;
-    if !status.success() {
-        return Err(anyhow!("gpg command exited with status {status}").context("gpg failure"));
-    }
-    Ok(())
 }
 
 fn tighten_permissions(path: &Path) -> Result<()> {
@@ -138,83 +113,6 @@ fn tighten_permissions(path: &Path) -> Result<()> {
             tracing::warn!(path = %path.display(), error = ?err, "failed to tighten permissions");
         }
     }
-    Ok(())
-}
-
-fn read_gpg_fingerprint(homedir: &Path, user_id: &str) -> Result<String> {
-    let output = Command::new("gpg")
-        .arg("--homedir")
-        .arg(homedir)
-        .arg("--batch")
-        .arg("--with-colons")
-        .arg("--list-secret-keys")
-        .arg(user_id)
-        .output()
-        .with_context(|| format!("failed to list gpg keys for {user_id}"))?;
-
-    if !output.status.success() {
-        return Err(anyhow!(
-            "gpg --list-secret-keys failed with status {}",
-            output.status
-        ));
-    }
-
-    let stdout = String::from_utf8(output.stdout)?;
-    for line in stdout.lines() {
-        if let Some(rest) = line.strip_prefix("fpr:") {
-            let parts: Vec<&str> = rest.split(':').collect();
-            if parts.len() >= 9 {
-                let fingerprint = parts[8].trim().to_string();
-                if !fingerprint.is_empty() {
-                    return Ok(fingerprint);
-                }
-            }
-        }
-    }
-
-    Err(anyhow!(
-        "failed to parse GPG fingerprint for newly created key"
-    ))
-}
-
-fn export_gpg_key_material(
-    homedir: &Path,
-    fingerprint: &str,
-    public_dest: &Path,
-    private_dest: &Path,
-) -> Result<()> {
-    let public = Command::new("gpg")
-        .arg("--homedir")
-        .arg(homedir)
-        .arg("--batch")
-        .arg("--yes")
-        .arg("--armor")
-        .arg("--export")
-        .arg(fingerprint)
-        .output()
-        .with_context(|| format!("failed to export public key for {fingerprint}"))?;
-    if !public.status.success() {
-        return Err(anyhow!("gpg --export failed with status {}", public.status));
-    }
-    fs::write(public_dest, public.stdout)?;
-
-    let secret = Command::new("gpg")
-        .arg("--homedir")
-        .arg(homedir)
-        .arg("--batch")
-        .arg("--yes")
-        .arg("--armor")
-        .arg("--export-secret-keys")
-        .arg(fingerprint)
-        .output()
-        .with_context(|| format!("failed to export secret key for {fingerprint}"))?;
-    if !secret.status.success() {
-        return Err(anyhow!(
-            "gpg --export-secret-keys failed with status {}",
-            secret.status
-        ));
-    }
-    fs::write(private_dest, secret.stdout)?;
     Ok(())
 }
 

@@ -202,6 +202,7 @@ impl GraphchanApp {
         let (tx, rx) = mpsc::channel();
 
         // Initialize SDL2 audio for video playback
+        // Initialize SDL2 audio for video playback
         let audio_device = match sdl2::init() {
             Ok(sdl_context) => {
                 match sdl_context.audio() {
@@ -719,6 +720,10 @@ impl eframe::App for GraphchanApp {
         if self.ctx.is_none() {
             self.ctx = Some(ctx.clone());
         }
+
+        // Handle keyboard input EARLY, before any UI is rendered.
+        // This ensures we can consume keys (like Tab) before egui's default widgets see them.
+        ui::input::handle_keyboard_input(self, ctx);
 
         self.process_messages();
 

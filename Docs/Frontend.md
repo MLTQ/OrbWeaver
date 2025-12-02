@@ -78,13 +78,30 @@ The frontend offers three distinct ways to view and navigate threads:
 - Click posts to select, edges highlight on hover
 - Supports pinning nodes to lock positions
 
-### 3. Timeline View (chronological.rs)
+### 3. Sugiyama View (sugiyama.rs)
+**Hierarchical layered graph layout**
+- Posts arranged in layers based on depth/rank
+- Minimizes edge crossings for clearer structure
+- Ideal for understanding conversation flow and branching
+- Same interaction controls as Graph view
+
+### 4. Timeline View (chronological.rs)
 **Chronological horizontal layout with time binning**
 - Posts grouped into time bins (configurable: 1 min - 24 hours)
 - Posts within same time bin stack horizontally
 - Time axis on left margin shows timestamps
 - Same pan/zoom controls as graph view
 - Compact card format optimized for temporal navigation
+
+## Keyboard Navigation
+
+The application supports full keyboard navigation for efficiency:
+
+- **Tab**: Select next post (chronological order)
+- **Shift+Tab**: Select previous post
+- **Arrow Keys**: Navigate graph structure (Up/Down/Left/Right based on visual layout)
+- **Enter**: Open selected post details or expand attachments
+- **Esc**: Deselect post
 
 ## File Attachment System
 
@@ -146,6 +163,7 @@ The frontend offers three distinct ways to view and navigate threads:
 - Creates `AudioDevice` that's passed to video players
 - Graceful degradation: if SDL2 init fails, videos play without audio
 - Error logging for debugging audio initialization issues
+- **Static Linking**: SDL2 is statically linked on macOS/Linux/Windows, so no external installation is required.
 
 **Volume Control:**
 - Collapsible volume slider in video viewer (mod.rs:628-639)
@@ -218,7 +236,7 @@ The frontend offers three distinct ways to view and navigate threads:
 
 **Media Handling:**
 - `egui-video` 0.9 - Video player with seek/play/pause controls
-- `sdl2` 0.37 - Audio subsystem for video playback
+- `sdl2` 0.37 - Audio subsystem for video playback (Statically linked)
 - `image` 0.25 - Image loading/decoding (PNG, JPEG, GIF)
 - `egui_commonmark` 0.18 - Markdown rendering with rich formatting
 

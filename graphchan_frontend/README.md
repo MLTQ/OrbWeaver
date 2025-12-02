@@ -4,18 +4,20 @@ This crate hosts an egui/eframe desktop UI for the Graphchan backend with suppor
 
 ## Features
 
-- **Three View Modes**: Posts list, force-directed graph, and chronological timeline
+- **Four View Modes**: Posts list, force-directed graph, hierarchical (Sugiyama) graph, and chronological timeline
 - **Rich Media Support**: Videos with audio/volume control, images with click-to-enlarge, markdown rendering
 - **File Attachments**: Upload and view images, videos, text, markdown, PDFs
+- **Keyboard Navigation**: Tab/Shift+Tab to cycle posts, Arrow keys to navigate graph structure
 - **Multi-Parent Threading**: Reply to multiple posts simultaneously
 - **4chan Import**: Archive and discuss 4chan threads
-- **Identity System**: GPG-based identities with avatars and profiles
+- **Identity System**: Embedded GPG-based identities (no external GPG required)
 - **P2P Networking**: Direct peer connections via iroh
+- **Portable**: Statically linked SDL2 and FFmpeg for easy distribution
 
 ## Architecture
 
 - **App State** (`app/mod.rs`): Core application state, file viewers, attachment rendering, SDL2 audio
-- **UI Modules** (`app/ui/`): Specialized views (catalog, thread, graph, chronological, images, dialogs, drawer)
+- **UI Modules** (`app/ui/`): Specialized views (catalog, thread, graph, sugiyama, chronological, images, dialogs, drawer)
 - **Message System** (`app/messages.rs`): Async message handling for API responses and downloads
 - **Task Spawning** (`app/tasks.rs`): Background threads for downloads, API calls, file operations
 - **API Client** (`api.rs`): Typed REST client with endpoint helpers
@@ -25,7 +27,7 @@ This crate hosts an egui/eframe desktop UI for the Graphchan backend with suppor
 ## Getting Started
 
 **Prerequisites:**
-- SDL2 library for video audio (macOS: `brew install sdl2`)
+- None! SDL2 and FFmpeg are statically linked.
 
 **Running the app:**
 
@@ -56,7 +58,14 @@ This crate hosts an egui/eframe desktop UI for the Graphchan backend with suppor
 ### Viewing Threads
 - **Posts View**: Traditional list with full post content and inline attachments
 - **Graph View**: Force-directed layout showing reply relationships
+- **Sugiyama View**: Hierarchical layout emphasizing thread depth and structure
 - **Timeline View**: Chronological bins showing temporal patterns
+
+### Keyboard Navigation
+- **Tab / Shift+Tab**: Cycle through posts in linear order (creation time)
+- **Arrow Keys**: Navigate between parent/child posts in Graph/Sugiyama views
+- **Enter**: Open selected post details or expand attachments
+- **Esc**: Deselect post
 
 ### Working with Attachments
 - **Images**: Click thumbnail to open full-size popup window
@@ -73,14 +82,15 @@ This crate hosts an egui/eframe desktop UI for the Graphchan backend with suppor
 
 **Completed:**
 - Thread catalog and detail views
-- Three view modes (Posts/Graph/Timeline)
+- Four view modes (Posts/Graph/Sugiyama/Timeline)
 - Multi-file attachments with upload
 - Image/video/text/markdown/PDF viewers
-- Video audio playback with SDL2
+- Video audio playback with SDL2 (Static)
 - Click-to-enlarge images
 - 4chan thread importer
-- GPG identity system
+- Embedded GPG identity system (Sequoia)
 - P2P peer networking
+- Keyboard navigation
 
 **Planned:**
 - Full PDF page rendering

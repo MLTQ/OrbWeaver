@@ -138,7 +138,8 @@ fn step_graph_layout(
 }
 
 pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut ThreadState) {
-    input::handle_keyboard_input(app, ui);
+    // Keyboard input is now handled in app/mod.rs update()
+    // input::handle_keyboard_input(app, ui);
 
     let posts = match &state.details {
         Some(d) => d.posts.clone(),

@@ -152,7 +152,8 @@ fn round_down_to_bin_seconds(dt: DateTime<Utc>, bin_seconds: i64) -> DateTime<Ut
 
 /// Render the chronological view
 pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut ThreadState) {
-    input::handle_keyboard_input(app, ui);
+    // Keyboard input is now handled in app/mod.rs update()
+    // input::handle_keyboard_input(app, ui);
 
     let posts = match &state.details {
         Some(d) => d.posts.clone(),
