@@ -198,6 +198,25 @@ impl ApiClient {
         Ok(response)
     }
 
+    pub fn delete_thread(&self, thread_id: &str) -> Result<()> {
+        let url = format!("{}/threads/{}/delete", self.base_url(), thread_id);
+        self.client.post(&url).send()?.error_for_status()?;
+        Ok(())
+    }
+
+    pub fn set_thread_ignored(&self, thread_id: &str, ignored: bool) -> Result<()> {
+        let url = format!("{}/threads/{}/ignore", self.base_url(), thread_id);
+        let payload = serde_json::json!({ "ignored": ignored });
+        self.client.post(&url).json(&payload).send()?.error_for_status()?;
+        Ok(())
+    }
+
+    pub fn unfollow_peer(&self, peer_id: &str) -> Result<()> {
+        let url = format!("{}/peers/{}/unfollow", self.base_url(), peer_id);
+        self.client.post(&url).send()?.error_for_status()?;
+        Ok(())
+    }
+
     fn url(&self, path: &str) -> Result<Url> {
         let mut url = Url::parse(&self.base_url).context("invalid base URL")?;
         url.set_path(path.trim_start_matches('/'));

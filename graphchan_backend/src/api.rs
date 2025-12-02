@@ -1,5 +1,6 @@
 use crate::config::GraphchanConfig;
 use crate::database::Database;
+use crate::database::repositories::{ThreadRepository, PeerRepository};
 use crate::files::{FileService, FileView, SaveFileInput};
 use crate::identity::decode_friendcode;
 use crate::identity::IdentitySummary;
@@ -102,12 +103,15 @@ pub async fn serve_http(
         .route("/threads", get(list_threads).post(create_thread))
         .route("/threads/:id", get(get_thread))
         .route("/threads/:id/download", post(download_thread))
+        .route("/threads/:id/delete", post(delete_thread))
+        .route("/threads/:id/ignore", post(set_thread_ignored))
         .route("/threads/:id/posts", post(create_post))
         .route("/posts/:id/files", get(list_post_files))
         .route("/posts/:id/files", post(upload_post_file))
         .route("/files/:id", get(download_file))
         .route("/peers", get(list_peers))
         .route("/peers", post(add_peer))
+        .route("/peers/:id/unfollow", post(unfollow_peer))
         .route("/peers/self", get(get_self_peer))
         .route("/identity/avatar", post(upload_avatar))
         .route("/identity/profile", post(update_profile_handler))
@@ -935,4 +939,42 @@ impl NetworkInfo {
             addresses,
         }
     }
+}
+
+// Thread management handlers
+
+async fn delete_thread(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.database.with_repositories(|repos| {
+        repos.threads().delete(&id)
+    })?;
+    Ok(StatusCode::OK)
+}
+
+#[derive(Debug, Deserialize)]
+struct SetIgnoredRequest {
+    ignored: bool,
+}
+
+async fn set_thread_ignored(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(payload): Json<SetIgnoredRequest>,
+) -> Result<StatusCode, ApiError> {
+    state.database.with_repositories(|repos| {
+        repos.threads().set_ignored(&id, payload.ignored)
+    })?;
+    Ok(StatusCode::OK)
+}
+
+async fn unfollow_peer(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.database.with_repositories(|repos| {
+        repos.peers().delete(&id)
+    })?;
+    Ok(StatusCode::OK)
 }

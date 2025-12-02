@@ -61,6 +61,13 @@ pub struct CreatePostInput {
     /// Optional timestamp for imported posts. If None, backend uses current time.
     #[serde(default)]
     pub created_at: Option<String>,
+    /// Whether to rebroadcast this thread to peers (Host mode)
+    #[serde(default = "default_rebroadcast")]
+    pub rebroadcast: bool,
+}
+
+fn default_rebroadcast() -> bool {
+    true // Default to Host mode
 }
 
 #[derive(Debug, Clone, Deserialize)]

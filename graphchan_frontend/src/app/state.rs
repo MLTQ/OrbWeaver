@@ -107,7 +107,8 @@ pub struct ThreadState {
     pub repulsion_force: f32,
     pub sim_paused: bool,
     pub draft_attachments: Vec<std::path::PathBuf>,
-    
+    pub is_hosting: bool, // True = Host (rebroadcast), False = Leech (don't rebroadcast)
+
     // Audio State
     #[serde(skip)]
     pub audio_stream: Option<rodio::OutputStream>,

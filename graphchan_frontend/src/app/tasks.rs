@@ -298,3 +298,33 @@ pub fn save_file_as(tx: Sender<AppMessage>, file_id: String, url: String, sugges
         }
     });
 }
+
+pub fn delete_thread(client: ApiClient, tx: Sender<AppMessage>, thread_id: String) {
+    thread::spawn(move || {
+        let result = client.delete_thread(&thread_id);
+        if result.is_ok() {
+            // Reload threads after successful deletion
+            let threads_result = client.list_threads();
+            if tx.send(AppMessage::ThreadsLoaded(threads_result)).is_err() {
+                error!("failed to send ThreadsLoaded message after delete");
+            }
+        } else if let Err(e) = result {
+            error!("Failed to delete thread: {}", e);
+        }
+    });
+}
+
+pub fn ignore_thread(client: ApiClient, tx: Sender<AppMessage>, thread_id: String, ignored: bool) {
+    thread::spawn(move || {
+        let result = client.set_thread_ignored(&thread_id, ignored);
+        if result.is_ok() {
+            // Reload threads after successful ignore
+            let threads_result = client.list_threads();
+            if tx.send(AppMessage::ThreadsLoaded(threads_result)).is_err() {
+                error!("failed to send ThreadsLoaded message after ignore");
+            }
+        } else if let Err(e) = result {
+            error!("Failed to ignore thread: {}", e);
+        }
+    });
+}

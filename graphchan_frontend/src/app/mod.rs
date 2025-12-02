@@ -307,6 +307,7 @@ impl GraphchanApp {
         payload.thread_id = thread_id.clone();
         payload.body = body;
         payload.parent_post_ids = thread_state.reply_to.clone();
+        payload.rebroadcast = thread_state.is_hosting; // Use the Host/Leech toggle state
         let attachments = thread_state.draft_attachments.clone();
         thread_state.new_post_sending = true;
         thread_state.new_post_error = None;
@@ -330,6 +331,14 @@ impl GraphchanApp {
 
     fn spawn_load_peers(&mut self) {
         tasks::load_peers(self.api.clone(), self.tx.clone());
+    }
+
+    fn spawn_delete_thread(&mut self, thread_id: String) {
+        tasks::delete_thread(self.api.clone(), self.tx.clone(), thread_id);
+    }
+
+    fn spawn_ignore_thread(&mut self, thread_id: String) {
+        tasks::ignore_thread(self.api.clone(), self.tx.clone(), thread_id, true);
     }
 
 

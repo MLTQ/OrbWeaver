@@ -60,6 +60,7 @@ impl GraphchanApp {
             graph_zoom: 1.0,
             time_bin_seconds: 60,
             repulsion_force: 500.0,
+            is_hosting: true, // Default to Host mode
             ..Default::default()
         });
         self.spawn_load_thread(&thread_id);
@@ -80,6 +81,30 @@ impl GraphchanApp {
             }
             ui.separator();
             ui.label(RichText::new(&state.summary.title).heading());
+
+            // Host/Leech toggle on the right
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let button_text = if state.is_hosting { "Host" } else { "Leech" };
+                let button_color = if state.is_hosting {
+                    Color32::from_rgb(100, 150, 100) // Subtle green for Host
+                } else {
+                    Color32::from_rgb(150, 80, 80) // Dull red for Leech
+                };
+
+                let button = egui::Button::new(RichText::new(button_text).color(button_color))
+                    .frame(true);
+
+                if ui.add(button).clicked() {
+                    state.is_hosting = !state.is_hosting;
+                }
+
+                // Tooltip explanation
+                if state.is_hosting {
+                    ui.label(RichText::new("Broadcasting thread to peers").small().color(Color32::GRAY));
+                } else {
+                    ui.label(RichText::new("Not broadcasting (lurking)").small().color(Color32::GRAY));
+                }
+            });
         });
 
         if state.is_loading {

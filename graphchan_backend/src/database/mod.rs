@@ -42,6 +42,9 @@ pub(crate) const MIGRATIONS: &str = r#"
         created_at TEXT NOT NULL,
         pinned INTEGER DEFAULT 0,
         thread_hash TEXT,
+        rebroadcast INTEGER DEFAULT 1,
+        deleted INTEGER DEFAULT 0,
+        ignored INTEGER DEFAULT 0,
         FOREIGN KEY (creator_peer_id) REFERENCES peers(id)
     );
 

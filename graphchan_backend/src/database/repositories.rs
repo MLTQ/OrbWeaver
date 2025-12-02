@@ -7,6 +7,11 @@ pub trait ThreadRepository {
     fn upsert(&self, record: &ThreadRecord) -> Result<()>;
     fn get(&self, id: &str) -> Result<Option<ThreadRecord>>;
     fn list_recent(&self, limit: usize) -> Result<Vec<ThreadRecord>>;
+    fn set_rebroadcast(&self, thread_id: &str, rebroadcast: bool) -> Result<()>;
+    fn should_rebroadcast(&self, thread_id: &str) -> Result<bool>;
+    fn delete(&self, thread_id: &str) -> Result<()>;
+    fn set_ignored(&self, thread_id: &str, ignored: bool) -> Result<()>;
+    fn is_ignored(&self, thread_id: &str) -> Result<bool>;
 }
 
 pub trait PostRepository {
@@ -22,6 +27,7 @@ pub trait PeerRepository {
     fn upsert(&self, record: &PeerRecord) -> Result<()>;
     fn get(&self, id: &str) -> Result<Option<PeerRecord>>;
     fn list(&self) -> Result<Vec<PeerRecord>>;
+    fn delete(&self, id: &str) -> Result<()>;
 }
 
 pub trait FileRepository {
@@ -139,6 +145,7 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
             r#"
             SELECT id, title, creator_peer_id, created_at, pinned, thread_hash
             FROM threads
+            WHERE deleted = 0 AND ignored = 0
             ORDER BY datetime(created_at) DESC
             LIMIT ?1
             "#,
@@ -159,6 +166,68 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
             threads.push(row?);
         }
         Ok(threads)
+    }
+
+    fn set_rebroadcast(&self, thread_id: &str, rebroadcast: bool) -> Result<()> {
+        self.conn.execute(
+            r#"
+            UPDATE threads
+            SET rebroadcast = ?1
+            WHERE id = ?2
+            "#,
+            params![if rebroadcast { 1 } else { 0 }, thread_id],
+        )?;
+        Ok(())
+    }
+
+    fn should_rebroadcast(&self, thread_id: &str) -> Result<bool> {
+        let rebroadcast: i64 = self.conn.query_row(
+            r#"
+            SELECT rebroadcast
+            FROM threads
+            WHERE id = ?1
+            "#,
+            params![thread_id],
+            |row| row.get(0),
+        )?;
+        Ok(rebroadcast != 0)
+    }
+
+    fn delete(&self, thread_id: &str) -> Result<()> {
+        self.conn.execute(
+            r#"
+            UPDATE threads
+            SET deleted = 1
+            WHERE id = ?1
+            "#,
+            params![thread_id],
+        )?;
+        Ok(())
+    }
+
+    fn set_ignored(&self, thread_id: &str, ignored: bool) -> Result<()> {
+        self.conn.execute(
+            r#"
+            UPDATE threads
+            SET ignored = ?1
+            WHERE id = ?2
+            "#,
+            params![if ignored { 1 } else { 0 }, thread_id],
+        )?;
+        Ok(())
+    }
+
+    fn is_ignored(&self, thread_id: &str) -> Result<bool> {
+        let ignored: i64 = self.conn.query_row(
+            r#"
+            SELECT ignored
+            FROM threads
+            WHERE id = ?1
+            "#,
+            params![thread_id],
+            |row| row.get(0),
+        )?;
+        Ok(ignored != 0)
     }
 }
 
@@ -390,6 +459,14 @@ impl<'conn> PeerRepository for SqlitePeerRepository<'conn> {
             peers.push(row?);
         }
         Ok(peers)
+    }
+
+    fn delete(&self, id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM peers WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
     }
 }
 

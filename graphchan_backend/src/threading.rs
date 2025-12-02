@@ -174,6 +174,10 @@ impl ThreadService {
             if repos.threads().get(&post_record.thread_id)?.is_none() {
                 anyhow::bail!("thread not found");
             }
+
+            // Update thread's rebroadcast flag
+            repos.threads().set_rebroadcast(&post_record.thread_id, input.rebroadcast)?;
+
             let posts_repo = repos.posts();
             posts_repo.create(&post_record)?;
             posts_repo.add_relationships(&post_record.id, &input.parent_post_ids)?;
@@ -243,6 +247,13 @@ pub struct CreatePostInput {
     /// Optional timestamp for imported posts. If None, uses current time.
     #[serde(default)]
     pub created_at: Option<String>,
+    /// Whether to rebroadcast this thread to peers (Host mode)
+    #[serde(default = "default_rebroadcast")]
+    pub rebroadcast: bool,
+}
+
+fn default_rebroadcast() -> bool {
+    true // Default to Host mode
 }
 
 impl ThreadSummary {

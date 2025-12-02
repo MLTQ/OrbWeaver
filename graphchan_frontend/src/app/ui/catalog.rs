@@ -78,6 +78,8 @@ impl GraphchanApp {
         }
 
         let mut thread_to_open: Option<ThreadSummary> = None;
+        let mut thread_to_delete: Option<String> = None;
+        let mut thread_to_ignore: Option<String> = None;
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             for thread in threads {
@@ -98,6 +100,14 @@ impl GraphchanApp {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
+                                    // Delete button (for own threads)
+                                    if ui.small_button("🗑 Delete").clicked() {
+                                        thread_to_delete = Some(thread.id.clone());
+                                    }
+                                    // Ignore button (for others' threads)
+                                    if ui.small_button("🔇 Ignore").clicked() {
+                                        thread_to_ignore = Some(thread.id.clone());
+                                    }
                                     ui.label(format_timestamp(&thread.created_at));
                                     ui.label(RichText::new(&thread.id).monospace().size(10.0));
                                 },
@@ -113,6 +123,14 @@ impl GraphchanApp {
 
         if let Some(thread) = thread_to_open {
             self.open_thread(thread);
+        }
+
+        if let Some(thread_id) = thread_to_delete {
+            self.spawn_delete_thread(thread_id);
+        }
+
+        if let Some(thread_id) = thread_to_ignore {
+            self.spawn_ignore_thread(thread_id);
         }
     }
 }
