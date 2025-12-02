@@ -10,3 +10,4 @@ pub mod import;
 pub mod node;
 pub mod sugiyama;
 pub mod input;
+pub mod settings;

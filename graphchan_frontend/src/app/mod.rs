@@ -729,21 +729,8 @@ impl eframe::App for GraphchanApp {
 
         egui::TopBottomPanel::top("top_controls").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label("API Base URL");
-                ui.text_edit_singleline(&mut self.base_url_input);
-                if ui.button("Apply").clicked() {
-                    match self.api.set_base_url(self.base_url_input.clone()) {
-                        Ok(()) => {
-                            self.info_banner = Some("API URL updated".into());
-                            self.spawn_load_threads();
-                        }
-                        Err(err) => {
-                            self.info_banner = Some(format!("Failed to update URL: {err}"));
-                        }
-                    }
-                }
-                if ui.button("Refresh").clicked() {
-                    self.spawn_load_threads();
+                if ui.button("Catalog").clicked() {
+                    self.view = ViewState::Catalog;
                 }
                 if ui.button("New Thread").clicked() {
                     self.show_create_thread = true;
@@ -751,15 +738,21 @@ impl eframe::App for GraphchanApp {
                 if ui.button("Import").clicked() {
                     self.view = ViewState::Import;
                 }
-                if ui.button("Catalog").clicked() {
-                    self.view = ViewState::Catalog;
-                }
                 if ui.button("Friends").clicked() {
                     self.view = ViewState::Friends;
                 }
                 if ui.selectable_label(self.show_identity, "Identity").clicked() {
                     self.show_identity = !self.show_identity;
                 }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("⚙ Settings").clicked() {
+                        self.view = ViewState::Settings;
+                    }
+                    if ui.button("🔄 Refresh").clicked() {
+                        self.spawn_load_threads();
+                    }
+                });
             });
 
             if let Some(message) = self.info_banner.clone() {
@@ -789,6 +782,7 @@ impl eframe::App for GraphchanApp {
             ViewState::Friends => "friends",
             ViewState::FriendCatalog(_) => "friend_catalog",
             ViewState::Import => "import",
+            ViewState::Settings => "settings",
         };
 
         if view_type == "catalog" {
@@ -856,6 +850,10 @@ impl eframe::App for GraphchanApp {
                 self.view = ViewState::Catalog;
                 self.spawn_load_threads();
             }
+        } else if view_type == "settings" {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                self.render_settings(ui);
+            });
         }
 
 

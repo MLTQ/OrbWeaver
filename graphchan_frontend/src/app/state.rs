@@ -30,6 +30,7 @@ pub enum ViewState {
     Friends,
     FriendCatalog(PeerView),
     Import,
+    Settings,
 }
 
 #[derive(Default)]
