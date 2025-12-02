@@ -142,8 +142,8 @@ pub fn render_node(
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(RichText::new("↪ Replies:").size(11.0 * zoom).color(Color32::GRAY));
                                 for (i, child_id) in children.iter().enumerate() {
-                                    let is_focused = selected && state.focused_link_index == Some(i);
-                                    render_post_link(ui, state, child_id, zoom, viewport, is_focused);
+                                    let is_reply_cursor = selected && state.reply_cursor_index == i;
+                                    render_post_link(ui, state, child_id, zoom, viewport, false, is_reply_cursor, true);
                                 }
                             });
                             ui.add_space(4.0 * zoom);
@@ -156,8 +156,9 @@ pub fn render_node(
                                 ui.add_space(4.0 * zoom);
                                 ui.horizontal_wrapped(|ui| {
                                     ui.label(RichText::new("↩ Replying to:").size(11.0 * zoom).color(Color32::GRAY));
-                                    for parent_id in &layout.post.parent_post_ids {
-                                        render_post_link(ui, state, parent_id, zoom, viewport, false);
+                                    for (i, parent_id) in layout.post.parent_post_ids.iter().enumerate() {
+                                        let is_parent_cursor = selected && state.parent_cursor_index == i;
+                                        render_post_link(ui, state, parent_id, zoom, viewport, is_parent_cursor, false, false);
                                     }
                                 });
                             }
@@ -223,10 +224,28 @@ fn render_node_header(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Thr
     });
 }
 
-fn render_post_link(ui: &mut egui::Ui, state: &mut ThreadState, target_id: &str, zoom: f32, viewport: egui::Rect, is_focused: bool) {
+fn render_post_link(
+    ui: &mut egui::Ui,
+    state: &mut ThreadState,
+    target_id: &str,
+    zoom: f32,
+    viewport: egui::Rect,
+    is_parent_cursor: bool,
+    is_reply_cursor: bool,
+    is_reply_link: bool,
+) {
     let short_id = if target_id.len() > 8 { &target_id[..8] } else { target_id };
     let text = RichText::new(format!(">>{}", short_id)).size(11.0 * zoom);
-    let text = if is_focused { text.background_color(Color32::from_rgba_premultiplied(100, 100, 150, 100)) } else { text };
+
+    // Blue background for parent cursor, red for reply cursor
+    let text = if is_parent_cursor {
+        text.background_color(Color32::from_rgb(60, 100, 200)) // Blue
+    } else if is_reply_cursor {
+        text.background_color(Color32::from_rgb(200, 60, 60)) // Red
+    } else {
+        text
+    };
+
     let link = ui.link(text);
     
     if link.clicked() {

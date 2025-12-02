@@ -83,7 +83,9 @@ pub struct ThreadState {
     #[serde(skip)]
     pub secondary_selected_post: Option<String>,
     #[serde(skip)]
-    pub focused_link_index: Option<usize>,
+    pub parent_cursor_index: usize, // Index into parent_post_ids of selected post
+    #[serde(skip)]
+    pub reply_cursor_index: usize,  // Index into replies of selected post
     pub selected_post: Option<String>,
     pub graph_zoom: f32,
     pub graph_offset: egui::Vec2,
