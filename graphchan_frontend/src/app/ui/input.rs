@@ -102,15 +102,32 @@ pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
                 }
             }
 
-            // SPACE: Promote secondary selection to primary
+            // SPACE: Smart selection based on last navigation mode
             if consume_key(ctx, egui::Key::Space, egui::Modifiers::NONE) {
-                if let Some(secondary) = &state.secondary_selected_post {
-                    let new_primary = secondary.clone();
-                    state.selected_post = Some(new_primary.clone());
+                use crate::app::state::NavigationMode;
+
+                let target_post = match state.last_navigation_mode {
+                    NavigationMode::Parent => {
+                        // User was navigating parents - select parent at cursor
+                        parent_ids.get(state.parent_cursor_index).cloned()
+                    },
+                    NavigationMode::Reply => {
+                        // User was navigating replies - select reply at cursor
+                        reply_ids.get(state.reply_cursor_index).cloned()
+                    },
+                    NavigationMode::None => {
+                        // No navigation yet - default to first reply
+                        reply_ids.first().cloned()
+                    }
+                };
+
+                if let Some(target_id) = target_post {
+                    state.selected_post = Some(target_id.clone());
                     state.secondary_selected_post = None;
                     state.parent_cursor_index = 0;
                     state.reply_cursor_index = 0;
-                    center_on = Some(new_primary);
+                    state.last_navigation_mode = NavigationMode::None; // Reset after selection
+                    center_on = Some(target_id);
                     handled = true;
                 }
             }
@@ -127,6 +144,7 @@ pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
                     } else {
                         state.parent_cursor_index -= 1;
                     }
+                    state.last_navigation_mode = crate::app::state::NavigationMode::Parent;
                     handled = true;
                 }
             }
@@ -135,6 +153,7 @@ pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
             if consume_key(ctx, egui::Key::P, egui::Modifiers::NONE) {
                 if has_parents {
                     state.parent_cursor_index = (state.parent_cursor_index + 1) % parent_ids.len();
+                    state.last_navigation_mode = crate::app::state::NavigationMode::Parent;
                     handled = true;
                 }
             }
@@ -143,6 +162,7 @@ pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
             if consume_key(ctx, egui::Key::I, egui::Modifiers::NONE) {
                 if let Some(parent_id) = parent_ids.get(state.parent_cursor_index).cloned() {
                     state.secondary_selected_post = Some(parent_id.clone());
+                    state.last_navigation_mode = crate::app::state::NavigationMode::Parent;
                     center_viewport_on_post(state, &parent_id, ctx);
                     handled = true;
                 }
@@ -160,6 +180,7 @@ pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
                     } else {
                         state.reply_cursor_index -= 1;
                     }
+                    state.last_navigation_mode = crate::app::state::NavigationMode::Reply;
                     handled = true;
                 }
             }
@@ -168,6 +189,7 @@ pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
             if consume_key(ctx, egui::Key::Semicolon, egui::Modifiers::NONE) {
                 if has_replies {
                     state.reply_cursor_index = (state.reply_cursor_index + 1) % reply_ids.len();
+                    state.last_navigation_mode = crate::app::state::NavigationMode::Reply;
                     handled = true;
                 }
             }
@@ -176,6 +198,7 @@ pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
             if consume_key(ctx, egui::Key::K, egui::Modifiers::NONE) {
                 if let Some(reply_id) = reply_ids.get(state.reply_cursor_index).cloned() {
                     state.secondary_selected_post = Some(reply_id.clone());
+                    state.last_navigation_mode = crate::app::state::NavigationMode::Reply;
                     center_viewport_on_post(state, &reply_id, ctx);
                     handled = true;
                 }
@@ -185,6 +208,7 @@ pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
             if consume_key(ctx, egui::Key::O, egui::Modifiers::NONE) {
                 if has_parents {
                     state.parent_cursor_index = (state.parent_cursor_index + 1) % parent_ids.len();
+                    state.last_navigation_mode = crate::app::state::NavigationMode::Parent;
                     handled = true;
                 }
             }
@@ -193,6 +217,7 @@ pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
             if consume_key(ctx, egui::Key::L, egui::Modifiers::NONE) {
                 if has_replies {
                     state.reply_cursor_index = (state.reply_cursor_index + 1) % reply_ids.len();
+                    state.last_navigation_mode = crate::app::state::NavigationMode::Reply;
                     handled = true;
                 }
             }

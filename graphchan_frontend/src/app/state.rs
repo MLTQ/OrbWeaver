@@ -61,6 +61,14 @@ pub struct AvatarCropperState {
     pub source_path: String,
 }
 
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+pub enum NavigationMode {
+    #[default]
+    None,      // No navigation used yet - default to reply
+    Parent,    // User navigated parents (u, o, p, i)
+    Reply,     // User navigated replies (j, l, ;, k)
+}
+
 #[derive(Default, Serialize, Deserialize)]
 pub struct ThreadState {
     pub summary: ThreadSummary,
@@ -86,6 +94,8 @@ pub struct ThreadState {
     pub parent_cursor_index: usize, // Index into parent_post_ids of selected post
     #[serde(skip)]
     pub reply_cursor_index: usize,  // Index into replies of selected post
+    #[serde(skip)]
+    pub last_navigation_mode: NavigationMode, // Track which navigation was last used
     pub selected_post: Option<String>,
     pub graph_zoom: f32,
     pub graph_offset: egui::Vec2,
