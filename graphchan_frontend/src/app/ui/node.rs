@@ -58,12 +58,6 @@ pub fn render_node(
     let rect_node = layout.rect;
     let selected = state.selected_post.as_ref() == Some(&layout.post.id);
     let reply_target = state.reply_to.iter().any(|id| id == &layout.post.id);
-    
-    let naturally_hovered = ui.ctx().pointer_hover_pos()
-        .map(|pos| rect_node.contains(pos))
-        .unwrap_or(false);
-    let locked_hover = state.locked_hover_post.as_ref() == Some(&layout.post.id);
-    let hovered = naturally_hovered || locked_hover;
 
     let fill_color = if reply_target {
         Color32::from_rgb(40, 52, 85)
@@ -71,8 +65,6 @@ pub fn render_node(
         Color32::from_rgb(58, 48, 24)
     } else if is_secondary {
         Color32::from_rgb(35, 35, 45) // Slightly lighter background for secondary
-    } else if hovered {
-        Color32::from_rgb(42, 45, 60)
     } else {
         Color32::from_rgb(30, 30, 38)
     };
@@ -85,7 +77,6 @@ pub fn render_node(
         Color32::from_rgb(80, 90, 130) // Default
     };
 
-    let stroke_width = (if hovered || selected || is_neighbor || is_secondary { 2.5 } else { 1.5 }) * zoom;
     let stroke_color = if reply_target {
         Color32::from_rgb(255, 190, 92)
     } else if selected {
@@ -94,59 +85,71 @@ pub fn render_node(
         Color32::WHITE // White outline for secondary
     } else if is_neighbor {
         Color32::from_rgb(200, 180, 80) // Slightly dimmer yellow for neighbors
-    } else if hovered {
-        Color32::from_rgb(120, 140, 200)
     } else {
         reaction_color // Use reaction-based color
     };
 
-    let rounding = egui::Rounding::same(10.0 * zoom);
-    ui.painter().rect(
-        rect_node,
-        rounding,
-        fill_color,
-        egui::Stroke::new(stroke_width, stroke_color),
-    );
+    // Render content at the position, letting it size naturally
+    let mut content_rect = rect_node;
 
-    let response = ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect_node), |ui| {
-        // Scale style (fonts and spacing)
-        let mut style = (**ui.style()).clone();
-        for (_text_style, font_id) in style.text_styles.iter_mut() {
-            font_id.size *= zoom;
-        }
-        style.spacing.item_spacing *= zoom;
-        style.spacing.window_margin.left *= zoom;
-        style.spacing.window_margin.right *= zoom;
-        style.spacing.window_margin.top *= zoom;
-        style.spacing.window_margin.bottom *= zoom;
-        style.spacing.button_padding *= zoom;
-        style.spacing.indent *= zoom;
-        style.spacing.interact_size *= zoom;
-        style.spacing.icon_width *= zoom;
-        style.spacing.icon_width_inner *= zoom;
-        style.spacing.icon_spacing *= zoom;
-        ui.set_style(style);
-
-        // Capture clicks on the node background/body
-        let interact = ui.interact(rect_node, ui.id().with("node_interact"), egui::Sense::click());
-        if interact.clicked() {
-            state.selected_post = Some(layout.post.id.clone());
-            if state.locked_hover_post.as_ref() == Some(&layout.post.id) {
-                state.locked_hover_post = None;
-            } else {
-                state.locked_hover_post = Some(layout.post.id.clone());
+    let response = ui.allocate_new_ui(
+        egui::UiBuilder::new()
+            .max_rect(egui::Rect::from_min_size(
+                rect_node.min,
+                egui::vec2(rect_node.width(), f32::INFINITY)
+            )),
+        |ui| {
+            // Scale style (fonts and spacing)
+            let mut style = (**ui.style()).clone();
+            for (_text_style, font_id) in style.text_styles.iter_mut() {
+                font_id.size *= zoom;
             }
-        }
+            style.spacing.item_spacing *= zoom;
+            style.spacing.window_margin.left *= zoom;
+            style.spacing.window_margin.right *= zoom;
+            style.spacing.window_margin.top *= zoom;
+            style.spacing.window_margin.bottom *= zoom;
+            style.spacing.button_padding *= zoom;
+            style.spacing.indent *= zoom;
+            style.spacing.interact_size *= zoom;
+            style.spacing.icon_width *= zoom;
+            style.spacing.icon_width_inner *= zoom;
+            style.spacing.icon_spacing *= zoom;
+            ui.set_style(style);
 
-        egui::Frame::none()
-            .inner_margin(Margin::same(10.0 * zoom))
-            .show(ui, |ui| {
-                ui.set_clip_rect(rect_node.intersect(viewport));
-                
-                ui.vertical(|ui| {
-                    ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                        if !children.is_empty() {
+            let inner_response = egui::Frame::none()
+                .inner_margin(Margin::same(10.0 * zoom))
+                .fill(fill_color)
+                .stroke(egui::Stroke::new((if selected || is_neighbor || is_secondary { 2.5 } else { 1.5 }) * zoom, stroke_color))
+                .rounding(egui::Rounding::same(10.0 * zoom))
+                .show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        // Top-down layout for everything
+                        render_node_header(app, ui, state, &layout.post, zoom);
+
+                        if !layout.post.parent_post_ids.is_empty() {
                             ui.add_space(4.0 * zoom);
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(RichText::new("↩ Replying to:").size(11.0 * zoom).color(Color32::GRAY));
+                                for (i, parent_id) in layout.post.parent_post_ids.iter().enumerate() {
+                                    let is_parent_cursor = selected && state.parent_cursor_index == i;
+                                    render_post_link(ui, state, parent_id, zoom, viewport, is_parent_cursor, false, false);
+                                }
+                            });
+                        }
+
+                        ui.add_space(6.0 * zoom);
+
+                        render_post_body(ui, &layout.post.body);
+
+                        render_node_attachments(app, ui, layout.attachments.as_ref(), api_base, zoom);
+
+                        ui.add_space(6.0 * zoom);
+                        render_node_actions(app, ui, state, &layout.post, zoom);
+
+                        // Replies section at the bottom with proper spacing
+                        if !children.is_empty() {
+                            ui.add_space(6.0 * zoom);
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(RichText::new("↪ Replies:").size(11.0 * zoom).color(Color32::GRAY));
                                 for (i, child_id) in children.iter().enumerate() {
@@ -154,38 +157,25 @@ pub fn render_node(
                                     render_post_link(ui, state, child_id, zoom, viewport, false, is_reply_cursor, true);
                                 }
                             });
-                            ui.add_space(4.0 * zoom);
                         }
-
-                        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                            render_node_header(app, ui, state, &layout.post, zoom);
-
-                            if !layout.post.parent_post_ids.is_empty() {
-                                ui.add_space(4.0 * zoom);
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.label(RichText::new("↩ Replying to:").size(11.0 * zoom).color(Color32::GRAY));
-                                    for (i, parent_id) in layout.post.parent_post_ids.iter().enumerate() {
-                                        let is_parent_cursor = selected && state.parent_cursor_index == i;
-                                        render_post_link(ui, state, parent_id, zoom, viewport, is_parent_cursor, false, false);
-                                    }
-                                });
-                            }
-
-                            ui.add_space(6.0 * zoom);
-                            
-                            render_post_body(ui, &layout.post.body);
-
-                            render_node_attachments(app, ui, layout.attachments.as_ref(), api_base, zoom);
-
-                            ui.add_space(6.0 * zoom);
-                            render_node_actions(app, ui, state, &layout.post, zoom);
-                        });
                     });
                 });
-            })
-    }).response;
 
-    if response.clicked() {
+            content_rect = inner_response.response.rect;
+            inner_response.response
+        }
+    ).response;
+
+    // Update actual content rect for interaction
+    let naturally_hovered = ui.ctx().pointer_hover_pos()
+        .map(|pos| content_rect.contains(pos))
+        .unwrap_or(false);
+    let locked_hover = state.locked_hover_post.as_ref() == Some(&layout.post.id);
+    let _hovered = naturally_hovered || locked_hover;
+
+    // Add background interaction layer for clicking on empty areas
+    let bg_response = ui.interact(content_rect, ui.id().with(&layout.post.id).with("node_bg"), egui::Sense::click());
+    if bg_response.clicked() {
         state.selected_post = Some(layout.post.id.clone());
         if state.locked_hover_post.as_ref() == Some(&layout.post.id) {
             state.locked_hover_post = None;
@@ -193,7 +183,7 @@ pub fn render_node(
             state.locked_hover_post = Some(layout.post.id.clone());
         }
     }
-    
+
     response
 }
 
@@ -500,8 +490,30 @@ pub fn estimate_node_height(ui: &egui::Ui, post: &PostView, has_preview: bool, c
     let mut height = (50.0 * zoom) + text_height;
     height += 25.0 * zoom; // Header
     if !post.parent_post_ids.is_empty() { height += 20.0 * zoom; }
-    if has_preview { height += 126.0 * zoom; }
-    
+
+    // More accurate attachment height calculation
+    if has_preview {
+        // Count actual image files
+        let image_count = post.files.iter()
+            .filter(|f| f.present && f.mime.as_deref().map(|m| m.starts_with("image/")).unwrap_or(false))
+            .count();
+
+        if image_count > 0 {
+            height += 6.0 * zoom; // Initial spacing before attachments
+            // Each image: max_height (120) + spacing (4)
+            height += (image_count as f32) * (120.0 + 4.0) * zoom;
+        }
+    }
+
+    // Account for non-image attachments (audio, video, files)
+    let other_attachments = post.files.iter()
+        .filter(|f| !f.mime.as_deref().map(|m| m.starts_with("image/")).unwrap_or(false))
+        .count();
+    if other_attachments > 0 {
+        height += 6.0 * zoom; // Spacing before attachments if not already added
+        height += (other_attachments as f32) * (25.0 * zoom); // Approx height per non-image attachment
+    }
+
     if children_count > 0 {
         // Estimate height of replies section
         // Approx 80px per child link (10 chars + spacing)
@@ -512,8 +524,8 @@ pub fn estimate_node_height(ui: &egui::Ui, post: &PostView, has_preview: bool, c
         let line_height = 15.0 * zoom;
         height += lines * line_height + (10.0 * zoom); // + padding
     }
-    
-    height + (20.0 * zoom) // Footer/Padding
+
+    height + (40.0 * zoom) // Footer/Padding (increased from 20 to 40 for reactions and actions)
 }
 
 pub fn estimate_node_size(ui: &egui::Ui, post: &PostView, has_preview: bool, children_count: usize) -> egui::Vec2 {

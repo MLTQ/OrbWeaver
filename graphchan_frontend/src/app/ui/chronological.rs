@@ -55,36 +55,94 @@ pub fn build_chronological_layout(posts: &[PostView], bin_seconds: i64) -> HashM
         bins.len(),
         posts.len()
     );
-    
+
     // Log bin details
     for (idx, bin) in bins.iter().enumerate() {
         log::debug!("  Bin {}: {} posts at {}", idx, bin.post_ids.len(), bin.timestamp);
     }
 
+    // Create a lookup for posts by ID
+    let post_lookup: HashMap<String, &PostView> = posts.iter()
+        .map(|p| (p.id.clone(), p))
+        .collect();
+
     // Assign positions - posts stack horizontally within each bin
     let mut nodes = HashMap::new();
     let mut current_y = TOP_MARGIN;
-    
+    let min_bin_height = 300.0; // Minimum height for a bin
+
     for (_bin_idx, bin) in bins.iter().enumerate() {
-        // Stack posts horizontally (left to right) within this time bin
+        let mut max_estimated_height: f32 = min_bin_height;
+
+        // First pass: estimate heights and find the tallest post in this bin
+        for post_id in &bin.post_ids {
+            if let Some(post) = post_lookup.get(post_id) {
+                // Count children for this post
+                let children_count = posts.iter()
+                    .filter(|p| p.parent_post_ids.contains(post_id))
+                    .count();
+
+                // Check if this post has image attachments
+                let has_preview = post.files.iter()
+                    .any(|f| f.present && f.mime.as_deref().map(|m| m.starts_with("image/")).unwrap_or(false));
+
+                // Estimate the height this post will need
+                // Using a simple estimation based on body length, attachments, and children
+                let mut estimated_height = 150.0; // Base height for header + actions
+
+                // Add height for body text (rough estimate: 20px per 100 chars)
+                estimated_height += (post.body.len() as f32 / 100.0) * 20.0;
+
+                // Add height for parent links
+                if !post.parent_post_ids.is_empty() {
+                    estimated_height += 25.0;
+                }
+
+                // Add height for images
+                if has_preview {
+                    let image_count = post.files.iter()
+                        .filter(|f| f.present && f.mime.as_deref().map(|m| m.starts_with("image/")).unwrap_or(false))
+                        .count();
+                    estimated_height += (image_count as f32) * 130.0; // ~120px per image + spacing
+                }
+
+                // Add height for other attachments
+                let other_attachments = post.files.iter()
+                    .filter(|f| !f.mime.as_deref().map(|m| m.starts_with("image/")).unwrap_or(false))
+                    .count();
+                estimated_height += (other_attachments as f32) * 30.0;
+
+                // Add height for reply links
+                if children_count > 0 {
+                    // Estimate wrapping based on card width
+                    let links_per_line = (CARD_WIDTH / 80.0).max(1.0_f32);
+                    let lines = (children_count as f32 / links_per_line).ceil();
+                    estimated_height += lines * 20.0 + 20.0;
+                }
+
+                max_estimated_height = max_estimated_height.max(estimated_height);
+            }
+        }
+
+        // Second pass: position all posts in this bin at the same Y
         for (idx, post_id) in bin.post_ids.iter().enumerate() {
             let x = LEFT_MARGIN + (idx as f32) * (CARD_WIDTH + CARD_HORIZONTAL_SPACING);
             let y = current_y;
-            
+
             nodes.insert(
                 post_id.clone(),
                 GraphNode {
                     pos: egui::pos2(x, y),
                     vel: egui::vec2(0.0, 0.0),
-                    size: egui::vec2(CARD_WIDTH, 250.0),
+                    size: egui::vec2(CARD_WIDTH, max_estimated_height),
                     dragging: false,
                     pinned: false,
                 },
             );
         }
-        
-        // Move to next bin (generous vertical spacing for next time bin)
-        current_y += 300.0 + MIN_BIN_VERTICAL_SPACING;
+
+        // Move to next bin using the tallest post's height + spacing
+        current_y += max_estimated_height + MIN_BIN_VERTICAL_SPACING;
     }
 
     nodes

@@ -50,12 +50,13 @@ fn step_graph_layout(
     edges: &[(String, String)],
     _scale: f32,
     thread_id: &str,
-    repulsion_force: f32
+    repulsion_force: f32,
+    desired_edge_length: f32,
 ) {
     let repulsion = repulsion_force / 1000.0; // Scale down for physics
     let attraction = 0.015; // Increased from 0.002 to keep things tighter
     let damping = 0.80; // Increased damping for stability
-    let desired = 1.5; // Reduced desired distance
+    let desired = desired_edge_length;
     
     // 1. Apply Forces
     for i in 0..ids.len() {
@@ -204,7 +205,7 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
 
     if sim_active && !state.graph_dragging && !state.sim_paused {
         for _ in 0..2 { // Reduced from 10 to 2 for performance
-            step_graph_layout(&mut state.graph_nodes, &ids, &edges, scale, &thread_id, state.repulsion_force);
+            step_graph_layout(&mut state.graph_nodes, &ids, &edges, scale, &thread_id, state.repulsion_force, state.desired_edge_length);
         }
         ui.ctx().request_repaint(); // Keep animating
     } else if state.graph_dragging {
@@ -213,6 +214,7 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
 
     let available = ui.available_size();
     let (rect, response) = ui.allocate_at_least(available, egui::Sense::click_and_drag());
+
     let canvas = ui.painter().with_clip_rect(rect);
     canvas.rect_filled(rect, 0.0, Color32::from_rgb(12, 13, 20));
     
@@ -416,6 +418,11 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
             
             ui.label("Repulsion:");
             ui.add(egui::Slider::new(&mut state.repulsion_force, 0.0..=2000.0).text(""));
+
+            ui.separator();
+
+            ui.label("Edge Length:");
+            ui.add(egui::Slider::new(&mut state.desired_edge_length, 0.5..=20.0).text(""));
 
             ui.separator();
             

@@ -60,6 +60,7 @@ impl GraphchanApp {
             graph_zoom: 1.0,
             time_bin_seconds: 60,
             repulsion_force: 500.0,
+            desired_edge_length: 1.5,
             is_hosting: true, // Default to Host mode
             ..Default::default()
         });
@@ -186,7 +187,7 @@ impl GraphchanApp {
         }
 
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut state.display_mode, ThreadDisplayMode::List, "Posts");
+            ui.selectable_value(&mut state.display_mode, ThreadDisplayMode::List, "List");
             ui.selectable_value(&mut state.display_mode, ThreadDisplayMode::Graph, "Graph");
             ui.selectable_value(
                 &mut state.display_mode,
@@ -213,6 +214,7 @@ impl GraphchanApp {
                     state.graph_dragging = false;
                 }
             }
+
             graph::render_graph(self, ui, state);
         } else if state.display_mode == ThreadDisplayMode::Chronological {
             if state.graph_nodes.is_empty() {
@@ -238,10 +240,21 @@ impl GraphchanApp {
             // Calculate max reaction score for normalization
             let max_score = super::reaction_colors::calculate_max_score_from_responses(&state.reactions);
 
+            // Build children map for reply links
+            let mut children_map: HashMap<String, Vec<String>> = HashMap::new();
+            for post in &posts_clone {
+                for parent_id in &post.parent_post_ids {
+                    children_map.entry(parent_id.clone()).or_default().push(post.id.clone());
+                }
+            }
+
             egui::ScrollArea::vertical()
                 .id_source("thread-posts")
                 .show(ui, |ui| {
                     for post in &posts_clone {
+                        // Check if we need to scroll to this post
+                        let should_scroll = state.scroll_to_post.as_ref() == Some(&post.id);
+
                         // Calculate reaction-based border color
                         let border_color = if let Some(reactions_response) = state.reactions.get(&post.id) {
                             super::reaction_colors::calculate_post_color(&reactions_response.counts, max_score)
@@ -249,11 +262,16 @@ impl GraphchanApp {
                             Color32::from_rgb(80, 90, 130) // Default
                         };
 
-                        egui::Frame::group(ui.style())
+                        let frame = egui::Frame::group(ui.style())
                             .fill(ui.visuals().extreme_bg_color)
                             .inner_margin(egui::vec2(12.0, 8.0))
-                            .stroke(egui::Stroke::new(2.0, border_color))
-                            .show(ui, |ui| {
+                            .stroke(egui::Stroke::new(2.0, border_color));
+
+                        let response = frame.show(ui, |ui| {
+                            // Scroll to this post if needed
+                            if should_scroll {
+                                ui.scroll_to_cursor(Some(egui::Align::Center));
+                            }
                                 ui.horizontal(|ui| {
                                     if ui.button(RichText::new(&post.id).monospace()).clicked() {
                                         Self::quote_post(state, &post.id);
@@ -298,17 +316,26 @@ impl GraphchanApp {
                                     });
                                 }
                                 ui.separator();
+
+                                // Parent links (top of post)
+                                if !post.parent_post_ids.is_empty() {
+                                    ui.add_space(4.0);
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(RichText::new("↩ Replying to:").color(Color32::GRAY));
+                                        for parent_id in &post.parent_post_ids {
+                                            let short_id = if parent_id.len() > 8 { &parent_id[..8] } else { parent_id };
+                                            if ui.link(RichText::new(format!(">>{}", short_id)).size(11.0)).clicked() {
+                                                state.selected_post = Some(parent_id.clone());
+                                                state.scroll_to_post = Some(parent_id.clone());
+                                            }
+                                        }
+                                    });
+                                }
+
+                                ui.add_space(6.0);
                                 if let Some(thread_id) = render_post_body(ui, &post.body) {
                                     action = ThreadAction::OpenThread(thread_id);
                                 }
-                                if !post.parent_post_ids.is_empty() {
-                                    ui.add_space(4.0);
-                                    ui.label(format!(
-                                        "Replies to: {}",
-                                        post.parent_post_ids.join(", ")
-                                    ));
-                                }
-                                ui.add_space(6.0);
 
                                 if !post.files.is_empty() {
                                     ui.label(RichText::new("Attachments").strong());
@@ -317,12 +344,32 @@ impl GraphchanApp {
                                     }
                                 }
 
+                                // Reply links (bottom of post)
+                                if let Some(children) = children_map.get(&post.id) {
+                                    if !children.is_empty() {
+                                        ui.add_space(4.0);
+                                        ui.horizontal_wrapped(|ui| {
+                                            ui.label(RichText::new("↪ Replies:").color(Color32::GRAY));
+                                            for child_id in children {
+                                                let short_id = if child_id.len() > 8 { &child_id[..8] } else { child_id };
+                                                if ui.link(RichText::new(format!(">>{}", short_id)).size(11.0)).clicked() {
+                                                    state.selected_post = Some(child_id.clone());
+                                                    state.scroll_to_post = Some(child_id.clone());
+                                                }
+                                            }
+                                        });
+                                    }
+                                }
+
                                 // Reactions UI
                                 ui.add_space(6.0);
                                 self.render_reactions(ui, state, &post.id);
                             });
 
-
+                        // Clear scroll flag after frame is shown
+                        if should_scroll {
+                            state.scroll_to_post = None;
+                        }
                     }
                 });
         }

@@ -101,6 +101,8 @@ pub struct ThreadState {
     #[serde(skip)]
     pub last_navigation_mode: NavigationMode, // Track which navigation was last used
     pub selected_post: Option<String>,
+    #[serde(skip)]
+    pub scroll_to_post: Option<String>, // Post ID to scroll to in List view
     pub graph_zoom: f32,
     pub graph_offset: egui::Vec2,
     pub graph_dragging: bool,
@@ -108,6 +110,7 @@ pub struct ThreadState {
     pub time_bin_seconds: i64, // Time bin size in seconds for chronological view
     pub locked_hover_post: Option<String>, // "Locked" hover for tracing conversations
     pub repulsion_force: f32,
+    pub desired_edge_length: f32,
     pub sim_paused: bool,
     pub draft_attachments: Vec<std::path::PathBuf>,
     pub is_hosting: bool, // True = Host (rebroadcast), False = Leech (don't rebroadcast)
