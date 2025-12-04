@@ -72,7 +72,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libsdl2-dev libasound2-dev libudev-dev clang cmake yasm nasm libx11-dev libxext-dev libxrender-dev libxinerama-dev libxi-dev libxrandr-dev libxcursor-dev libgl1-mesa-dev libglu1-mesa-dev libwayland-dev libxkbcommon-dev
 
+      - name: Check pkg-config
+        run: |
+          pkg-config --list-all | grep alsa || echo "ALSA not found in pkg-config"
+          ls -l /usr/lib/x86_64-linux-gnu/pkgconfig/alsa.pc || echo "alsa.pc not found in expected location"
+
       - name: Build
+        env:
+          PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:/usr/lib/pkgconfig
         run: cargo build --release --bin graphchan_desktop
 
       - name: Upload Artifact
