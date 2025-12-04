@@ -90,6 +90,19 @@ pub(crate) const MIGRATIONS: &str = r#"
         FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS reactions (
+        post_id TEXT NOT NULL,
+        reactor_peer_id TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        signature TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (post_id, reactor_peer_id, emoji),
+        FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE,
+        FOREIGN KEY (reactor_peer_id) REFERENCES peers(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_reactions_post ON reactions(post_id);
+
     -- Migrations for new fields
     -- ALTER TABLE peers ADD COLUMN avatar_file_id TEXT;
     -- ALTER TABLE peers ADD COLUMN username TEXT;

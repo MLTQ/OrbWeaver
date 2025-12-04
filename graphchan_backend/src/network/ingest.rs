@@ -1,10 +1,10 @@
 use crate::config::GraphchanPaths;
-use crate::database::models::{FileRecord, PostRecord, ThreadRecord};
-use crate::database::repositories::{FileRepository, PeerRepository, PostRepository, ThreadRepository};
+use crate::database::models::{FileRecord, PostRecord, ReactionRecord, ThreadRecord};
+use crate::database::repositories::{FileRepository, PeerRepository, PostRepository, ReactionRepository, ThreadRepository};
 use crate::database::Database;
 use crate::network::events::{
     EventPayload, FileAnnouncement, FileChunk, FileRequest, InboundGossip, NetworkEvent,
-    ProfileUpdate,
+    ProfileUpdate, ReactionUpdate,
 };
 use crate::peers::PeerService;
 use crate::threading::{PostView, ThreadDetails};
@@ -105,6 +105,7 @@ fn handle_message(
             apply_file_chunk(database, paths, chunk)
         }
         EventPayload::ProfileUpdate(update) => apply_profile_update(database, update),
+        EventPayload::ReactionUpdate(reaction) => apply_reaction_update(database, reaction),
     }
 }
 
@@ -112,6 +113,38 @@ fn apply_profile_update(database: &Database, update: ProfileUpdate) -> Result<()
     let service = PeerService::new(database.clone());
     service.update_profile(&update.peer_id, update.avatar_file_id, update.username, update.bio)?;
     Ok(())
+}
+
+fn apply_reaction_update(database: &Database, reaction: ReactionUpdate) -> Result<()> {
+    database.with_repositories(|repos| {
+        if reaction.is_removal {
+            // Remove reaction
+            tracing::info!(
+                post_id = %reaction.post_id,
+                reactor = %reaction.reactor_peer_id,
+                emoji = %reaction.emoji,
+                "👎 removing reaction via gossip"
+            );
+            repos.reactions().remove(&reaction.post_id, &reaction.reactor_peer_id, &reaction.emoji)?;
+        } else {
+            // Add reaction
+            tracing::info!(
+                post_id = %reaction.post_id,
+                reactor = %reaction.reactor_peer_id,
+                emoji = %reaction.emoji,
+                "👍 adding reaction via gossip"
+            );
+            let record = ReactionRecord {
+                post_id: reaction.post_id,
+                reactor_peer_id: reaction.reactor_peer_id,
+                emoji: reaction.emoji,
+                signature: reaction.signature,
+                created_at: reaction.created_at,
+            };
+            repos.reactions().add(&record)?;
+        }
+        Ok(())
+    })
 }
 
 /// Stores just the announcement metadata - the full thread will be downloaded on-demand

@@ -11,3 +11,4 @@ pub mod node;
 pub mod sugiyama;
 pub mod input;
 pub mod settings;
+pub mod reaction_colors;

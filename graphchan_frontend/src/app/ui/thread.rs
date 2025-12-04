@@ -66,6 +66,65 @@ impl GraphchanApp {
         self.spawn_load_thread(&thread_id);
     }
 
+    fn render_reactions(&mut self, ui: &mut egui::Ui, state: &mut ThreadState, post_id: &str) {
+        // Load reactions if not already loaded/loading
+        if !state.reactions.contains_key(post_id) && !state.reactions_loading.contains(post_id) {
+            state.reactions_loading.insert(post_id.to_string());
+            self.spawn_load_reactions(post_id);
+        }
+
+        ui.horizontal_wrapped(|ui| {
+            // Show existing reactions
+            if let Some(reactions_response) = state.reactions.get(post_id) {
+                for (emoji, count) in &reactions_response.counts {
+                    let button_text = format!("{} {}", emoji, count);
+                    if ui.small_button(button_text).clicked() {
+                        // Toggle reaction: remove if user already reacted, otherwise add
+                        let self_peer_id = self.identity_state.local_peer.as_ref().map(|p| p.id.clone());
+                        if let Some(self_id) = self_peer_id {
+                            let has_reacted = reactions_response.reactions.iter()
+                                .any(|r| r.emoji == *emoji && r.reactor_peer_id == self_id);
+
+                            if has_reacted {
+                                self.spawn_remove_reaction(post_id, emoji);
+                            } else {
+                                self.spawn_add_reaction(post_id, emoji);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // "+" button to open emoji picker
+            let picker_open = state.emoji_picker_open.as_ref() == Some(&post_id.to_string());
+            if ui.small_button(if picker_open { "−" } else { "+" }).clicked() {
+                if picker_open {
+                    state.emoji_picker_open = None;
+                } else {
+                    state.emoji_picker_open = Some(post_id.to_string());
+                }
+            }
+
+            // Show emoji picker if open for this post
+            if picker_open {
+                ui.separator();
+                ui.label("Quick reactions:");
+                let quick_emojis = ["👍", "❤️", "😂", "🎉", "🤔", "👀", "🔥", "✨"];
+                for emoji in quick_emojis {
+                    if ui.small_button(emoji).clicked() {
+                        self.spawn_add_reaction(post_id, emoji);
+                        state.emoji_picker_open = None;
+                    }
+                }
+            }
+
+            // Show loading indicator
+            if state.reactions_loading.contains(post_id) {
+                ui.spinner();
+            }
+        });
+    }
+
     pub(crate) fn render_thread(
         &mut self,
         ui: &mut egui::Ui,
@@ -176,13 +235,24 @@ impl GraphchanApp {
             let attachments_errors = &state.attachments_errors;
             let api_base = self.api.base_url().to_string();
 
+            // Calculate max reaction score for normalization
+            let max_score = super::reaction_colors::calculate_max_score_from_responses(&state.reactions);
+
             egui::ScrollArea::vertical()
                 .id_source("thread-posts")
                 .show(ui, |ui| {
                     for post in &posts_clone {
+                        // Calculate reaction-based border color
+                        let border_color = if let Some(reactions_response) = state.reactions.get(&post.id) {
+                            super::reaction_colors::calculate_post_color(&reactions_response.counts, max_score)
+                        } else {
+                            Color32::from_rgb(80, 90, 130) // Default
+                        };
+
                         egui::Frame::group(ui.style())
                             .fill(ui.visuals().extreme_bg_color)
                             .inner_margin(egui::vec2(12.0, 8.0))
+                            .stroke(egui::Stroke::new(2.0, border_color))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     if ui.button(RichText::new(&post.id).monospace()).clicked() {
@@ -246,6 +316,10 @@ impl GraphchanApp {
                                         self.render_file_attachment(ui, file, &api_base);
                                     }
                                 }
+
+                                // Reactions UI
+                                ui.add_space(6.0);
+                                self.render_reactions(ui, state, &post.id);
                             });
 
 

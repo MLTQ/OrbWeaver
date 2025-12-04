@@ -6,8 +6,14 @@ use super::super::{format_timestamp, GraphchanApp};
 
 impl GraphchanApp {
     pub(crate) fn render_catalog(&mut self, ui: &mut egui::Ui) {
+        // Toggle to show/hide ignored threads
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut self.show_ignored_threads, "Show ignored threads");
+        });
+        ui.add_space(10.0);
+
         let local_peer_id = self.identity_state.local_peer.as_ref().map(|p| p.id.clone());
-        
+
         let (my_threads, network_threads): (Vec<ThreadSummary>, Vec<ThreadSummary>) = self.threads.iter().cloned().partition(|t| {
             if let Some(local_id) = &local_peer_id {
                 t.creator_peer_id.as_ref() == Some(local_id)
@@ -20,17 +26,23 @@ impl GraphchanApp {
     }
 
     pub(crate) fn render_friend_catalog(&mut self, ui: &mut egui::Ui, peer: &crate::models::PeerView) {
-        let peer_name = peer.username.as_deref().unwrap_or("Friend");
-        
+        let peer_name = peer.username.as_deref().unwrap_or("Peer");
+
+        // Toggle to show/hide ignored threads
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut self.show_ignored_threads, "Show ignored threads");
+        });
+        ui.add_space(10.0);
+
         let (authored_threads, other_threads): (Vec<ThreadSummary>, Vec<ThreadSummary>) = self.threads.iter().cloned().partition(|t| {
             t.creator_peer_id.as_ref() == Some(&peer.id)
         });
 
         self.render_catalog_split(
-            ui, 
-            &format!("Authored by {}", peer_name), 
-            &authored_threads, 
-            "Network Threads", 
+            ui,
+            &format!("Authored by {}", peer_name),
+            &authored_threads,
+            "Network Threads",
             &other_threads
         );
     }

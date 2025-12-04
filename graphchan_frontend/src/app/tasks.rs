@@ -328,3 +328,57 @@ pub fn ignore_thread(client: ApiClient, tx: Sender<AppMessage>, thread_id: Strin
         }
     });
 }
+
+pub fn load_reactions(client: ApiClient, tx: Sender<AppMessage>, post_id: String) {
+    thread::spawn(move || {
+        let result = client.get_reactions(&post_id);
+        let message = AppMessage::ReactionsLoaded {
+            post_id,
+            result,
+        };
+        if tx.send(message).is_err() {
+            error!("failed to send ReactionsLoaded message");
+        }
+    });
+}
+
+pub fn add_reaction(client: ApiClient, tx: Sender<AppMessage>, post_id: String, emoji: String) {
+    thread::spawn(move || {
+        let result = client.add_reaction(&post_id, &emoji);
+        let message = AppMessage::ReactionAdded {
+            post_id,
+            result,
+        };
+        if tx.send(message).is_err() {
+            error!("failed to send ReactionAdded message");
+        }
+    });
+}
+
+pub fn remove_reaction(client: ApiClient, tx: Sender<AppMessage>, post_id: String, emoji: String) {
+    thread::spawn(move || {
+        let result = client.remove_reaction(&post_id, &emoji);
+        let message = AppMessage::ReactionRemoved {
+            post_id,
+            result,
+        };
+        if tx.send(message).is_err() {
+            error!("failed to send ReactionRemoved message");
+        }
+    });
+}
+
+pub fn unfollow_peer(client: ApiClient, tx: Sender<AppMessage>, peer_id: String) {
+    thread::spawn(move || {
+        let result = client.unfollow_peer(&peer_id);
+        if result.is_ok() {
+            // Reload peers after successful unfollow
+            let peers_result = client.list_peers();
+            if tx.send(AppMessage::PeersLoaded(peers_result)).is_err() {
+                error!("failed to send PeersLoaded message after unfollow");
+            }
+        } else if let Err(e) = result {
+            error!("Failed to unfollow peer: {}", e);
+        }
+    });
+}

@@ -109,6 +109,7 @@ pub struct GraphchanApp {
     ctx: Option<egui::Context>,
     audio_device: Option<AudioDevice>,
     video_volume: f32, // 0.0 to 1.0
+    show_ignored_threads: bool, // Toggle to show/hide ignored threads in peer catalog
 }
 
 #[derive(Debug, Clone)]
@@ -260,6 +261,7 @@ impl GraphchanApp {
             ctx: None,
             audio_device,
             video_volume: 0.8, // Default to 80% volume
+            show_ignored_threads: false, // Default to hiding ignored threads
         };
         app.spawn_load_threads();
         app.spawn_load_peers();
@@ -341,7 +343,17 @@ impl GraphchanApp {
         tasks::ignore_thread(self.api.clone(), self.tx.clone(), thread_id, true);
     }
 
+    fn spawn_load_reactions(&mut self, post_id: &str) {
+        tasks::load_reactions(self.api.clone(), self.tx.clone(), post_id.to_string());
+    }
 
+    fn spawn_add_reaction(&mut self, post_id: &str, emoji: &str) {
+        tasks::add_reaction(self.api.clone(), self.tx.clone(), post_id.to_string(), emoji.to_string());
+    }
+
+    fn spawn_remove_reaction(&mut self, post_id: &str, emoji: &str) {
+        tasks::remove_reaction(self.api.clone(), self.tx.clone(), post_id.to_string(), emoji.to_string());
+    }
 
     fn process_messages(&mut self) {
         messages::process_messages(self);
@@ -747,8 +759,8 @@ impl eframe::App for GraphchanApp {
                 if ui.button("Import").clicked() {
                     self.view = ViewState::Import;
                 }
-                if ui.button("Friends").clicked() {
-                    self.view = ViewState::Friends;
+                if ui.button("Following").clicked() {
+                    self.view = ViewState::Following;
                 }
                 if ui.selectable_label(self.show_identity, "Identity").clicked() {
                     self.show_identity = !self.show_identity;
@@ -788,8 +800,8 @@ impl eframe::App for GraphchanApp {
         let view_type = match &self.view {
             ViewState::Catalog => "catalog",
             ViewState::Thread(_) => "thread",
-            ViewState::Friends => "friends",
-            ViewState::FriendCatalog(_) => "friend_catalog",
+            ViewState::Following => "following",
+            ViewState::FollowingCatalog(_) => "following_catalog",
             ViewState::Import => "import",
             ViewState::Settings => "settings",
         };
@@ -802,20 +814,20 @@ impl eframe::App for GraphchanApp {
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui::import::render_import_page(self, ui);
             });
-        } else if view_type == "friends" {
+        } else if view_type == "following" {
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui::friends::render_friends_page(self, ui);
             });
-        } else if view_type == "friend_catalog" {
+        } else if view_type == "following_catalog" {
             // Extract peer temporarily
-            let peer = if let ViewState::FriendCatalog(p) = &self.view {
+            let peer = if let ViewState::FollowingCatalog(p) = &self.view {
                 p.clone()
             } else {
                 unreachable!()
             };
             
             egui::CentralPanel::default().show(ctx, |ui| {
-                if ui.button("← Back to Friends").clicked() {
+                if ui.button("← Back to Following").clicked() {
                     go_back = true;
                 }
                 ui.add_space(10.0);
@@ -823,7 +835,7 @@ impl eframe::App for GraphchanApp {
             });
 
             if go_back {
-                self.view = ViewState::Friends;
+                self.view = ViewState::Following;
             }
         } else if view_type == "thread" {
             // Extract thread state temporarily

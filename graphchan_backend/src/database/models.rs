@@ -52,3 +52,12 @@ pub struct FileRecord {
     pub checksum: Option<String>,
     pub ticket: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReactionRecord {
+    pub post_id: String,
+    pub reactor_peer_id: String,
+    pub emoji: String,
+    pub signature: String,
+    pub created_at: String,
+}

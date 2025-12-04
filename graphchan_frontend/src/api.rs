@@ -7,7 +7,7 @@ use reqwest::Url;
 
 use crate::models::{
     AddPeerRequest, CreatePostInput, CreateThreadInput, FileResponse, PeerView, PostResponse,
-    PostView, ThreadDetails, ThreadSummary,
+    PostView, ReactionsResponse, ThreadDetails, ThreadSummary,
 };
 
 static SHARED_CLIENT: OnceLock<Client> = OnceLock::new();
@@ -215,6 +215,26 @@ impl ApiClient {
         let url = format!("{}/peers/{}/unfollow", self.base_url(), peer_id);
         self.client.post(&url).send()?.error_for_status()?;
         Ok(())
+    }
+
+    pub fn add_reaction(&self, post_id: &str, emoji: &str) -> Result<()> {
+        let url = format!("{}/posts/{}/react", self.base_url(), post_id);
+        let payload = serde_json::json!({ "emoji": emoji });
+        self.client.post(&url).json(&payload).send()?.error_for_status()?;
+        Ok(())
+    }
+
+    pub fn remove_reaction(&self, post_id: &str, emoji: &str) -> Result<()> {
+        let url = format!("{}/posts/{}/unreact", self.base_url(), post_id);
+        let payload = serde_json::json!({ "emoji": emoji });
+        self.client.post(&url).json(&payload).send()?.error_for_status()?;
+        Ok(())
+    }
+
+    pub fn get_reactions(&self, post_id: &str) -> Result<ReactionsResponse> {
+        let url = format!("{}/posts/{}/reactions", self.base_url(), post_id);
+        let response = self.client.get(&url).send()?.error_for_status()?;
+        Ok(response.json()?)
     }
 
     fn url(&self, path: &str) -> Result<Url> {

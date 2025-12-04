@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ThreadSummary {
@@ -118,4 +119,17 @@ pub struct UpdateProfileRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddPeerRequest {
     pub friendcode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReactionsResponse {
+    pub reactions: Vec<ReactionView>,
+    pub counts: HashMap<String, usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReactionView {
+    pub emoji: String,
+    pub reactor_peer_id: String,
+    pub created_at: String,
 }

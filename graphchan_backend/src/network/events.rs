@@ -31,6 +31,7 @@ pub enum EventPayload {
     FileRequest(FileRequest),
     FileChunk(FileChunk),
     ProfileUpdate(ProfileUpdate),
+    ReactionUpdate(ReactionUpdate),
 }
 
 /// Announces that a thread exists and where to download it.
@@ -104,6 +105,17 @@ pub struct ProfileUpdate {
     pub ticket: Option<BlobTicket>,
     pub username: Option<String>,
     pub bio: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReactionUpdate {
+    pub post_id: String,
+    pub thread_id: String,
+    pub reactor_peer_id: String,
+    pub emoji: String,
+    pub signature: String,
+    pub created_at: String,
+    pub is_removal: bool, // true if this is a reaction removal
 }
 
 #[derive(Debug)]
@@ -187,6 +199,7 @@ async fn broadcast_to_topic(
         EventPayload::FileRequest(_) => "FileRequest",
         EventPayload::FileChunk(_) => "FileChunk",
         EventPayload::ProfileUpdate(_) => "ProfileUpdate",
+        EventPayload::ReactionUpdate(_) => "ReactionUpdate",
     };
 
     // Get mutable access to broadcast
@@ -233,6 +246,7 @@ pub async fn run_gossip_receiver_loop(
                             EventPayload::FileRequest(_) => "FileRequest",
                             EventPayload::FileChunk(_) => "FileChunk",
                             EventPayload::ProfileUpdate(_) => "ProfileUpdate",
+                            EventPayload::ReactionUpdate(_) => "ReactionUpdate",
                         };
                         tracing::info!(
                             from_peer = %message.delivered_from.fmt_short(),
@@ -303,6 +317,7 @@ fn topic_for_payload(payload: &EventPayload) -> String {
         // Thread-specific messages - only sent to peers subscribed to that thread
         EventPayload::PostUpdate(post) => format!("thread-{}", post.thread_id),
         EventPayload::FileAvailable(file) => format!("thread-{}", file.thread_id),
+        EventPayload::ReactionUpdate(reaction) => format!("thread-{}", reaction.thread_id),
 
         // These shouldn't be used with the current blob-based file transfer
         EventPayload::FileRequest(_) => "deprecated-file-request".to_string(),

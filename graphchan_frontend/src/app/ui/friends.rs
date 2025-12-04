@@ -2,22 +2,24 @@ use eframe::egui;
 use crate::app::GraphchanApp;
 
 pub fn render_friends_page(app: &mut GraphchanApp, ui: &mut egui::Ui) {
-    ui.heading("Friends Management");
+    ui.heading("Following Management");
     ui.add_space(20.0);
 
-    // Add Friend Section
+    let mut peer_to_unfollow: Option<String> = None;
+
+    // Add Peer Section
     egui::Frame::group(ui.style())
         .fill(ui.visuals().extreme_bg_color)
         .inner_margin(12.0)
         .show(ui, |ui| {
-            ui.heading("Add Friend");
+            ui.heading("Follow a Peer");
             ui.add_space(10.0);
-            
-            ui.label("Enter a friendcode to connect with a peer:");
+
+            ui.label("Enter a friendcode to follow a peer:");
             ui.horizontal(|ui| {
                 ui.text_edit_singleline(&mut app.identity_state.friendcode_input);
-                
-                if ui.button("Add Friend").clicked() 
+
+                if ui.button("Follow").clicked() 
                     && !app.identity_state.adding_peer 
                     && !app.identity_state.friendcode_input.trim().is_empty() 
                 {
@@ -44,12 +46,12 @@ pub fn render_friends_page(app: &mut GraphchanApp, ui: &mut egui::Ui) {
 
     ui.add_space(20.0);
 
-    // Friends List Section
-    ui.heading("My Friends");
+    // Following List Section
+    ui.heading("Following");
     ui.add_space(10.0);
 
     if app.peers.is_empty() {
-        ui.label("You haven't added any friends yet.");
+        ui.label("You aren't following anyone yet.");
     } else {
         egui::Grid::new("friends_grid")
             .num_columns(3)
@@ -63,23 +65,33 @@ pub fn render_friends_page(app: &mut GraphchanApp, ui: &mut egui::Ui) {
 
                 for peer in app.peers.values() {
                     let username = peer.username.as_deref().unwrap_or("Unknown");
-                    
+
                     // Username (clickable)
                     if ui.link(username).clicked() {
-                        app.view = crate::app::state::ViewState::FriendCatalog(peer.clone());
+                        app.view = crate::app::state::ViewState::FollowingCatalog(peer.clone());
                     }
 
                     // Friendcode
                     ui.label(peer.friendcode.as_deref().unwrap_or("Unknown"));
 
                     // Actions
-                    if ui.button("View Profile").clicked() {
-                        app.show_identity = true;
-                        app.identity_state.inspected_peer = Some(peer.clone());
-                    }
-                    
+                    ui.horizontal(|ui| {
+                        if ui.button("View Profile").clicked() {
+                            app.show_identity = true;
+                            app.identity_state.inspected_peer = Some(peer.clone());
+                        }
+                        if ui.button("Unfollow").clicked() {
+                            peer_to_unfollow = Some(peer.id.clone());
+                        }
+                    });
+
                     ui.end_row();
                 }
             });
+    }
+
+    // Handle unfollow action
+    if let Some(peer_id) = peer_to_unfollow {
+        crate::app::tasks::unfollow_peer(app.api.clone(), app.tx.clone(), peer_id);
     }
 }

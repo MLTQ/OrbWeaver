@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use eframe::egui;
 use log::error;
 
-use crate::models::{FileResponse, PeerView, PostView, ThreadDetails, ThreadSummary};
+use crate::models::{FileResponse, PeerView, PostView, ReactionsResponse, ThreadDetails, ThreadSummary};
 
 use super::state::{
     CreateThreadState, GraphNode, LoadedImage, ThreadDisplayMode, ThreadState, ViewState,
@@ -56,6 +56,18 @@ pub enum AppMessage {
     FileSaved {
         file_id: String,
         result: Result<(), String>,
+    },
+    ReactionsLoaded {
+        post_id: String,
+        result: Result<ReactionsResponse, anyhow::Error>,
+    },
+    ReactionAdded {
+        post_id: String,
+        result: Result<(), anyhow::Error>,
+    },
+    ReactionRemoved {
+        post_id: String,
+        result: Result<(), anyhow::Error>,
     },
 }
 
@@ -486,12 +498,47 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
             AppMessage::ImportError(err) => {
                 app.importer.importing = false;
                 app.reddit_importer.importing = false;
-                
+
                 if !app.importer.url.is_empty() {
                      app.importer.error = Some(err.clone());
                 }
                 if !app.reddit_importer.url.is_empty() {
                      app.reddit_importer.error = Some(err);
+                }
+            }
+            AppMessage::ReactionsLoaded { post_id, result } => {
+                if let ViewState::Thread(state) = &mut app.view {
+                    state.reactions_loading.remove(&post_id);
+                    match result {
+                        Ok(reactions) => {
+                            state.reactions.insert(post_id, reactions);
+                        }
+                        Err(err) => {
+                            error!("Failed to load reactions for post {}: {}", post_id, err);
+                        }
+                    }
+                }
+            }
+            AppMessage::ReactionAdded { post_id, result } => {
+                match result {
+                    Ok(()) => {
+                        // Reload reactions for this post
+                        app.spawn_load_reactions(&post_id);
+                    }
+                    Err(err) => {
+                        error!("Failed to add reaction to post {}: {}", post_id, err);
+                    }
+                }
+            }
+            AppMessage::ReactionRemoved { post_id, result } => {
+                match result {
+                    Ok(()) => {
+                        // Reload reactions for this post
+                        app.spawn_load_reactions(&post_id);
+                    }
+                    Err(err) => {
+                        error!("Failed to remove reaction from post {}: {}", post_id, err);
+                    }
                 }
             }
         }

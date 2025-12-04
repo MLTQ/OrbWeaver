@@ -77,6 +77,14 @@ pub fn render_node(
         Color32::from_rgb(30, 30, 38)
     };
 
+    // Calculate reaction-based color
+    let reaction_color = if let Some(reactions_response) = state.reactions.get(&layout.post.id) {
+        let max_score = super::reaction_colors::calculate_max_score_from_responses(&state.reactions);
+        super::reaction_colors::calculate_post_color(&reactions_response.counts, max_score)
+    } else {
+        Color32::from_rgb(80, 90, 130) // Default
+    };
+
     let stroke_width = (if hovered || selected || is_neighbor || is_secondary { 2.5 } else { 1.5 }) * zoom;
     let stroke_color = if reply_target {
         Color32::from_rgb(255, 190, 92)
@@ -89,7 +97,7 @@ pub fn render_node(
     } else if hovered {
         Color32::from_rgb(120, 140, 200)
     } else {
-        Color32::from_rgb(80, 90, 130)
+        reaction_color // Use reaction-based color
     };
 
     let rounding = egui::Rounding::same(10.0 * zoom);
@@ -166,11 +174,11 @@ pub fn render_node(
                             ui.add_space(6.0 * zoom);
                             
                             render_post_body(ui, &layout.post.body);
-                            
+
                             render_node_attachments(app, ui, layout.attachments.as_ref(), api_base, zoom);
 
                             ui.add_space(6.0 * zoom);
-                            render_node_actions(ui, state, &layout.post, zoom);
+                            render_node_actions(app, ui, state, &layout.post, zoom);
                         });
                     });
                 });
@@ -281,13 +289,78 @@ fn render_post_link(
     });
 }
 
-fn render_node_actions(ui: &mut egui::Ui, state: &mut ThreadState, post: &PostView, zoom: f32) {
+fn render_node_actions(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut ThreadState, post: &PostView, zoom: f32) {
     ui.horizontal(|ui| {
         if ui.button(RichText::new("↩ Reply").size(13.0 * zoom)).clicked() {
             GraphchanApp::set_reply_target(state, &post.id);
         }
         if ui.button(RichText::new("❝ Quote").size(13.0 * zoom)).clicked() {
             GraphchanApp::quote_post(state, &post.id);
+        }
+    });
+
+    // Reactions
+    ui.add_space(4.0 * zoom);
+    render_node_reactions(app, ui, state, &post.id, zoom);
+}
+
+fn render_node_reactions(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut ThreadState, post_id: &str, zoom: f32) {
+    // Load reactions if not already loaded/loading
+    if !state.reactions.contains_key(post_id) && !state.reactions_loading.contains(post_id) {
+        state.reactions_loading.insert(post_id.to_string());
+        app.spawn_load_reactions(post_id);
+    }
+
+    ui.horizontal_wrapped(|ui| {
+        // Show existing reactions
+        if let Some(reactions_response) = state.reactions.get(post_id) {
+            for (emoji, count) in &reactions_response.counts {
+                let button_text = format!("{} {}", emoji, count);
+                let button = ui.add(egui::Button::new(RichText::new(button_text).size(12.0 * zoom)));
+                if button.clicked() {
+                    // Toggle reaction: remove if user already reacted, otherwise add
+                    let self_peer_id = app.identity_state.local_peer.as_ref().map(|p| p.id.clone());
+                    if let Some(self_id) = self_peer_id {
+                        let has_reacted = reactions_response.reactions.iter()
+                            .any(|r| r.emoji == *emoji && r.reactor_peer_id == self_id);
+
+                        if has_reacted {
+                            app.spawn_remove_reaction(post_id, emoji);
+                        } else {
+                            app.spawn_add_reaction(post_id, emoji);
+                        }
+                    }
+                }
+            }
+        }
+
+        // "+" button to open emoji picker
+        let picker_open = state.emoji_picker_open.as_ref() == Some(&post_id.to_string());
+        let button = ui.add(egui::Button::new(RichText::new(if picker_open { "−" } else { "+" }).size(12.0 * zoom)));
+        if button.clicked() {
+            if picker_open {
+                state.emoji_picker_open = None;
+            } else {
+                state.emoji_picker_open = Some(post_id.to_string());
+            }
+        }
+
+        // Show emoji picker if open for this post
+        if picker_open {
+            ui.separator();
+            ui.label(RichText::new("Quick:").size(11.0 * zoom));
+            let quick_emojis = ["👍", "❤️", "😂", "🎉", "🤔", "👀", "🔥", "✨"];
+            for emoji in quick_emojis {
+                if ui.add(egui::Button::new(RichText::new(emoji).size(12.0 * zoom))).clicked() {
+                    app.spawn_add_reaction(post_id, emoji);
+                    state.emoji_picker_open = None;
+                }
+            }
+        }
+
+        // Show loading indicator
+        if state.reactions_loading.contains(post_id) {
+            ui.spinner();
         }
     });
 }

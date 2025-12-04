@@ -4,6 +4,7 @@ use graphchan_backend::cli;
 use graphchan_backend::config::GraphchanConfig;
 use graphchan_backend::node::GraphchanNode;
 use graphchan_backend::telemetry;
+use graphchan_backend::utils;
 
 #[derive(Parser)]
 #[command(author, version, about = "Graphchan backend daemon and CLI")]
@@ -22,6 +23,7 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    utils::print_banner();
     telemetry::init_tracing();
 
     let args = Args::parse();

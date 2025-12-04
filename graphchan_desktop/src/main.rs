@@ -3,10 +3,12 @@ use graphchan_backend::api;
 use graphchan_backend::config::GraphchanConfig;
 use graphchan_backend::node::GraphchanNode;
 use graphchan_backend::telemetry;
+use graphchan_backend::utils;
 use tokio::runtime::Runtime;
 use tracing::error;
 
 fn main() -> Result<()> {
+    utils::print_banner();
     telemetry::init_tracing();
 
     let runtime = Runtime::new()?;

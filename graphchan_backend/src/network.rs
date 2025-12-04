@@ -28,6 +28,7 @@ const GOSSIP_BUFFER: usize = 128;
 
 pub use events::FileAnnouncement;
 pub use events::ProfileUpdate;
+pub use events::ReactionUpdate;
 
 type TopicId = iroh_gossip::proto::TopicId;
 
@@ -265,6 +266,12 @@ impl NetworkHandle {
 
     pub async fn publish_profile_update(&self, update: ProfileUpdate) -> Result<()> {
         let event = NetworkEvent::Broadcast(EventPayload::ProfileUpdate(update));
+        self.publisher.send(event).await.ok();
+        Ok(())
+    }
+
+    pub async fn publish_reaction_update(&self, update: ReactionUpdate) -> Result<()> {
+        let event = NetworkEvent::Broadcast(EventPayload::ReactionUpdate(update));
         self.publisher.send(event).await.ok();
         Ok(())
     }

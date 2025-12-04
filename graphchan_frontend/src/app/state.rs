@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use eframe::egui;
 
-use crate::models::{FileResponse, PeerView, ThreadDetails, ThreadSummary};
+use crate::models::{FileResponse, PeerView, ReactionsResponse, ThreadDetails, ThreadSummary};
 
 #[derive(Default)]
 pub struct CreateThreadState {
@@ -27,8 +27,8 @@ pub struct ImporterState {
 pub enum ViewState {
     Catalog,
     Thread(ThreadState),
-    Friends,
-    FriendCatalog(PeerView),
+    Following,
+    FollowingCatalog(PeerView),
     Import,
     Settings,
 }
@@ -82,6 +82,9 @@ pub struct ThreadState {
     pub attachments: HashMap<String, Vec<FileResponse>>,
     pub attachments_loading: HashSet<String>,
     pub attachments_errors: HashMap<String, String>,
+    pub reactions: HashMap<String, ReactionsResponse>,
+    pub reactions_loading: HashSet<String>,
+    pub emoji_picker_open: Option<String>, // Post ID for which emoji picker is open
     pub display_mode: ThreadDisplayMode,
     pub last_layout_mode: Option<ThreadDisplayMode>,
     pub graph_nodes: HashMap<String, GraphNode>,
