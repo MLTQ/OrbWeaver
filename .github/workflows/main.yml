@@ -1,0 +1,82 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@v1
+        with:
+          version: "14.0"
+          directory: ${{ runner.temp }}/llvm
+
+      - name: Set LIBCLANG_PATH
+        run: echo "LIBCLANG_PATH=${{ runner.temp }}/llvm/lib" >> $env:GITHUB_ENV
+
+      - name: Install NASM
+        uses: ilammy/setup-nasm@v1
+
+      - name: Build
+        run: cargo build --release --bin graphchan_desktop
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: graphchan_desktop-windows
+          path: target/release/graphchan_desktop.exe
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Dependencies
+        run: brew install ffmpeg sdl2
+
+      - name: Build
+        run: cargo build --release --bin graphchan_desktop
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: graphchan_desktop-macos
+          path: target/release/graphchan_desktop
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libasound2-dev libudev-dev clang cmake yasm nasm libx11-dev libxext-dev libxrender-dev libxinerama-dev libxi-dev libxrandr-dev libxcursor-dev libgl1-mesa-dev libglu1-mesa-dev libwayland-dev libxkbcommon-dev
+
+      - name: Build
+        run: cargo build --release --bin graphchan_desktop
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: graphchan_desktop-linux
+          path: target/release/graphchan_desktop
