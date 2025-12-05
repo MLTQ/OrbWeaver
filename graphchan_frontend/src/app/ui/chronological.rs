@@ -402,20 +402,33 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
         }
     }
 
-    // Build lookup for edge routing
-    let rect_lookup: HashMap<String, egui::Rect> = layouts
-        .iter()
-        .map(|layout| (layout.post.id.clone(), layout.rect))
-        .collect();
+    // Build lookup for edge routing - include ALL posts (even off-screen)
+    // Use the node.size that was calculated during layout building
+    let mut rect_lookup: HashMap<String, egui::Rect> = HashMap::new();
+    if let Some(_details) = &state.details {
+        for (post_id, node) in &state.chronological_nodes {
+            // Calculate screen position
+            let top_left = egui::pos2(
+                rect.left() + state.graph_offset.x + node.pos.x * state.graph_zoom,
+                rect.top() + state.graph_offset.y + node.pos.y * state.graph_zoom,
+            );
+
+            // Use the size that was calculated in build_chronological_layout
+            let scaled_size = node.size * state.graph_zoom;
+
+            let actual_rect = egui::Rect::from_min_size(top_left, scaled_size);
+            rect_lookup.insert(post_id.clone(), actual_rect);
+        }
+    }
 
     // Detect hovered post
     let hovered_post = ui.ctx().pointer_hover_pos().and_then(|pos| {
-        layouts.iter()
-            .find(|layout| layout.rect.contains(pos))
-            .map(|layout| layout.post.id.clone())
+        rect_lookup.iter()
+            .find(|(_, r)| r.contains(pos))
+            .map(|(id, _)| id.clone())
     });
 
-    // Draw orthogonal edges (clipped to viewport)
+    // Draw orthogonal edges (clipped to viewport) - drawn BEFORE nodes
     let edge_painter = ui.painter().with_clip_rect(rect);
     draw_orthogonal_edges(&edge_painter, &layouts, &rect_lookup, state, hovered_post.as_ref());
 
