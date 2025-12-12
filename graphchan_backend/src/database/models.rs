@@ -9,6 +9,7 @@ pub struct PeerRecord {
     pub friendcode: Option<String>,
     pub iroh_peer_id: Option<String>,
     pub gpg_fingerprint: Option<String>,
+    pub x25519_pubkey: Option<String>,
     pub last_seen: Option<String>,
     pub avatar_file_id: Option<String>,
     pub trust_state: String,
@@ -22,6 +23,8 @@ pub struct ThreadRecord {
     pub created_at: String,
     pub pinned: bool,
     pub thread_hash: Option<String>,
+    pub visibility: String,  // 'social' or 'private'
+    pub topic_secret: Option<String>,  // base64-encoded 32-byte secret for private threads
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,4 +63,69 @@ pub struct ReactionRecord {
     pub emoji: String,
     pub signature: String,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadMemberKey {
+    pub thread_id: String,
+    pub member_peer_id: String,
+    pub wrapped_key_ciphertext: Vec<u8>,
+    pub wrapped_key_nonce: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectMessageRecord {
+    pub id: String,
+    pub conversation_id: String,
+    pub from_peer_id: String,
+    pub to_peer_id: String,
+    pub encrypted_body: Vec<u8>,
+    pub nonce: Vec<u8>,
+    pub created_at: String,
+    pub read_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationRecord {
+    pub id: String,
+    pub peer_id: String,
+    pub last_message_at: Option<String>,
+    pub last_message_preview: Option<String>,
+    pub unread_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockedPeerRecord {
+    pub peer_id: String,
+    pub reason: Option<String>,
+    pub blocked_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlocklistSubscriptionRecord {
+    pub id: String,
+    pub maintainer_peer_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub auto_apply: bool,
+    pub last_synced_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlocklistEntryRecord {
+    pub blocklist_id: String,
+    pub peer_id: String,
+    pub reason: Option<String>,
+    pub added_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RedactedPostRecord {
+    pub id: String,
+    pub thread_id: String,
+    pub author_peer_id: String,
+    pub parent_post_ids: String, // JSON array
+    pub known_child_ids: Option<String>, // JSON array
+    pub redaction_reason: String,
+    pub discovered_at: String,
 }

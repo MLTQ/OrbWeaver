@@ -184,6 +184,8 @@ fn apply_thread_announcement(
                         created_at: announcement.created_at.clone(),
                         pinned: existing_thread.pinned,
                         thread_hash: Some(announcement.thread_hash.clone()),
+                        visibility: existing_thread.visibility.clone(),
+                        topic_secret: existing_thread.topic_secret.clone(),
                     };
                     repos.threads().upsert(&updated_thread)?;
 
@@ -216,6 +218,7 @@ fn apply_thread_announcement(
                 friendcode: None,
                 iroh_peer_id: None,
                 gpg_fingerprint: Some(announcement.creator_peer_id.clone()),
+                x25519_pubkey: None,
                 last_seen: None,
                 avatar_file_id: None,
                 trust_state: "unknown".into(),
@@ -231,6 +234,8 @@ fn apply_thread_announcement(
             created_at: announcement.created_at.clone(),
             pinned: false,
             thread_hash: Some(announcement.thread_hash.clone()),
+            visibility: "social".to_string(),
+            topic_secret: None,
         };
         repos.threads().upsert(&thread_record)?;
 
@@ -288,6 +293,7 @@ fn apply_thread_snapshot(
                 friendcode: peer.friendcode.clone(),
                 iroh_peer_id: peer.iroh_peer_id.clone(),
                 gpg_fingerprint: peer.gpg_fingerprint.clone(),
+                x25519_pubkey: peer.x25519_pubkey.clone(),
                 last_seen: peer.last_seen.clone(),
                 avatar_file_id: peer.avatar_file_id.clone(),
                 trust_state: peer.trust_state.clone(),
@@ -318,6 +324,7 @@ fn apply_thread_snapshot(
                     friendcode: None,
                     iroh_peer_id: None,
                     gpg_fingerprint: Some(author_id.clone()),
+                    x25519_pubkey: None,
                     last_seen: None,
                     avatar_file_id: None,
                     trust_state: "unknown".into(),
@@ -337,6 +344,8 @@ fn apply_thread_snapshot(
             created_at: thread.created_at.clone(),
             pinned: thread.pinned,
             thread_hash: Some(thread_hash),
+            visibility: thread.visibility.clone(),
+            topic_secret: thread.topic_secret.clone(),
         };
         repos.threads().upsert(&thread_record)?;
 
@@ -446,6 +455,7 @@ fn apply_post_update(database: &Database, post: PostView) -> Result<()> {
                     friendcode: None,
                     iroh_peer_id: None,
                     gpg_fingerprint: Some(author_id.clone()),
+                    x25519_pubkey: None,
                     last_seen: None,
                     avatar_file_id: None,
                     trust_state: "unknown".into(),
@@ -909,6 +919,8 @@ mod tests {
                     created_at: now_utc_iso(),
                     pinned: false,
                     thread_hash: None,
+                    visibility: "social".to_string(),
+                    topic_secret: None,
                 })?;
                 repos.posts().create(&PostRecord {
                     id: "post-1".into(),

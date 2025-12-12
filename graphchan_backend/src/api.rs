@@ -1,6 +1,10 @@
+use crate::blocking::{
+    BlockChecker, BlockedPeerView, BlocklistEntryView, BlocklistSubscriptionView,
+};
 use crate::config::GraphchanConfig;
 use crate::database::Database;
 use crate::database::repositories::{ThreadRepository, PeerRepository};
+use crate::dms::{ConversationView, DirectMessageView, DmService};
 use crate::files::{FileService, FileView, SaveFileInput};
 use crate::identity::decode_friendcode;
 use crate::identity::IdentitySummary;
@@ -120,6 +124,18 @@ pub async fn serve_http(
         .route("/identity/profile", post(update_profile_handler))
         .route("/blobs/:blob_id", get(get_blob))
         .route("/import", post(import_thread_handler))
+        .route("/dms/conversations", get(list_conversations_handler))
+        .route("/dms/send", post(send_dm_handler))
+        .route("/dms/:peer_id/messages", get(get_messages_handler))
+        .route("/dms/messages/:message_id/read", post(mark_message_read_handler))
+        .route("/dms/unread/count", get(count_unread_handler))
+        .route("/blocking/peers", get(list_blocked_peers_handler))
+        .route("/blocking/peers/:peer_id", post(block_peer_handler))
+        .route("/blocking/peers/:peer_id", axum::routing::delete(unblock_peer_handler))
+        .route("/blocking/blocklists", get(list_blocklists_handler))
+        .route("/blocking/blocklists", post(subscribe_blocklist_handler))
+        .route("/blocking/blocklists/:id", axum::routing::delete(unsubscribe_blocklist_handler))
+        .route("/blocking/blocklists/:id/entries", get(list_blocklist_entries_handler))
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024)) // 50MB limit
         .layer(
             CorsLayer::new()
@@ -1132,4 +1148,193 @@ async fn remove_reaction(
     state.network.publish_reaction_update(reaction_update).await?;
 
     Ok(StatusCode::OK)
+}
+
+// Direct Message handlers
+
+#[derive(Debug, Deserialize)]
+struct SendDmRequest {
+    to_peer_id: String,
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GetMessagesParams {
+    #[serde(default = "default_limit")]
+    limit: usize,
+}
+
+fn default_limit() -> usize {
+    50
+}
+
+#[derive(Debug, Serialize)]
+struct UnreadCountResponse {
+    count: usize,
+}
+
+async fn list_conversations_handler(
+    State(state): State<AppState>,
+) -> ApiResult<Vec<ConversationView>> {
+    let service = DmService::new(state.database.clone(), state.config.paths.clone());
+    let conversations = service.list_conversations().map_err(ApiError::Internal)?;
+    Ok(Json(conversations))
+}
+
+async fn send_dm_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<SendDmRequest>,
+) -> Result<(StatusCode, Json<DirectMessageView>), ApiError> {
+    let service = DmService::new(state.database.clone(), state.config.paths.clone());
+    let message = service
+        .send_dm(&payload.to_peer_id, &payload.body)
+        .map_err(ApiError::Internal)?;
+
+    // TODO: Broadcast DM over gossip to recipient
+    // This will be implemented when DM gossip events are added
+
+    Ok((StatusCode::CREATED, Json(message)))
+}
+
+async fn get_messages_handler(
+    State(state): State<AppState>,
+    Path(peer_id): Path<String>,
+    Query(params): Query<GetMessagesParams>,
+) -> ApiResult<Vec<DirectMessageView>> {
+    let service = DmService::new(state.database.clone(), state.config.paths.clone());
+    let limit = params.limit.min(200);
+    let messages = service
+        .get_messages(&peer_id, limit)
+        .map_err(ApiError::Internal)?;
+    Ok(Json(messages))
+}
+
+async fn mark_message_read_handler(
+    State(state): State<AppState>,
+    Path(message_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let service = DmService::new(state.database.clone(), state.config.paths.clone());
+    service
+        .mark_as_read(&message_id)
+        .map_err(ApiError::Internal)?;
+    Ok(StatusCode::OK)
+}
+
+async fn count_unread_handler(
+    State(state): State<AppState>,
+) -> ApiResult<UnreadCountResponse> {
+    let service = DmService::new(state.database.clone(), state.config.paths.clone());
+    let count = service.count_unread().map_err(ApiError::Internal)?;
+    Ok(Json(UnreadCountResponse { count }))
+}
+
+// Blocking and Moderation handlers
+
+#[derive(Debug, Deserialize)]
+struct BlockPeerRequest {
+    reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SubscribeBlocklistRequest {
+    maintainer_peer_id: String,
+    name: String,
+    description: Option<String>,
+    #[serde(default = "default_auto_apply")]
+    auto_apply: bool,
+}
+
+fn default_auto_apply() -> bool {
+    true
+}
+
+async fn list_blocked_peers_handler(
+    State(state): State<AppState>,
+) -> ApiResult<Vec<BlockedPeerView>> {
+    let checker = BlockChecker::new(state.database.clone());
+    let blocked = checker.list_blocked_peers().map_err(ApiError::Internal)?;
+    Ok(Json(blocked))
+}
+
+async fn block_peer_handler(
+    State(state): State<AppState>,
+    Path(peer_id): Path<String>,
+    Json(payload): Json<BlockPeerRequest>,
+) -> Result<StatusCode, ApiError> {
+    let checker = BlockChecker::new(state.database.clone());
+    checker
+        .block_peer(&peer_id, payload.reason)
+        .map_err(ApiError::Internal)?;
+
+    // TODO: Broadcast block action to network (optional - for shared blocklists)
+
+    Ok(StatusCode::OK)
+}
+
+async fn unblock_peer_handler(
+    State(state): State<AppState>,
+    Path(peer_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let checker = BlockChecker::new(state.database.clone());
+    checker.unblock_peer(&peer_id).map_err(ApiError::Internal)?;
+    Ok(StatusCode::OK)
+}
+
+async fn list_blocklists_handler(
+    State(state): State<AppState>,
+) -> ApiResult<Vec<BlocklistSubscriptionView>> {
+    let checker = BlockChecker::new(state.database.clone());
+    let blocklists = checker
+        .list_blocklist_subscriptions()
+        .map_err(ApiError::Internal)?;
+    Ok(Json(blocklists))
+}
+
+async fn subscribe_blocklist_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<SubscribeBlocklistRequest>,
+) -> Result<StatusCode, ApiError> {
+    let checker = BlockChecker::new(state.database.clone());
+
+    // Generate a blocklist ID from maintainer + name
+    let blocklist_id = format!(
+        "{}",
+        blake3::hash(format!("blocklist:{}:{}", payload.maintainer_peer_id, payload.name).as_bytes())
+    );
+
+    checker
+        .subscribe_blocklist(
+            &blocklist_id,
+            &payload.maintainer_peer_id,
+            payload.name,
+            payload.description,
+            payload.auto_apply,
+        )
+        .map_err(ApiError::Internal)?;
+
+    // TODO: Subscribe to blocklist updates from maintainer via gossip
+
+    Ok(StatusCode::CREATED)
+}
+
+async fn unsubscribe_blocklist_handler(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let checker = BlockChecker::new(state.database.clone());
+    checker
+        .unsubscribe_blocklist(&id)
+        .map_err(ApiError::Internal)?;
+    Ok(StatusCode::OK)
+}
+
+async fn list_blocklist_entries_handler(
+    State(state): State<AppState>,
+    Path(blocklist_id): Path<String>,
+) -> ApiResult<Vec<BlocklistEntryView>> {
+    let checker = BlockChecker::new(state.database.clone());
+    let entries = checker
+        .list_blocklist_entries(&blocklist_id)
+        .map_err(ApiError::Internal)?;
+    Ok(Json(entries))
 }

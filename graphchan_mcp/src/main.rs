@@ -50,6 +50,33 @@ struct PostView {
     parent_post_ids: Vec<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+struct ConversationView {
+    id: String,
+    peer_id: String,
+    peer_username: Option<String>,
+    peer_alias: Option<String>,
+    last_message_at: Option<String>,
+    last_message_preview: Option<String>,
+    unread_count: u32,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct DirectMessageView {
+    id: String,
+    conversation_id: String,
+    from_peer_id: String,
+    to_peer_id: String,
+    body: String,
+    created_at: String,
+    read_at: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct UnreadCountResponse {
+    count: usize,
+}
+
 const API_URL: &str = "http://127.0.0.1:8080";
 
 #[tokio::main]
@@ -152,6 +179,58 @@ fn list_tools() -> Value {
                     "type": "object",
                     "properties": {},
                 }
+            },
+            {
+                "name": "list_conversations",
+                "description": "List all direct message conversations with peers",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                }
+            },
+            {
+                "name": "read_messages",
+                "description": "Read direct messages with a specific peer",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "peer_id": {
+                            "type": "string",
+                            "description": "The peer ID (GPG fingerprint) to read messages from"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of messages to retrieve (default 50)"
+                        }
+                    },
+                    "required": ["peer_id"]
+                }
+            },
+            {
+                "name": "send_dm",
+                "description": "Send an encrypted direct message to a peer",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "to_peer_id": {
+                            "type": "string",
+                            "description": "The peer ID (GPG fingerprint) to send the message to"
+                        },
+                        "body": {
+                            "type": "string",
+                            "description": "The message content to send"
+                        }
+                    },
+                    "required": ["to_peer_id", "body"]
+                }
+            },
+            {
+                "name": "get_unread_count",
+                "description": "Get the total number of unread direct messages",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                }
             }
         ]
     })
@@ -227,6 +306,56 @@ async fn call_tool(client: &Client, params: Option<Value>) -> Result<Value, Json
                 message: "read_parents not implemented yet (requires backend support for direct post lookup)".to_string(),
                 data: None,
             })
+        }
+        "list_conversations" => {
+            let conversations: Vec<ConversationView> = client.get(format!("{}/dms/conversations", API_URL))
+                .send().await.map_err(map_req_err)?
+                .json().await.map_err(map_req_err)?;
+            Ok(serde_json::to_value(conversations).unwrap())
+        }
+        "read_messages" => {
+            let peer_id = args.get("peer_id").and_then(|v| v.as_str()).ok_or(JsonRpcError {
+                code: -32602,
+                message: "Missing peer_id".to_string(),
+                data: None,
+            })?;
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50);
+
+            let messages: Vec<DirectMessageView> = client.get(format!("{}/dms/{}/messages?limit={}", API_URL, peer_id, limit))
+                .send().await.map_err(map_req_err)?
+                .json().await.map_err(map_req_err)?;
+
+            Ok(serde_json::to_value(messages).unwrap())
+        }
+        "send_dm" => {
+            let to_peer_id = args.get("to_peer_id").and_then(|v| v.as_str()).ok_or(JsonRpcError {
+                code: -32602,
+                message: "Missing to_peer_id".to_string(),
+                data: None,
+            })?;
+            let body = args.get("body").and_then(|v| v.as_str()).ok_or(JsonRpcError {
+                code: -32602,
+                message: "Missing body".to_string(),
+                data: None,
+            })?;
+
+            let payload = serde_json::json!({
+                "to_peer_id": to_peer_id,
+                "body": body
+            });
+
+            let message: DirectMessageView = client.post(format!("{}/dms/send", API_URL))
+                .json(&payload)
+                .send().await.map_err(map_req_err)?
+                .json().await.map_err(map_req_err)?;
+
+            Ok(serde_json::to_value(message).unwrap())
+        }
+        "get_unread_count" => {
+            let response: UnreadCountResponse = client.get(format!("{}/dms/unread/count", API_URL))
+                .send().await.map_err(map_req_err)?
+                .json().await.map_err(map_req_err)?;
+            Ok(serde_json::to_value(response).unwrap())
         }
         _ => Err(JsonRpcError {
             code: -32601,

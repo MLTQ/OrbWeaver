@@ -137,6 +137,11 @@ impl Database {
             self.ensure_avatar_column(conn)?;
             self.ensure_thread_blob_ticket_column(conn)?;
             self.ensure_thread_hash_column(conn)?;
+            self.ensure_x25519_pubkey_column(conn)?;
+            self.ensure_thread_visibility_columns(conn)?;
+            self.ensure_thread_member_keys_table(conn)?;
+            self.ensure_dm_tables(conn)?;
+            self.ensure_blocking_tables(conn)?;
             Ok(())
         })?;
         Ok(self.newly_created)
@@ -323,6 +328,203 @@ impl Database {
         if !has_thread_hash {
             conn.execute("ALTER TABLE threads ADD COLUMN thread_hash TEXT", [])?;
         }
+        Ok(())
+    }
+
+    fn ensure_x25519_pubkey_column(&self, conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare("PRAGMA table_info(peers)")?;
+        let mut has_x25519_pubkey = false;
+        let rows = stmt.query_map([], |row| {
+            let name: String = row.get(1)?;
+            Ok(name)
+        })?;
+        for row in rows {
+            let name = row?;
+            if name.eq_ignore_ascii_case("x25519_pubkey") {
+                has_x25519_pubkey = true;
+                break;
+            }
+        }
+        if !has_x25519_pubkey {
+            conn.execute("ALTER TABLE peers ADD COLUMN x25519_pubkey TEXT", [])?;
+        }
+        Ok(())
+    }
+
+    fn ensure_thread_visibility_columns(&self, conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare("PRAGMA table_info(threads)")?;
+        let mut has_visibility = false;
+        let mut has_topic_secret = false;
+        let rows = stmt.query_map([], |row| {
+            let name: String = row.get(1)?;
+            Ok(name)
+        })?;
+        for row in rows {
+            let name = row?;
+            if name.eq_ignore_ascii_case("visibility") {
+                has_visibility = true;
+            }
+            if name.eq_ignore_ascii_case("topic_secret") {
+                has_topic_secret = true;
+            }
+        }
+        if !has_visibility {
+            // Default to 'social' for existing threads
+            conn.execute("ALTER TABLE threads ADD COLUMN visibility TEXT DEFAULT 'social'", [])?;
+        }
+        if !has_topic_secret {
+            conn.execute("ALTER TABLE threads ADD COLUMN topic_secret TEXT", [])?;
+        }
+        Ok(())
+    }
+
+    fn ensure_thread_member_keys_table(&self, conn: &Connection) -> Result<()> {
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS thread_member_keys (
+                thread_id TEXT NOT NULL,
+                member_peer_id TEXT NOT NULL,
+                wrapped_key_ciphertext BLOB NOT NULL,
+                wrapped_key_nonce BLOB NOT NULL,
+                PRIMARY KEY (thread_id, member_peer_id),
+                FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE,
+                FOREIGN KEY (member_peer_id) REFERENCES peers(id) ON DELETE CASCADE
+            )
+            "#,
+            [],
+        )?;
+        Ok(())
+    }
+
+    fn ensure_dm_tables(&self, conn: &Connection) -> Result<()> {
+        // Create direct_messages table
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS direct_messages (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                from_peer_id TEXT NOT NULL,
+                to_peer_id TEXT NOT NULL,
+                encrypted_body BLOB NOT NULL,
+                nonce BLOB NOT NULL,
+                created_at TEXT NOT NULL,
+                read_at TEXT,
+                FOREIGN KEY (from_peer_id) REFERENCES peers(id),
+                FOREIGN KEY (to_peer_id) REFERENCES peers(id)
+            )
+            "#,
+            [],
+        )?;
+
+        // Create index for conversation queries
+        conn.execute(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_dm_conversation
+            ON direct_messages(conversation_id, created_at)
+            "#,
+            [],
+        )?;
+
+        // Create index for unread messages
+        conn.execute(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_dm_unread
+            ON direct_messages(to_peer_id, read_at)
+            WHERE read_at IS NULL
+            "#,
+            [],
+        )?;
+
+        // Create conversations table
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS conversations (
+                id TEXT PRIMARY KEY,
+                peer_id TEXT NOT NULL,
+                last_message_at TEXT,
+                last_message_preview TEXT,
+                unread_count INTEGER DEFAULT 0,
+                FOREIGN KEY (peer_id) REFERENCES peers(id)
+            )
+            "#,
+            [],
+        )?;
+
+        Ok(())
+    }
+
+    fn ensure_blocking_tables(&self, conn: &Connection) -> Result<()> {
+        // Create blocked_peers table
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS blocked_peers (
+                peer_id TEXT PRIMARY KEY,
+                reason TEXT,
+                blocked_at TEXT NOT NULL,
+                FOREIGN KEY (peer_id) REFERENCES peers(id)
+            )
+            "#,
+            [],
+        )?;
+
+        // Create blocklist_subscriptions table
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS blocklist_subscriptions (
+                id TEXT PRIMARY KEY,
+                maintainer_peer_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                auto_apply INTEGER DEFAULT 1,
+                last_synced_at TEXT,
+                FOREIGN KEY (maintainer_peer_id) REFERENCES peers(id)
+            )
+            "#,
+            [],
+        )?;
+
+        // Create blocklist_entries table
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS blocklist_entries (
+                blocklist_id TEXT NOT NULL,
+                peer_id TEXT NOT NULL,
+                reason TEXT,
+                added_at TEXT NOT NULL,
+                PRIMARY KEY (blocklist_id, peer_id),
+                FOREIGN KEY (blocklist_id) REFERENCES blocklist_subscriptions(id) ON DELETE CASCADE,
+                FOREIGN KEY (peer_id) REFERENCES peers(id)
+            )
+            "#,
+            [],
+        )?;
+
+        // Create redacted_posts table
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS redacted_posts (
+                id TEXT PRIMARY KEY,
+                thread_id TEXT NOT NULL,
+                author_peer_id TEXT NOT NULL,
+                parent_post_ids TEXT NOT NULL,
+                known_child_ids TEXT,
+                redaction_reason TEXT NOT NULL,
+                discovered_at TEXT NOT NULL,
+                FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE
+            )
+            "#,
+            [],
+        )?;
+
+        // Create index for blocklist queries
+        conn.execute(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_blocklist_entries_peer
+            ON blocklist_entries(peer_id)
+            "#,
+            [],
+        )?;
+
         Ok(())
     }
 }

@@ -21,9 +21,11 @@ const FINGERPRINT_FILE: &str = "fingerprint.txt";
 pub struct IdentitySummary {
     pub gpg_fingerprint: String,
     pub iroh_peer_id: String,
+    pub x25519_pubkey: String,
     pub friendcode: String,
     pub gpg_created: bool,
     pub iroh_key_created: bool,
+    pub x25519_created: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -38,20 +40,25 @@ pub struct FriendCodePayload {
     pub version: u8,
     pub peer_id: String,
     pub gpg_fingerprint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x25519_pubkey: Option<String>,
     pub addresses: Vec<String>,
 }
 
 pub fn ensure_local_identity(paths: &GraphchanPaths) -> Result<IdentitySummary> {
     let (gpg_fingerprint, gpg_created) = ensure_gpg_identity(paths)?;
     let (iroh_peer_id, iroh_key_created) = ensure_iroh_identity(paths)?;
-    let friendcode = encode_friendcode(&iroh_peer_id, &gpg_fingerprint)?;
+    let (x25519_pubkey, x25519_created) = crate::crypto::ensure_x25519_identity(paths)?;
+    let friendcode = encode_friendcode(&iroh_peer_id, &gpg_fingerprint, Some(&x25519_pubkey))?;
 
     Ok(IdentitySummary {
         gpg_fingerprint,
         iroh_peer_id,
+        x25519_pubkey,
         friendcode,
         gpg_created,
         iroh_key_created,
+        x25519_created,
     })
 }
 
@@ -147,11 +154,13 @@ fn load_iroh_identity(path: &Path) -> Result<(String, SecretKey)> {
     Ok((stored.peer_id, secret))
 }
 
-pub fn encode_friendcode(peer_id: &str, gpg_fingerprint: &str) -> Result<String> {
+pub fn encode_friendcode(peer_id: &str, gpg_fingerprint: &str, x25519_pubkey: Option<&str>) -> Result<String> {
+    let version = if x25519_pubkey.is_some() { 2 } else { 1 };
     let payload = FriendCodePayload {
-        version: 1,
+        version,
         peer_id: peer_id.to_string(),
         gpg_fingerprint: gpg_fingerprint.to_string(),
+        x25519_pubkey: x25519_pubkey.map(|s| s.to_string()),
         addresses: advertised_addresses(),
     };
     let json = serde_json::to_vec(&payload)?;
@@ -187,11 +196,24 @@ mod tests {
     use super::{decode_friendcode, encode_friendcode};
 
     #[test]
-    fn friendcode_roundtrip() {
-        let code = encode_friendcode("peer-123", "FINGERPRINT123").unwrap();
+    fn friendcode_v1_roundtrip() {
+        let code = encode_friendcode("peer-123", "FINGERPRINT123", None).unwrap();
         let payload = decode_friendcode(&code).unwrap();
+        assert_eq!(payload.version, 1);
         assert_eq!(payload.peer_id, "peer-123");
         assert_eq!(payload.gpg_fingerprint, "FINGERPRINT123");
+        assert!(payload.x25519_pubkey.is_none());
+        assert!(payload.addresses.is_empty());
+    }
+
+    #[test]
+    fn friendcode_v2_roundtrip() {
+        let code = encode_friendcode("peer-456", "FINGERPRINT456", Some("x25519pubkey")).unwrap();
+        let payload = decode_friendcode(&code).unwrap();
+        assert_eq!(payload.version, 2);
+        assert_eq!(payload.peer_id, "peer-456");
+        assert_eq!(payload.gpg_fingerprint, "FINGERPRINT456");
+        assert_eq!(payload.x25519_pubkey.as_deref(), Some("x25519pubkey"));
         assert!(payload.addresses.is_empty());
     }
 }

@@ -39,6 +39,7 @@ impl PeerService {
                 friendcode: Some(friendcode.clone()),
                 iroh_peer_id: Some(peer_id.clone()),
                 gpg_fingerprint: Some(fingerprint.clone()),
+                x25519_pubkey: None, // Will be populated from friendcode when available
                 last_seen: Some(now_utc_iso()),
                 avatar_file_id: None,
                 trust_state: "trusted".into(),
@@ -89,6 +90,7 @@ pub struct PeerView {
     pub friendcode: Option<String>,
     pub iroh_peer_id: Option<String>,
     pub gpg_fingerprint: Option<String>,
+    pub x25519_pubkey: Option<String>,
     pub last_seen: Option<String>,
     pub avatar_file_id: Option<String>,
     pub trust_state: String,
@@ -104,6 +106,7 @@ impl PeerView {
             friendcode: record.friendcode,
             iroh_peer_id: record.iroh_peer_id,
             gpg_fingerprint: record.gpg_fingerprint,
+            x25519_pubkey: record.x25519_pubkey,
             last_seen: record.last_seen,
             avatar_file_id: record.avatar_file_id,
             trust_state: record.trust_state,
@@ -120,6 +123,7 @@ fn payload_to_peer_record(friendcode: &str, payload: &FriendCodePayload) -> Peer
         friendcode: Some(friendcode.to_string()),
         iroh_peer_id: Some(payload.peer_id.clone()),
         gpg_fingerprint: Some(payload.gpg_fingerprint.clone()),
+        x25519_pubkey: payload.x25519_pubkey.clone(),
         last_seen: Some(now_utc_iso()),
         avatar_file_id: None,
         trust_state: "unknown".into(),
@@ -143,7 +147,7 @@ mod tests {
     #[test]
     fn registers_peer_from_friendcode() {
         let service = setup_service();
-        let friendcode = encode_friendcode("peer-xyz", "FPRINTXYZ").unwrap();
+        let friendcode = encode_friendcode("peer-xyz", "FPRINTXYZ", None).unwrap();
         let view = service.register_friendcode(&friendcode).unwrap();
         assert_eq!(view.gpg_fingerprint.as_deref(), Some("FPRINTXYZ"));
     }

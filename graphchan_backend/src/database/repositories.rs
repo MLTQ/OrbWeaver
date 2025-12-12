@@ -1,4 +1,8 @@
-use super::models::{FileRecord, PeerRecord, PostRecord, ReactionRecord, ThreadRecord};
+use super::models::{
+    FileRecord, PeerRecord, PostRecord, ReactionRecord, ThreadRecord, ThreadMemberKey,
+    DirectMessageRecord, ConversationRecord, BlockedPeerRecord, BlocklistSubscriptionRecord,
+    BlocklistEntryRecord, RedactedPostRecord,
+};
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashMap;
@@ -46,6 +50,52 @@ pub trait ReactionRepository {
     fn count_for_post(&self, post_id: &str) -> Result<HashMap<String, usize>>;
 }
 
+pub trait ThreadMemberKeyRepository {
+    fn add(&self, record: &ThreadMemberKey) -> Result<()>;
+    fn get(&self, thread_id: &str, member_peer_id: &str) -> Result<Option<ThreadMemberKey>>;
+    fn list_for_thread(&self, thread_id: &str) -> Result<Vec<ThreadMemberKey>>;
+    fn remove(&self, thread_id: &str, member_peer_id: &str) -> Result<()>;
+}
+
+pub trait DirectMessageRepository {
+    fn create(&self, record: &DirectMessageRecord) -> Result<()>;
+    fn get(&self, id: &str) -> Result<Option<DirectMessageRecord>>;
+    fn list_for_conversation(&self, conversation_id: &str, limit: usize) -> Result<Vec<DirectMessageRecord>>;
+    fn mark_as_read(&self, id: &str, read_at: &str) -> Result<()>;
+    fn count_unread(&self, to_peer_id: &str) -> Result<usize>;
+}
+
+pub trait ConversationRepository {
+    fn upsert(&self, record: &ConversationRecord) -> Result<()>;
+    fn get(&self, id: &str) -> Result<Option<ConversationRecord>>;
+    fn list(&self) -> Result<Vec<ConversationRecord>>;
+    fn update_unread_count(&self, conversation_id: &str, count: i64) -> Result<()>;
+    fn update_last_message(&self, conversation_id: &str, message_at: &str, preview: &str) -> Result<()>;
+}
+
+pub trait BlockedPeerRepository {
+    fn block(&self, record: &BlockedPeerRecord) -> Result<()>;
+    fn unblock(&self, peer_id: &str) -> Result<()>;
+    fn is_blocked(&self, peer_id: &str) -> Result<bool>;
+    fn list(&self) -> Result<Vec<BlockedPeerRecord>>;
+}
+
+pub trait BlocklistRepository {
+    fn subscribe(&self, record: &BlocklistSubscriptionRecord) -> Result<()>;
+    fn unsubscribe(&self, blocklist_id: &str) -> Result<()>;
+    fn list_subscriptions(&self) -> Result<Vec<BlocklistSubscriptionRecord>>;
+    fn add_entry(&self, entry: &BlocklistEntryRecord) -> Result<()>;
+    fn remove_entry(&self, blocklist_id: &str, peer_id: &str) -> Result<()>;
+    fn list_entries(&self, blocklist_id: &str) -> Result<Vec<BlocklistEntryRecord>>;
+    fn is_in_any_blocklist(&self, peer_id: &str) -> Result<bool>;
+}
+
+pub trait RedactedPostRepository {
+    fn create(&self, record: &RedactedPostRecord) -> Result<()>;
+    fn get(&self, id: &str) -> Result<Option<RedactedPostRecord>>;
+    fn list_for_thread(&self, thread_id: &str) -> Result<Vec<RedactedPostRecord>>;
+}
+
 /// Thin wrapper that will eventually host rusqlite-backed implementations.
 pub struct SqliteRepositories<'conn> {
     conn: &'conn Connection,
@@ -76,6 +126,30 @@ impl<'conn> SqliteRepositories<'conn> {
         SqliteReactionRepository { conn: self.conn }
     }
 
+    pub fn thread_member_keys(&self) -> impl ThreadMemberKeyRepository + '_ {
+        SqliteThreadMemberKeyRepository { conn: self.conn }
+    }
+
+    pub fn direct_messages(&self) -> impl DirectMessageRepository + '_ {
+        SqliteDirectMessageRepository { conn: self.conn }
+    }
+
+    pub fn conversations(&self) -> impl ConversationRepository + '_ {
+        SqliteConversationRepository { conn: self.conn }
+    }
+
+    pub fn blocked_peers(&self) -> impl BlockedPeerRepository + '_ {
+        SqliteBlockedPeerRepository { conn: self.conn }
+    }
+
+    pub fn blocklists(&self) -> impl BlocklistRepository + '_ {
+        SqliteBlocklistRepository { conn: self.conn }
+    }
+
+    pub fn redacted_posts(&self) -> impl RedactedPostRepository + '_ {
+        SqliteRedactedPostRepository { conn: self.conn }
+    }
+
     pub fn conn(&self) -> &'conn Connection {
         self.conn
     }
@@ -89,8 +163,8 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
     fn create(&self, record: &ThreadRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO threads (id, title, creator_peer_id, created_at, pinned, thread_hash)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            INSERT INTO threads (id, title, creator_peer_id, created_at, pinned, thread_hash, visibility, topic_secret)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
             "#,
             params![
                 record.id,
@@ -98,7 +172,9 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
                 record.creator_peer_id,
                 record.created_at,
                 if record.pinned { 1 } else { 0 },
-                record.thread_hash
+                record.thread_hash,
+                record.visibility,
+                record.topic_secret
             ],
         )?;
         Ok(())
@@ -107,14 +183,16 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
     fn upsert(&self, record: &ThreadRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO threads (id, title, creator_peer_id, created_at, pinned, thread_hash)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            INSERT INTO threads (id, title, creator_peer_id, created_at, pinned, thread_hash, visibility, topic_secret)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
             ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 creator_peer_id = excluded.creator_peer_id,
                 created_at = excluded.created_at,
                 pinned = excluded.pinned,
-                thread_hash = excluded.thread_hash
+                thread_hash = excluded.thread_hash,
+                visibility = excluded.visibility,
+                topic_secret = excluded.topic_secret
             "#,
             params![
                 record.id,
@@ -122,7 +200,9 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
                 record.creator_peer_id,
                 record.created_at,
                 if record.pinned { 1 } else { 0 },
-                record.thread_hash
+                record.thread_hash,
+                record.visibility,
+                record.topic_secret
             ],
         )?;
         Ok(())
@@ -133,7 +213,8 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
             .conn
             .query_row(
                 r#"
-                SELECT id, title, creator_peer_id, created_at, pinned, thread_hash
+                SELECT id, title, creator_peer_id, created_at, pinned, thread_hash,
+                       COALESCE(visibility, 'social') as visibility, topic_secret
                 FROM threads
                 WHERE id = ?1
                 "#,
@@ -146,6 +227,8 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
                         created_at: row.get(3)?,
                         pinned: row.get::<_, i64>(4)? != 0,
                         thread_hash: row.get(5)?,
+                        visibility: row.get(6)?,
+                        topic_secret: row.get(7)?,
                     })
                 },
             )
@@ -156,7 +239,8 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
     fn list_recent(&self, limit: usize) -> Result<Vec<ThreadRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, title, creator_peer_id, created_at, pinned, thread_hash
+            SELECT id, title, creator_peer_id, created_at, pinned, thread_hash,
+                   COALESCE(visibility, 'social') as visibility, topic_secret
             FROM threads
             WHERE deleted = 0 AND ignored = 0
             ORDER BY datetime(created_at) DESC
@@ -171,6 +255,8 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
                 created_at: row.get(3)?,
                 pinned: row.get::<_, i64>(4)? != 0,
                 thread_hash: row.get(5)?,
+                visibility: row.get(6)?,
+                topic_secret: row.get(7)?,
             })
         })?;
 
@@ -387,13 +473,14 @@ impl<'conn> PeerRepository for SqlitePeerRepository<'conn> {
     fn upsert(&self, record: &PeerRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO peers (id, alias, friendcode, iroh_peer_id, gpg_fingerprint, last_seen, trust_state, avatar_file_id, username, bio)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            INSERT INTO peers (id, alias, friendcode, iroh_peer_id, gpg_fingerprint, x25519_pubkey, last_seen, trust_state, avatar_file_id, username, bio)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             ON CONFLICT(id) DO UPDATE SET
                 alias = excluded.alias,
                 friendcode = excluded.friendcode,
                 iroh_peer_id = excluded.iroh_peer_id,
                 gpg_fingerprint = excluded.gpg_fingerprint,
+                x25519_pubkey = excluded.x25519_pubkey,
                 last_seen = excluded.last_seen,
                 trust_state = excluded.trust_state,
                 avatar_file_id = excluded.avatar_file_id,
@@ -406,6 +493,7 @@ impl<'conn> PeerRepository for SqlitePeerRepository<'conn> {
                 record.friendcode,
                 record.iroh_peer_id,
                 record.gpg_fingerprint,
+                record.x25519_pubkey,
                 record.last_seen,
                 record.trust_state,
                 record.avatar_file_id,
@@ -421,7 +509,7 @@ impl<'conn> PeerRepository for SqlitePeerRepository<'conn> {
             .conn
             .query_row(
                 r#"
-                SELECT id, alias, friendcode, iroh_peer_id, gpg_fingerprint, last_seen, trust_state, avatar_file_id, username, bio
+                SELECT id, alias, friendcode, iroh_peer_id, gpg_fingerprint, x25519_pubkey, last_seen, trust_state, avatar_file_id, username, bio
                 FROM peers
                 WHERE id = ?1
                 "#,
@@ -433,11 +521,12 @@ impl<'conn> PeerRepository for SqlitePeerRepository<'conn> {
                         friendcode: row.get(2)?,
                         iroh_peer_id: row.get(3)?,
                         gpg_fingerprint: row.get(4)?,
-                        last_seen: row.get(5)?,
-                        trust_state: row.get(6)?,
-                        avatar_file_id: row.get(7)?,
-                        username: row.get(8)?,
-                        bio: row.get(9)?,
+                        x25519_pubkey: row.get(5)?,
+                        last_seen: row.get(6)?,
+                        trust_state: row.get(7)?,
+                        avatar_file_id: row.get(8)?,
+                        username: row.get(9)?,
+                        bio: row.get(10)?,
                     })
                 },
             )
@@ -448,7 +537,7 @@ impl<'conn> PeerRepository for SqlitePeerRepository<'conn> {
     fn list(&self) -> Result<Vec<PeerRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, alias, friendcode, iroh_peer_id, gpg_fingerprint, last_seen, trust_state, avatar_file_id, username, bio
+            SELECT id, alias, friendcode, iroh_peer_id, gpg_fingerprint, x25519_pubkey, last_seen, trust_state, avatar_file_id, username, bio
             FROM peers
             ORDER BY datetime(COALESCE(last_seen, '1970-01-01T00:00:00Z')) DESC
             "#,
@@ -460,11 +549,12 @@ impl<'conn> PeerRepository for SqlitePeerRepository<'conn> {
                 friendcode: row.get(2)?,
                 iroh_peer_id: row.get(3)?,
                 gpg_fingerprint: row.get(4)?,
-                last_seen: row.get(5)?,
-                trust_state: row.get(6)?,
-                avatar_file_id: row.get(7)?,
-                username: row.get(8)?,
-                bio: row.get(9)?,
+                x25519_pubkey: row.get(5)?,
+                last_seen: row.get(6)?,
+                trust_state: row.get(7)?,
+                avatar_file_id: row.get(8)?,
+                username: row.get(9)?,
+                bio: row.get(10)?,
             })
         })?;
         let mut peers = Vec::new();
@@ -790,5 +880,555 @@ impl<'conn> ReactionRepository for SqliteReactionRepository<'conn> {
             counts.insert(emoji, count);
         }
         Ok(counts)
+    }
+}
+
+struct SqliteThreadMemberKeyRepository<'conn> {
+    conn: &'conn Connection,
+}
+
+impl<'conn> ThreadMemberKeyRepository for SqliteThreadMemberKeyRepository<'conn> {
+    fn add(&self, record: &ThreadMemberKey) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT OR REPLACE INTO thread_member_keys (thread_id, member_peer_id, wrapped_key_ciphertext, wrapped_key_nonce)
+            VALUES (?1, ?2, ?3, ?4)
+            "#,
+            params![
+                record.thread_id,
+                record.member_peer_id,
+                record.wrapped_key_ciphertext,
+                record.wrapped_key_nonce
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn get(&self, thread_id: &str, member_peer_id: &str) -> Result<Option<ThreadMemberKey>> {
+        let result = self.conn.query_row(
+            r#"
+            SELECT thread_id, member_peer_id, wrapped_key_ciphertext, wrapped_key_nonce
+            FROM thread_member_keys
+            WHERE thread_id = ?1 AND member_peer_id = ?2
+            "#,
+            params![thread_id, member_peer_id],
+            |row| {
+                Ok(ThreadMemberKey {
+                    thread_id: row.get(0)?,
+                    member_peer_id: row.get(1)?,
+                    wrapped_key_ciphertext: row.get(2)?,
+                    wrapped_key_nonce: row.get(3)?,
+                })
+            },
+        ).optional()?;
+        Ok(result)
+    }
+
+    fn list_for_thread(&self, thread_id: &str) -> Result<Vec<ThreadMemberKey>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT thread_id, member_peer_id, wrapped_key_ciphertext, wrapped_key_nonce
+            FROM thread_member_keys
+            WHERE thread_id = ?1
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![thread_id], |row| {
+            Ok(ThreadMemberKey {
+                thread_id: row.get(0)?,
+                member_peer_id: row.get(1)?,
+                wrapped_key_ciphertext: row.get(2)?,
+                wrapped_key_nonce: row.get(3)?,
+            })
+        })?;
+
+        let mut keys = Vec::new();
+        for row in rows {
+            keys.push(row?);
+        }
+        Ok(keys)
+    }
+
+    fn remove(&self, thread_id: &str, member_peer_id: &str) -> Result<()> {
+        self.conn.execute(
+            r#"
+            DELETE FROM thread_member_keys
+            WHERE thread_id = ?1 AND member_peer_id = ?2
+            "#,
+            params![thread_id, member_peer_id],
+        )?;
+        Ok(())
+    }
+}
+
+struct SqliteDirectMessageRepository<'conn> {
+    conn: &'conn Connection,
+}
+
+impl<'conn> DirectMessageRepository for SqliteDirectMessageRepository<'conn> {
+    fn create(&self, record: &DirectMessageRecord) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO direct_messages (id, conversation_id, from_peer_id, to_peer_id, encrypted_body, nonce, created_at, read_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "#,
+            params![
+                record.id,
+                record.conversation_id,
+                record.from_peer_id,
+                record.to_peer_id,
+                record.encrypted_body,
+                record.nonce,
+                record.created_at,
+                record.read_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn get(&self, id: &str) -> Result<Option<DirectMessageRecord>> {
+        let result = self.conn.query_row(
+            r#"
+            SELECT id, conversation_id, from_peer_id, to_peer_id, encrypted_body, nonce, created_at, read_at
+            FROM direct_messages
+            WHERE id = ?1
+            "#,
+            params![id],
+            |row| {
+                Ok(DirectMessageRecord {
+                    id: row.get(0)?,
+                    conversation_id: row.get(1)?,
+                    from_peer_id: row.get(2)?,
+                    to_peer_id: row.get(3)?,
+                    encrypted_body: row.get(4)?,
+                    nonce: row.get(5)?,
+                    created_at: row.get(6)?,
+                    read_at: row.get(7)?,
+                })
+            },
+        ).optional()?;
+        Ok(result)
+    }
+
+    fn list_for_conversation(&self, conversation_id: &str, limit: usize) -> Result<Vec<DirectMessageRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, conversation_id, from_peer_id, to_peer_id, encrypted_body, nonce, created_at, read_at
+            FROM direct_messages
+            WHERE conversation_id = ?1
+            ORDER BY created_at DESC
+            LIMIT ?2
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![conversation_id, limit as i64], |row| {
+            Ok(DirectMessageRecord {
+                id: row.get(0)?,
+                conversation_id: row.get(1)?,
+                from_peer_id: row.get(2)?,
+                to_peer_id: row.get(3)?,
+                encrypted_body: row.get(4)?,
+                nonce: row.get(5)?,
+                created_at: row.get(6)?,
+                read_at: row.get(7)?,
+            })
+        })?;
+
+        let mut messages = Vec::new();
+        for row in rows {
+            messages.push(row?);
+        }
+        Ok(messages)
+    }
+
+    fn mark_as_read(&self, id: &str, read_at: &str) -> Result<()> {
+        self.conn.execute(
+            r#"
+            UPDATE direct_messages
+            SET read_at = ?1
+            WHERE id = ?2
+            "#,
+            params![read_at, id],
+        )?;
+        Ok(())
+    }
+
+    fn count_unread(&self, to_peer_id: &str) -> Result<usize> {
+        let count: i64 = self.conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM direct_messages
+            WHERE to_peer_id = ?1 AND read_at IS NULL
+            "#,
+            params![to_peer_id],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+}
+
+struct SqliteConversationRepository<'conn> {
+    conn: &'conn Connection,
+}
+
+impl<'conn> ConversationRepository for SqliteConversationRepository<'conn> {
+    fn upsert(&self, record: &ConversationRecord) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO conversations (id, peer_id, last_message_at, last_message_preview, unread_count)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            ON CONFLICT(id) DO UPDATE SET
+                last_message_at = excluded.last_message_at,
+                last_message_preview = excluded.last_message_preview,
+                unread_count = excluded.unread_count
+            "#,
+            params![
+                record.id,
+                record.peer_id,
+                record.last_message_at,
+                record.last_message_preview,
+                record.unread_count
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn get(&self, id: &str) -> Result<Option<ConversationRecord>> {
+        let result = self.conn.query_row(
+            r#"
+            SELECT id, peer_id, last_message_at, last_message_preview, unread_count
+            FROM conversations
+            WHERE id = ?1
+            "#,
+            params![id],
+            |row| {
+                Ok(ConversationRecord {
+                    id: row.get(0)?,
+                    peer_id: row.get(1)?,
+                    last_message_at: row.get(2)?,
+                    last_message_preview: row.get(3)?,
+                    unread_count: row.get(4)?,
+                })
+            },
+        ).optional()?;
+        Ok(result)
+    }
+
+    fn list(&self) -> Result<Vec<ConversationRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, peer_id, last_message_at, last_message_preview, unread_count
+            FROM conversations
+            ORDER BY last_message_at DESC
+            "#,
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(ConversationRecord {
+                id: row.get(0)?,
+                peer_id: row.get(1)?,
+                last_message_at: row.get(2)?,
+                last_message_preview: row.get(3)?,
+                unread_count: row.get(4)?,
+            })
+        })?;
+
+        let mut conversations = Vec::new();
+        for row in rows {
+            conversations.push(row?);
+        }
+        Ok(conversations)
+    }
+
+    fn update_unread_count(&self, conversation_id: &str, count: i64) -> Result<()> {
+        self.conn.execute(
+            r#"
+            UPDATE conversations
+            SET unread_count = ?1
+            WHERE id = ?2
+            "#,
+            params![count, conversation_id],
+        )?;
+        Ok(())
+    }
+
+    fn update_last_message(&self, conversation_id: &str, message_at: &str, preview: &str) -> Result<()> {
+        self.conn.execute(
+            r#"
+            UPDATE conversations
+            SET last_message_at = ?1, last_message_preview = ?2
+            WHERE id = ?3
+            "#,
+            params![message_at, preview, conversation_id],
+        )?;
+        Ok(())
+    }
+}
+
+struct SqliteBlockedPeerRepository<'conn> {
+    conn: &'conn Connection,
+}
+
+impl<'conn> BlockedPeerRepository for SqliteBlockedPeerRepository<'conn> {
+    fn block(&self, record: &BlockedPeerRecord) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT OR REPLACE INTO blocked_peers (peer_id, reason, blocked_at)
+            VALUES (?1, ?2, ?3)
+            "#,
+            params![record.peer_id, record.reason, record.blocked_at],
+        )?;
+        Ok(())
+    }
+
+    fn unblock(&self, peer_id: &str) -> Result<()> {
+        self.conn.execute(
+            r#"
+            DELETE FROM blocked_peers
+            WHERE peer_id = ?1
+            "#,
+            params![peer_id],
+        )?;
+        Ok(())
+    }
+
+    fn is_blocked(&self, peer_id: &str) -> Result<bool> {
+        let count: i64 = self.conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM blocked_peers
+            WHERE peer_id = ?1
+            "#,
+            params![peer_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    fn list(&self) -> Result<Vec<BlockedPeerRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT peer_id, reason, blocked_at
+            FROM blocked_peers
+            ORDER BY blocked_at DESC
+            "#,
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(BlockedPeerRecord {
+                peer_id: row.get(0)?,
+                reason: row.get(1)?,
+                blocked_at: row.get(2)?,
+            })
+        })?;
+
+        let mut peers = Vec::new();
+        for row in rows {
+            peers.push(row?);
+        }
+        Ok(peers)
+    }
+}
+
+struct SqliteBlocklistRepository<'conn> {
+    conn: &'conn Connection,
+}
+
+impl<'conn> BlocklistRepository for SqliteBlocklistRepository<'conn> {
+    fn subscribe(&self, record: &BlocklistSubscriptionRecord) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT OR REPLACE INTO blocklist_subscriptions
+            (id, maintainer_peer_id, name, description, auto_apply, last_synced_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "#,
+            params![
+                record.id,
+                record.maintainer_peer_id,
+                record.name,
+                record.description,
+                if record.auto_apply { 1 } else { 0 },
+                record.last_synced_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn unsubscribe(&self, blocklist_id: &str) -> Result<()> {
+        self.conn.execute(
+            r#"
+            DELETE FROM blocklist_subscriptions
+            WHERE id = ?1
+            "#,
+            params![blocklist_id],
+        )?;
+        Ok(())
+    }
+
+    fn list_subscriptions(&self) -> Result<Vec<BlocklistSubscriptionRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, maintainer_peer_id, name, description, auto_apply, last_synced_at
+            FROM blocklist_subscriptions
+            ORDER BY name
+            "#,
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(BlocklistSubscriptionRecord {
+                id: row.get(0)?,
+                maintainer_peer_id: row.get(1)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                auto_apply: row.get::<_, i64>(4)? != 0,
+                last_synced_at: row.get(5)?,
+            })
+        })?;
+
+        let mut lists = Vec::new();
+        for row in rows {
+            lists.push(row?);
+        }
+        Ok(lists)
+    }
+
+    fn add_entry(&self, entry: &BlocklistEntryRecord) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT OR REPLACE INTO blocklist_entries (blocklist_id, peer_id, reason, added_at)
+            VALUES (?1, ?2, ?3, ?4)
+            "#,
+            params![entry.blocklist_id, entry.peer_id, entry.reason, entry.added_at],
+        )?;
+        Ok(())
+    }
+
+    fn remove_entry(&self, blocklist_id: &str, peer_id: &str) -> Result<()> {
+        self.conn.execute(
+            r#"
+            DELETE FROM blocklist_entries
+            WHERE blocklist_id = ?1 AND peer_id = ?2
+            "#,
+            params![blocklist_id, peer_id],
+        )?;
+        Ok(())
+    }
+
+    fn list_entries(&self, blocklist_id: &str) -> Result<Vec<BlocklistEntryRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT blocklist_id, peer_id, reason, added_at
+            FROM blocklist_entries
+            WHERE blocklist_id = ?1
+            ORDER BY added_at DESC
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![blocklist_id], |row| {
+            Ok(BlocklistEntryRecord {
+                blocklist_id: row.get(0)?,
+                peer_id: row.get(1)?,
+                reason: row.get(2)?,
+                added_at: row.get(3)?,
+            })
+        })?;
+
+        let mut entries = Vec::new();
+        for row in rows {
+            entries.push(row?);
+        }
+        Ok(entries)
+    }
+
+    fn is_in_any_blocklist(&self, peer_id: &str) -> Result<bool> {
+        let count: i64 = self.conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM blocklist_entries e
+            JOIN blocklist_subscriptions s ON e.blocklist_id = s.id
+            WHERE e.peer_id = ?1 AND s.auto_apply = 1
+            "#,
+            params![peer_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+}
+
+struct SqliteRedactedPostRepository<'conn> {
+    conn: &'conn Connection,
+}
+
+impl<'conn> RedactedPostRepository for SqliteRedactedPostRepository<'conn> {
+    fn create(&self, record: &RedactedPostRecord) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT OR REPLACE INTO redacted_posts
+            (id, thread_id, author_peer_id, parent_post_ids, known_child_ids, redaction_reason, discovered_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "#,
+            params![
+                record.id,
+                record.thread_id,
+                record.author_peer_id,
+                record.parent_post_ids,
+                record.known_child_ids,
+                record.redaction_reason,
+                record.discovered_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn get(&self, id: &str) -> Result<Option<RedactedPostRecord>> {
+        let result = self.conn.query_row(
+            r#"
+            SELECT id, thread_id, author_peer_id, parent_post_ids, known_child_ids, redaction_reason, discovered_at
+            FROM redacted_posts
+            WHERE id = ?1
+            "#,
+            params![id],
+            |row| {
+                Ok(RedactedPostRecord {
+                    id: row.get(0)?,
+                    thread_id: row.get(1)?,
+                    author_peer_id: row.get(2)?,
+                    parent_post_ids: row.get(3)?,
+                    known_child_ids: row.get(4)?,
+                    redaction_reason: row.get(5)?,
+                    discovered_at: row.get(6)?,
+                })
+            },
+        ).optional()?;
+        Ok(result)
+    }
+
+    fn list_for_thread(&self, thread_id: &str) -> Result<Vec<RedactedPostRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, thread_id, author_peer_id, parent_post_ids, known_child_ids, redaction_reason, discovered_at
+            FROM redacted_posts
+            WHERE thread_id = ?1
+            ORDER BY discovered_at
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![thread_id], |row| {
+            Ok(RedactedPostRecord {
+                id: row.get(0)?,
+                thread_id: row.get(1)?,
+                author_peer_id: row.get(2)?,
+                parent_post_ids: row.get(3)?,
+                known_child_ids: row.get(4)?,
+                redaction_reason: row.get(5)?,
+                discovered_at: row.get(6)?,
+            })
+        })?;
+
+        let mut posts = Vec::new();
+        for row in rows {
+            posts.push(row?);
+        }
+        Ok(posts)
     }
 }

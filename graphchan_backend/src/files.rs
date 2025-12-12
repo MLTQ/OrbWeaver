@@ -292,6 +292,9 @@ mod tests {
                     creator_peer_id: None,
                     created_at: now_utc_iso(),
                     pinned: false,
+                    thread_hash: None,
+                    visibility: "social".to_string(),
+                    topic_secret: None,
                 })?;
                 repos.posts().create(&PostRecord {
                     id: "post-1".into(),
@@ -359,6 +362,9 @@ mod tests {
                     creator_peer_id: None,
                     created_at: now_utc_iso(),
                     pinned: false,
+                    thread_hash: None,
+                    visibility: "social".to_string(),
+                    topic_secret: None,
                 })?;
                 repos.posts().create(&PostRecord {
                     id: "post-1".into(),
@@ -432,6 +438,9 @@ mod tests {
                     creator_peer_id: None,
                     created_at: now_utc_iso(),
                     pinned: false,
+                    thread_hash: None,
+                    visibility: "social".to_string(),
+                    topic_secret: None,
                 })?;
                 repos.posts().create(&PostRecord {
                     id: "post-1".into(),

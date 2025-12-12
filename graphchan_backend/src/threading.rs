@@ -129,6 +129,8 @@ impl ThreadService {
             created_at: created_at.clone(),
             pinned: input.pinned.unwrap_or(false),
             thread_hash: None, // Will be calculated after posts are added
+            visibility: "social".to_string(),
+            topic_secret: None,
         };
 
         let initial_post_body = input.body.clone();
@@ -204,6 +206,8 @@ pub struct ThreadSummary {
     pub creator_peer_id: Option<String>,
     pub created_at: String,
     pub pinned: bool,
+    pub visibility: String,
+    pub topic_secret: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -264,6 +268,8 @@ impl ThreadSummary {
             creator_peer_id: record.creator_peer_id,
             created_at: record.created_at,
             pinned: record.pinned,
+            visibility: record.visibility,
+            topic_secret: record.topic_secret,
         }
     }
 }

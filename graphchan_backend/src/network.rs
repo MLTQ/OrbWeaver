@@ -1,6 +1,7 @@
 use crate::config::{GraphchanPaths, NetworkConfig};
 mod events;
 pub mod ingest;
+pub mod topics;
 
 use crate::database::Database;
 use crate::database::repositories::{ThreadRepository, PostRepository, PeerRepository};
