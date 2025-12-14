@@ -382,3 +382,121 @@ pub fn unfollow_peer(client: ApiClient, tx: Sender<AppMessage>, peer_id: String)
         }
     });
 }
+
+// Direct Message tasks
+
+pub fn load_conversations(client: ApiClient, tx: Sender<AppMessage>) {
+    thread::spawn(move || {
+        let result = client.list_conversations();
+        if tx.send(AppMessage::ConversationsLoaded(result)).is_err() {
+            error!("failed to send ConversationsLoaded message");
+        }
+    });
+}
+
+pub fn load_messages(client: ApiClient, tx: Sender<AppMessage>, peer_id: String) {
+    thread::spawn(move || {
+        let result = client.get_messages(&peer_id, 50);
+        let message = AppMessage::MessagesLoaded { peer_id, result };
+        if tx.send(message).is_err() {
+            error!("failed to send MessagesLoaded message");
+        }
+    });
+}
+
+pub fn send_dm(client: ApiClient, tx: Sender<AppMessage>, to_peer_id: String, body: String) {
+    thread::spawn(move || {
+        let result = client.send_dm(&to_peer_id, &body);
+        let message = AppMessage::DmSent {
+            to_peer_id,
+            result,
+        };
+        if tx.send(message).is_err() {
+            error!("failed to send DmSent message");
+        }
+    });
+}
+
+pub fn load_blocked_peers(client: ApiClient, tx: Sender<AppMessage>) {
+    thread::spawn(move || {
+        let result = client.list_blocked_peers();
+        let message = AppMessage::BlockedPeersLoaded(result);
+        if tx.send(message).is_err() {
+            error!("failed to send BlockedPeersLoaded message");
+        }
+    });
+}
+
+pub fn block_peer(client: ApiClient, tx: Sender<AppMessage>, peer_id: String, reason: Option<String>) {
+    thread::spawn(move || {
+        let result = client.block_peer(&peer_id, reason);
+        let message = AppMessage::PeerBlocked { peer_id, result };
+        if tx.send(message).is_err() {
+            error!("failed to send PeerBlocked message");
+        }
+    });
+}
+
+pub fn unblock_peer(client: ApiClient, tx: Sender<AppMessage>, peer_id: String) {
+    thread::spawn(move || {
+        let result = client.unblock_peer(&peer_id);
+        let message = AppMessage::PeerUnblocked { peer_id, result };
+        if tx.send(message).is_err() {
+            error!("failed to send PeerUnblocked message");
+        }
+    });
+}
+
+pub fn load_blocklists(client: ApiClient, tx: Sender<AppMessage>) {
+    thread::spawn(move || {
+        let result = client.list_blocklists();
+        let message = AppMessage::BlocklistsLoaded(result);
+        if tx.send(message).is_err() {
+            error!("failed to send BlocklistsLoaded message");
+        }
+    });
+}
+
+pub fn subscribe_blocklist(
+    client: ApiClient,
+    tx: Sender<AppMessage>,
+    blocklist_id: String,
+    maintainer_peer_id: String,
+    name: String,
+    description: Option<String>,
+    auto_apply: bool,
+) {
+    thread::spawn(move || {
+        let request = crate::models::SubscribeBlocklistRequest {
+            maintainer_peer_id,
+            name,
+            description,
+            auto_apply,
+        };
+        let result = client.subscribe_blocklist(&request);
+        let message = AppMessage::BlocklistSubscribed { blocklist_id, result };
+        if tx.send(message).is_err() {
+            error!("failed to send BlocklistSubscribed message");
+        }
+    });
+}
+
+pub fn unsubscribe_blocklist(client: ApiClient, tx: Sender<AppMessage>, blocklist_id: String) {
+    thread::spawn(move || {
+        let result = client.unsubscribe_blocklist(&blocklist_id);
+        let message = AppMessage::BlocklistUnsubscribed { blocklist_id, result };
+        if tx.send(message).is_err() {
+            error!("failed to send BlocklistUnsubscribed message");
+        }
+    });
+}
+
+pub fn load_blocklist_entries(client: ApiClient, tx: Sender<AppMessage>, blocklist_id: String) {
+    thread::spawn(move || {
+        let result = client.list_blocklist_entries(&blocklist_id);
+        let message = AppMessage::BlocklistEntriesLoaded { blocklist_id, result };
+        if tx.send(message).is_err() {
+            error!("failed to send BlocklistEntriesLoaded message");
+        }
+    });
+}

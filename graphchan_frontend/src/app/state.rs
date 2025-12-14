@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use eframe::egui;
 
-use crate::models::{FileResponse, PeerView, ReactionsResponse, ThreadDetails, ThreadSummary};
+use crate::models::{
+    ConversationView, DirectMessageView, FileResponse, PeerView, ReactionsResponse, ThreadDetails,
+    ThreadSummary,
+};
 
 #[derive(Default)]
 pub struct CreateThreadState {
@@ -31,6 +34,8 @@ pub enum ViewState {
     FollowingCatalog(PeerView),
     Import,
     Settings,
+    Conversation(ConversationState),
+    Blocking,
 }
 
 #[derive(Default)]
@@ -150,4 +155,62 @@ pub struct GraphNode {
 pub struct LoadedImage {
     pub size: [usize; 2],
     pub pixels: Vec<u8>,
+}
+
+// Direct Messages State
+
+#[derive(Default)]
+pub struct ConversationState {
+    pub peer_id: String,
+    pub peer_info: Option<PeerView>,
+    pub messages: Vec<DirectMessageView>,
+    pub messages_loading: bool,
+    pub messages_error: Option<String>,
+    pub new_message_body: String,
+    pub sending: bool,
+    pub send_error: Option<String>,
+}
+
+#[derive(Default)]
+pub struct DmState {
+    pub conversations: Vec<ConversationView>,
+    pub conversations_loading: bool,
+    pub conversations_error: Option<String>,
+    pub unread_count: usize,
+}
+
+// Blocking State
+
+#[derive(Default)]
+pub struct BlockingState {
+    // Blocked peers
+    pub blocked_peers: Vec<crate::models::BlockedPeerView>,
+    pub blocked_peers_loading: bool,
+    pub blocked_peers_error: Option<String>,
+
+    // Block new peer form
+    pub new_block_peer_id: String,
+    pub new_block_reason: String,
+    pub blocking_in_progress: bool,
+    pub block_error: Option<String>,
+
+    // Blocklists
+    pub blocklists: Vec<crate::models::BlocklistSubscriptionView>,
+    pub blocklists_loading: bool,
+    pub blocklists_error: Option<String>,
+
+    // Subscribe to blocklist form
+    pub new_blocklist_id: String,
+    pub new_blocklist_maintainer: String,
+    pub new_blocklist_name: String,
+    pub new_blocklist_description: String,
+    pub new_blocklist_auto_apply: bool,
+    pub subscribing_in_progress: bool,
+    pub subscribe_error: Option<String>,
+
+    // Viewing blocklist entries
+    pub viewing_blocklist_id: Option<String>,
+    pub blocklist_entries: Vec<crate::models::BlocklistEntryView>,
+    pub blocklist_entries_loading: bool,
+    pub blocklist_entries_error: Option<String>,
 }

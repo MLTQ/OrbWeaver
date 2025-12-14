@@ -6,8 +6,10 @@ use reqwest::blocking::Client;
 use reqwest::Url;
 
 use crate::models::{
-    AddPeerRequest, CreatePostInput, CreateThreadInput, FileResponse, PeerView, PostResponse,
-    PostView, ReactionsResponse, ThreadDetails, ThreadSummary,
+    AddPeerRequest, BlockedPeerView, BlocklistEntryView, BlocklistSubscriptionView,
+    BlockPeerRequest, ConversationView, CreatePostInput, CreateThreadInput, DirectMessageView,
+    FileResponse, PeerView, PostResponse, PostView, ReactionsResponse, SendDmRequest,
+    SubscribeBlocklistRequest, ThreadDetails, ThreadSummary, UnreadCountResponse,
 };
 
 static SHARED_CLIENT: OnceLock<Client> = OnceLock::new();
@@ -233,6 +235,87 @@ impl ApiClient {
 
     pub fn get_reactions(&self, post_id: &str) -> Result<ReactionsResponse> {
         let url = format!("{}/posts/{}/reactions", self.base_url(), post_id);
+        let response = self.client.get(&url).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
+    // Direct Message methods
+
+    pub fn list_conversations(&self) -> Result<Vec<ConversationView>> {
+        let url = self.url("/dms/conversations")?;
+        let response = self.client.get(url).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
+    pub fn send_dm(&self, to_peer_id: &str, body: &str) -> Result<DirectMessageView> {
+        let url = self.url("/dms/send")?;
+        let request = SendDmRequest {
+            to_peer_id: to_peer_id.to_string(),
+            body: body.to_string(),
+        };
+        let response = self.client.post(url).json(&request).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
+    pub fn get_messages(&self, peer_id: &str, limit: usize) -> Result<Vec<DirectMessageView>> {
+        let url = format!("{}/dms/{}/messages?limit={}", self.base_url(), peer_id, limit);
+        let response = self.client.get(&url).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
+    pub fn mark_message_read(&self, message_id: &str) -> Result<()> {
+        let url = format!("{}/dms/messages/{}/read", self.base_url(), message_id);
+        self.client.post(&url).send()?.error_for_status()?;
+        Ok(())
+    }
+
+    pub fn get_unread_count(&self) -> Result<UnreadCountResponse> {
+        let url = self.url("/dms/unread/count")?;
+        let response = self.client.get(url).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
+    // Blocking and Moderation methods
+
+    pub fn list_blocked_peers(&self) -> Result<Vec<BlockedPeerView>> {
+        let url = self.url("/blocking/peers")?;
+        let response = self.client.get(url).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
+    pub fn block_peer(&self, peer_id: &str, reason: Option<String>) -> Result<BlockedPeerView> {
+        let url = format!("{}/blocking/peers/{}", self.base_url(), peer_id);
+        let request = BlockPeerRequest { reason };
+        let response = self.client.post(&url).json(&request).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
+    pub fn unblock_peer(&self, peer_id: &str) -> Result<()> {
+        let url = format!("{}/blocking/peers/{}", self.base_url(), peer_id);
+        self.client.delete(&url).send()?.error_for_status()?;
+        Ok(())
+    }
+
+    pub fn list_blocklists(&self) -> Result<Vec<BlocklistSubscriptionView>> {
+        let url = self.url("/blocking/blocklists")?;
+        let response = self.client.get(url).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
+    pub fn subscribe_blocklist(&self, request: &SubscribeBlocklistRequest) -> Result<BlocklistSubscriptionView> {
+        let url = self.url("/blocking/blocklists")?;
+        let response = self.client.post(url).json(request).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
+    pub fn unsubscribe_blocklist(&self, blocklist_id: &str) -> Result<()> {
+        let url = format!("{}/blocking/blocklists/{}", self.base_url(), blocklist_id);
+        self.client.delete(&url).send()?.error_for_status()?;
+        Ok(())
+    }
+
+    pub fn list_blocklist_entries(&self, blocklist_id: &str) -> Result<Vec<BlocklistEntryView>> {
+        let url = format!("{}/blocking/blocklists/{}/entries", self.base_url(), blocklist_id);
         let response = self.client.get(&url).send()?.error_for_status()?;
         Ok(response.json()?)
     }

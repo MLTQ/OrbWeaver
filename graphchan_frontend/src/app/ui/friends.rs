@@ -6,6 +6,7 @@ pub fn render_friends_page(app: &mut GraphchanApp, ui: &mut egui::Ui) {
     ui.add_space(20.0);
 
     let mut peer_to_unfollow: Option<String> = None;
+    let mut peer_to_message: Option<crate::models::PeerView> = None;
 
     // Add Peer Section
     egui::Frame::group(ui.style())
@@ -59,7 +60,7 @@ pub fn render_friends_page(app: &mut GraphchanApp, ui: &mut egui::Ui) {
             .striped(true)
             .show(ui, |ui| {
                 ui.label(egui::RichText::new("Username").strong());
-                ui.label(egui::RichText::new("Friendcode").strong());
+                ui.label(egui::RichText::new("Peer ID").strong());
                 ui.label(egui::RichText::new("Actions").strong());
                 ui.end_row();
 
@@ -71,11 +72,14 @@ pub fn render_friends_page(app: &mut GraphchanApp, ui: &mut egui::Ui) {
                         app.view = crate::app::state::ViewState::FollowingCatalog(peer.clone());
                     }
 
-                    // Friendcode
-                    ui.label(peer.friendcode.as_deref().unwrap_or("Unknown"));
+                    // Peer ID (shorter than friendcode)
+                    ui.label(egui::RichText::new(&peer.id).monospace().size(10.0));
 
                     // Actions
                     ui.horizontal(|ui| {
+                        if ui.button("💬 Message").clicked() {
+                            peer_to_message = Some(peer.clone());
+                        }
                         if ui.button("View Profile").clicked() {
                             app.show_identity = true;
                             app.identity_state.inspected_peer = Some(peer.clone());
@@ -90,8 +94,12 @@ pub fn render_friends_page(app: &mut GraphchanApp, ui: &mut egui::Ui) {
             });
     }
 
-    // Handle unfollow action
+    // Handle actions
     if let Some(peer_id) = peer_to_unfollow {
         crate::app::tasks::unfollow_peer(app.api.clone(), app.tx.clone(), peer_id);
+    }
+
+    if let Some(peer) = peer_to_message {
+        super::conversations::open_conversation_with_peer(app, peer);
     }
 }

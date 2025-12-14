@@ -3,7 +3,11 @@ use std::collections::{HashMap, HashSet};
 use eframe::egui;
 use log::error;
 
-use crate::models::{FileResponse, PeerView, PostView, ReactionsResponse, ThreadDetails, ThreadSummary};
+use crate::models::{
+    BlockedPeerView, BlocklistEntryView, BlocklistSubscriptionView, ConversationView,
+    DirectMessageView, FileResponse, PeerView, PostView, ReactionsResponse, ThreadDetails,
+    ThreadSummary,
+};
 
 use super::state::{
     CreateThreadState, GraphNode, LoadedImage, ThreadDisplayMode, ThreadState, ViewState,
@@ -68,6 +72,37 @@ pub enum AppMessage {
     ReactionRemoved {
         post_id: String,
         result: Result<(), anyhow::Error>,
+    },
+    ConversationsLoaded(Result<Vec<ConversationView>, anyhow::Error>),
+    MessagesLoaded {
+        peer_id: String,
+        result: Result<Vec<DirectMessageView>, anyhow::Error>,
+    },
+    DmSent {
+        to_peer_id: String,
+        result: Result<DirectMessageView, anyhow::Error>,
+    },
+    BlockedPeersLoaded(Result<Vec<BlockedPeerView>, anyhow::Error>),
+    PeerBlocked {
+        peer_id: String,
+        result: Result<BlockedPeerView, anyhow::Error>,
+    },
+    PeerUnblocked {
+        peer_id: String,
+        result: Result<(), anyhow::Error>,
+    },
+    BlocklistsLoaded(Result<Vec<BlocklistSubscriptionView>, anyhow::Error>),
+    BlocklistSubscribed {
+        blocklist_id: String,
+        result: Result<BlocklistSubscriptionView, anyhow::Error>,
+    },
+    BlocklistUnsubscribed {
+        blocklist_id: String,
+        result: Result<(), anyhow::Error>,
+    },
+    BlocklistEntriesLoaded {
+        blocklist_id: String,
+        result: Result<Vec<BlocklistEntryView>, anyhow::Error>,
     },
 }
 
@@ -538,6 +573,150 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                     }
                     Err(err) => {
                         error!("Failed to remove reaction from post {}: {}", post_id, err);
+                    }
+                }
+            }
+            AppMessage::ConversationsLoaded(result) => {
+                app.dm_state.conversations_loading = false;
+                match result {
+                    Ok(conversations) => {
+                        app.dm_state.conversations = conversations;
+                        app.dm_state.conversations_error = None;
+                    }
+                    Err(err) => {
+                        error!("Failed to load conversations: {}", err);
+                        app.dm_state.conversations_error = Some(err.to_string());
+                    }
+                }
+            }
+            AppMessage::MessagesLoaded { peer_id, result } => {
+                if let ViewState::Conversation(ref mut state) = app.view {
+                    if state.peer_id == peer_id {
+                        state.messages_loading = false;
+                        match result {
+                            Ok(messages) => {
+                                state.messages = messages;
+                                state.messages_error = None;
+                            }
+                            Err(err) => {
+                                error!("Failed to load messages for {}: {}", peer_id, err);
+                                state.messages_error = Some(err.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            AppMessage::DmSent { to_peer_id, result } => {
+                if let ViewState::Conversation(ref mut state) = app.view {
+                    if state.peer_id == to_peer_id {
+                        state.sending = false;
+                        match result {
+                            Ok(message) => {
+                                state.messages.push(message);
+                                state.new_message_body.clear();
+                                state.send_error = None;
+                                // Reload conversations to update unread counts
+                                app.spawn_load_conversations();
+                            }
+                            Err(err) => {
+                                error!("Failed to send DM to {}: {}", to_peer_id, err);
+                                state.send_error = Some(err.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            AppMessage::BlockedPeersLoaded(result) => {
+                app.blocking_state.blocked_peers_loading = false;
+                match result {
+                    Ok(peers) => {
+                        app.blocking_state.blocked_peers = peers;
+                        app.blocking_state.blocked_peers_error = None;
+                    }
+                    Err(err) => {
+                        error!("Failed to load blocked peers: {}", err);
+                        app.blocking_state.blocked_peers_error = Some(err.to_string());
+                    }
+                }
+            }
+            AppMessage::PeerBlocked { peer_id, result } => {
+                app.blocking_state.blocking_in_progress = false;
+                match result {
+                    Ok(blocked) => {
+                        app.blocking_state.blocked_peers.push(blocked);
+                        app.blocking_state.new_block_peer_id.clear();
+                        app.blocking_state.new_block_reason.clear();
+                        app.blocking_state.block_error = None;
+                    }
+                    Err(err) => {
+                        error!("Failed to block peer {}: {}", peer_id, err);
+                        app.blocking_state.block_error = Some(err.to_string());
+                    }
+                }
+            }
+            AppMessage::PeerUnblocked { peer_id, result } => {
+                match result {
+                    Ok(_) => {
+                        app.blocking_state.blocked_peers.retain(|p| p.peer_id != peer_id);
+                    }
+                    Err(err) => {
+                        error!("Failed to unblock peer {}: {}", peer_id, err);
+                        app.blocking_state.blocked_peers_error = Some(err.to_string());
+                    }
+                }
+            }
+            AppMessage::BlocklistsLoaded(result) => {
+                app.blocking_state.blocklists_loading = false;
+                match result {
+                    Ok(blocklists) => {
+                        app.blocking_state.blocklists = blocklists;
+                        app.blocking_state.blocklists_error = None;
+                    }
+                    Err(err) => {
+                        error!("Failed to load blocklists: {}", err);
+                        app.blocking_state.blocklists_error = Some(err.to_string());
+                    }
+                }
+            }
+            AppMessage::BlocklistSubscribed { blocklist_id, result } => {
+                app.blocking_state.subscribing_in_progress = false;
+                match result {
+                    Ok(subscription) => {
+                        app.blocking_state.blocklists.push(subscription);
+                        app.blocking_state.new_blocklist_id.clear();
+                        app.blocking_state.new_blocklist_maintainer.clear();
+                        app.blocking_state.new_blocklist_name.clear();
+                        app.blocking_state.new_blocklist_description.clear();
+                        app.blocking_state.new_blocklist_auto_apply = false;
+                        app.blocking_state.subscribe_error = None;
+                    }
+                    Err(err) => {
+                        error!("Failed to subscribe to blocklist {}: {}", blocklist_id, err);
+                        app.blocking_state.subscribe_error = Some(err.to_string());
+                    }
+                }
+            }
+            AppMessage::BlocklistUnsubscribed { blocklist_id, result } => {
+                match result {
+                    Ok(_) => {
+                        app.blocking_state.blocklists.retain(|b| b.id != blocklist_id);
+                    }
+                    Err(err) => {
+                        error!("Failed to unsubscribe from blocklist {}: {}", blocklist_id, err);
+                        app.blocking_state.blocklists_error = Some(err.to_string());
+                    }
+                }
+            }
+            AppMessage::BlocklistEntriesLoaded { blocklist_id, result } => {
+                app.blocking_state.blocklist_entries_loading = false;
+                match result {
+                    Ok(entries) => {
+                        app.blocking_state.blocklist_entries = entries;
+                        app.blocking_state.blocklist_entries_error = None;
+                    }
+                    Err(err) => {
+                        error!("Failed to load entries for blocklist {}: {}", blocklist_id, err);
+                        app.blocking_state.blocklist_entries_error = Some(err.to_string());
                     }
                 }
             }

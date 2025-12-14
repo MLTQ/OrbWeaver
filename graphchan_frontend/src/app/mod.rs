@@ -19,8 +19,8 @@ mod ui;
 
 use messages::AppMessage;
 use state::{
-    CreateThreadState, ImporterState, LoadedImage, RedditImporterState, ThreadDisplayMode, ThreadState,
-    ViewState,
+    BlockingState, ConversationState, CreateThreadState, DmState, ImporterState, LoadedImage,
+    RedditImporterState, ThreadDisplayMode, ThreadState, ViewState,
 };
 
 // Maximum number of concurrent image downloads to prevent overwhelming the backend
@@ -110,6 +110,8 @@ pub struct GraphchanApp {
     audio_device: Option<AudioDevice>,
     video_volume: f32, // 0.0 to 1.0
     show_ignored_threads: bool, // Toggle to show/hide ignored threads in peer catalog
+    dm_state: DmState,
+    blocking_state: BlockingState,
 }
 
 #[derive(Debug, Clone)]
@@ -262,9 +264,14 @@ impl GraphchanApp {
             audio_device,
             video_volume: 0.8, // Default to 80% volume
             show_ignored_threads: false, // Default to hiding ignored threads
+            dm_state: DmState::default(),
+            blocking_state: BlockingState::default(),
         };
         app.spawn_load_threads();
         app.spawn_load_peers();
+        app.spawn_load_conversations();
+        app.spawn_load_blocked_peers();
+        app.spawn_load_blocklists();
         app
     }
 
@@ -333,6 +340,119 @@ impl GraphchanApp {
 
     fn spawn_load_peers(&mut self) {
         tasks::load_peers(self.api.clone(), self.tx.clone());
+    }
+
+    fn spawn_load_conversations(&mut self) {
+        if self.dm_state.conversations_loading {
+            return;
+        }
+        self.dm_state.conversations_loading = true;
+        self.dm_state.conversations_error = None;
+        tasks::load_conversations(self.api.clone(), self.tx.clone());
+    }
+
+    fn spawn_load_messages(&mut self, state: &mut ConversationState) {
+        if state.messages_loading {
+            return;
+        }
+        state.messages_loading = true;
+        state.messages_error = None;
+        tasks::load_messages(self.api.clone(), self.tx.clone(), state.peer_id.clone());
+    }
+
+    fn spawn_send_dm(&mut self, state: &mut ConversationState) {
+        let body = state.new_message_body.trim().to_string();
+        if body.is_empty() {
+            state.send_error = Some("Message cannot be empty".into());
+            return;
+        }
+        state.sending = true;
+        state.send_error = None;
+        tasks::send_dm(
+            self.api.clone(),
+            self.tx.clone(),
+            state.peer_id.clone(),
+            body,
+        );
+    }
+
+    fn spawn_load_blocked_peers(&mut self) {
+        if self.blocking_state.blocked_peers_loading {
+            return;
+        }
+        self.blocking_state.blocked_peers_loading = true;
+        self.blocking_state.blocked_peers_error = None;
+        tasks::load_blocked_peers(self.api.clone(), self.tx.clone());
+    }
+
+    fn spawn_block_peer(&mut self, state: &mut state::BlockingState) {
+        let peer_id = state.new_block_peer_id.trim().to_string();
+        if peer_id.is_empty() {
+            state.block_error = Some("Peer ID cannot be empty".into());
+            return;
+        }
+        let reason = if state.new_block_reason.trim().is_empty() {
+            None
+        } else {
+            Some(state.new_block_reason.trim().to_string())
+        };
+
+        state.blocking_in_progress = true;
+        state.block_error = None;
+        tasks::block_peer(self.api.clone(), self.tx.clone(), peer_id, reason);
+    }
+
+    fn spawn_unblock_peer(&mut self, peer_id: String) {
+        tasks::unblock_peer(self.api.clone(), self.tx.clone(), peer_id);
+    }
+
+    fn spawn_load_blocklists(&mut self) {
+        if self.blocking_state.blocklists_loading {
+            return;
+        }
+        self.blocking_state.blocklists_loading = true;
+        self.blocking_state.blocklists_error = None;
+        tasks::load_blocklists(self.api.clone(), self.tx.clone());
+    }
+
+    fn spawn_subscribe_blocklist(&mut self, state: &mut state::BlockingState) {
+        let blocklist_id = state.new_blocklist_id.trim().to_string();
+        let maintainer = state.new_blocklist_maintainer.trim().to_string();
+        let name = state.new_blocklist_name.trim().to_string();
+
+        if blocklist_id.is_empty() || maintainer.is_empty() || name.is_empty() {
+            state.subscribe_error = Some("Blocklist ID, maintainer, and name are required".into());
+            return;
+        }
+
+        let description = if state.new_blocklist_description.trim().is_empty() {
+            None
+        } else {
+            Some(state.new_blocklist_description.trim().to_string())
+        };
+
+        state.subscribing_in_progress = true;
+        state.subscribe_error = None;
+        tasks::subscribe_blocklist(
+            self.api.clone(),
+            self.tx.clone(),
+            blocklist_id,
+            maintainer,
+            name,
+            description,
+            state.new_blocklist_auto_apply,
+        );
+    }
+
+    fn spawn_unsubscribe_blocklist(&mut self, blocklist_id: String) {
+        tasks::unsubscribe_blocklist(self.api.clone(), self.tx.clone(), blocklist_id);
+    }
+
+    fn spawn_load_blocklist_entries(&mut self, blocklist_id: String) {
+        self.blocking_state.viewing_blocklist_id = Some(blocklist_id.clone());
+        self.blocking_state.blocklist_entries_loading = true;
+        self.blocking_state.blocklist_entries_error = None;
+        tasks::load_blocklist_entries(self.api.clone(), self.tx.clone(), blocklist_id);
     }
 
     fn spawn_delete_thread(&mut self, thread_id: String) {
@@ -804,6 +924,8 @@ impl eframe::App for GraphchanApp {
             ViewState::FollowingCatalog(_) => "following_catalog",
             ViewState::Import => "import",
             ViewState::Settings => "settings",
+            ViewState::Conversation(_) => "conversation",
+            ViewState::Blocking => "blocking",
         };
 
         if view_type == "catalog" {
@@ -875,6 +997,38 @@ impl eframe::App for GraphchanApp {
             egui::CentralPanel::default().show(ctx, |ui| {
                 self.render_settings(ui);
             });
+        } else if view_type == "conversation" {
+            // Extract conversation state temporarily
+            let mut temp_state = if let ViewState::Conversation(state) = &mut self.view {
+                std::mem::replace(
+                    state,
+                    ConversationState::default(),
+                )
+            } else {
+                unreachable!()
+            };
+
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui::conversations::render_conversation(self, ui, &mut temp_state);
+            });
+
+            // Restore state
+            if let ViewState::Conversation(state) = &mut self.view {
+                *state = temp_state;
+            }
+        } else if view_type == "blocking" {
+            let mut temp_state = std::mem::take(&mut self.blocking_state);
+
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui::blocking::render_blocking_page(self, ui, &mut temp_state);
+            });
+
+            // Render blocklist entries dialog if viewing one (before restoring state)
+            if temp_state.viewing_blocklist_id.is_some() {
+                ui::blocking::render_blocklist_entries_dialog(self, ctx, &mut temp_state);
+            }
+
+            self.blocking_state = temp_state;
         }
 
 

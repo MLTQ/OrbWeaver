@@ -22,7 +22,17 @@ impl GraphchanApp {
             }
         });
 
-        self.render_catalog_split(ui, "My Threads", &my_threads, "Network Threads", &network_threads);
+        let conversations = self.dm_state.conversations.clone();
+
+        self.render_catalog_three_columns(
+            ui,
+            "Private Threads",
+            &conversations,
+            "My Threads",
+            &my_threads,
+            "Network Threads",
+            &network_threads
+        );
     }
 
     pub(crate) fn render_friend_catalog(&mut self, ui: &mut egui::Ui, peer: &crate::models::PeerView) {
@@ -47,12 +57,68 @@ impl GraphchanApp {
         );
     }
 
+    fn render_catalog_three_columns(
+        &mut self,
+        ui: &mut egui::Ui,
+        dm_title: &str,
+        conversations: &[crate::models::ConversationView],
+        title2: &str,
+        threads2: &[ThreadSummary],
+        title3: &str,
+        threads3: &[ThreadSummary],
+    ) {
+        if self.threads_loading && self.threads.is_empty() {
+            ui.add(egui::Spinner::new());
+        }
+        if let Some(err) = &self.threads_error {
+            ui.colored_label(Color32::LIGHT_RED, err);
+            if ui.button("Retry").clicked() {
+                self.spawn_load_threads();
+            }
+            ui.separator();
+        }
+
+        ui.columns(3, |columns| {
+            // Column 1: Private Threads (DMs)
+            columns[0].vertical(|ui| {
+                ui.heading(dm_title);
+                ui.add_space(10.0);
+
+                if self.dm_state.conversations_loading && conversations.is_empty() {
+                    ui.add(egui::Spinner::new());
+                }
+                if let Some(err) = &self.dm_state.conversations_error {
+                    ui.colored_label(Color32::LIGHT_RED, err);
+                    if ui.button("Retry").clicked() {
+                        self.spawn_load_conversations();
+                    }
+                }
+
+                super::conversations::render_conversations_list(self, ui, conversations);
+            });
+
+            // Column 2: My Threads
+            columns[1].vertical(|ui| {
+                ui.heading(title2);
+                ui.add_space(10.0);
+                self.render_thread_list(ui, threads2);
+            });
+
+            // Column 3: Network Threads
+            columns[2].vertical(|ui| {
+                ui.heading(title3);
+                ui.add_space(10.0);
+                self.render_thread_list(ui, threads3);
+            });
+        });
+    }
+
     fn render_catalog_split(
-        &mut self, 
-        ui: &mut egui::Ui, 
-        title1: &str, 
-        threads1: &[ThreadSummary], 
-        title2: &str, 
+        &mut self,
+        ui: &mut egui::Ui,
+        title1: &str,
+        threads1: &[ThreadSummary],
+        title2: &str,
         threads2: &[ThreadSummary]
     ) {
         if self.threads_loading && self.threads.is_empty() {

@@ -133,3 +133,87 @@ pub struct ReactionView {
     pub reactor_peer_id: String,
     pub created_at: String,
 }
+
+// Direct Message models
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationView {
+    pub id: String,
+    pub peer_id: String,
+    pub peer_username: Option<String>,
+    pub peer_alias: Option<String>,
+    pub last_message_at: Option<String>,
+    pub last_message_preview: Option<String>,
+    pub unread_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectMessageView {
+    pub id: String,
+    pub conversation_id: String,
+    pub from_peer_id: String,
+    pub to_peer_id: String,
+    pub body: String,
+    pub created_at: String,
+    pub read_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendDmRequest {
+    pub to_peer_id: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnreadCountResponse {
+    pub count: usize,
+}
+
+// Blocking and Moderation models
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockedPeerView {
+    pub peer_id: String,
+    pub peer_username: Option<String>,
+    pub peer_alias: Option<String>,
+    pub reason: Option<String>,
+    pub blocked_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlocklistSubscriptionView {
+    pub id: String,
+    pub maintainer_peer_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub auto_apply: bool,
+    pub last_synced_at: Option<String>,
+    pub entry_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlocklistEntryView {
+    pub peer_id: String,
+    pub peer_username: Option<String>,
+    pub peer_alias: Option<String>,
+    pub reason: Option<String>,
+    pub added_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockPeerRequest {
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubscribeBlocklistRequest {
+    pub maintainer_peer_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(default = "default_auto_apply")]
+    pub auto_apply: bool,
+}
+
+fn default_auto_apply() -> bool {
+    true
+}

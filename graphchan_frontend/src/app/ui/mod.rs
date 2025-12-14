@@ -1,5 +1,6 @@
 pub mod catalog;
 pub mod chronological;
+pub mod conversations;
 pub mod dialogs;
 pub mod drawer;
 pub mod graph;
@@ -12,3 +13,4 @@ pub mod sugiyama;
 pub mod input;
 pub mod settings;
 pub mod reaction_colors;
+pub mod blocking;
