@@ -39,6 +39,7 @@ pub trait FileRepository {
     fn attach(&self, record: &FileRecord) -> Result<()>;
     fn upsert(&self, record: &FileRecord) -> Result<()>;
     fn list_for_post(&self, post_id: &str) -> Result<Vec<FileRecord>>;
+    fn list_for_thread(&self, thread_id: &str) -> Result<Vec<FileRecord>>;
     fn get(&self, id: &str) -> Result<Option<FileRecord>>;
 }
 
@@ -293,10 +294,10 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
     }
 
     fn delete(&self, thread_id: &str) -> Result<()> {
+        // Real DELETE - will cascade to posts, post_relationships, files, thread_tickets
         self.conn.execute(
             r#"
-            UPDATE threads
-            SET deleted = 1
+            DELETE FROM threads
             WHERE id = ?1
             "#,
             params![thread_id],
@@ -639,6 +640,36 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
             "#,
         )?;
         let rows = stmt.query_map(params![post_id], |row| {
+            Ok(FileRecord {
+                id: row.get(0)?,
+                post_id: row.get(1)?,
+                path: row.get(2)?,
+                original_name: row.get(3)?,
+                mime: row.get(4)?,
+                blob_id: row.get(5)?,
+                size_bytes: row.get(6)?,
+                checksum: row.get(7)?,
+                ticket: row.get(8)?,
+            })
+        })?;
+        let mut files = Vec::new();
+        for row in rows {
+            files.push(row?);
+        }
+        Ok(files)
+    }
+
+    fn list_for_thread(&self, thread_id: &str) -> Result<Vec<FileRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT f.id, f.post_id, f.path, f.original_name, f.mime, f.blob_id, f.size_bytes, f.checksum, f.ticket
+            FROM files f
+            INNER JOIN posts p ON f.post_id = p.id
+            WHERE p.thread_id = ?1
+            ORDER BY f.id ASC
+            "#,
+        )?;
+        let rows = stmt.query_map(params![thread_id], |row| {
             Ok(FileRecord {
                 id: row.get(0)?,
                 post_id: row.get(1)?,

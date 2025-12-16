@@ -9,6 +9,12 @@ pub struct LlmClient {
     client: reqwest::Client,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DecisionResponse {
+    pub should_respond: bool,
+    pub reasoning: String,
+}
+
 #[derive(Debug, Serialize)]
 struct ChatCompletionRequest {
     model: String,
@@ -47,10 +53,15 @@ impl LlmClient {
 
     /// Generate a completion using the OpenAI API format
     pub async fn generate(&self, messages: Vec<Message>) -> Result<String> {
+        self.generate_with_model(messages, &self.model).await
+    }
+
+    /// Generate a completion with a specific model
+    pub async fn generate_with_model(&self, messages: Vec<Message>, model: &str) -> Result<String> {
         let url = format!("{}/chat/completions", self.api_url);
 
         let request = ChatCompletionRequest {
-            model: self.model.clone(),
+            model: model.to_string(),
             messages,
             temperature: Some(0.7),
             max_tokens: Some(2000),
@@ -87,5 +98,43 @@ impl LlmClient {
             .ok_or_else(|| anyhow::anyhow!("No response from LLM"))?;
 
         Ok(content)
+    }
+
+    /// Ask the LLM to decide whether to respond to a post
+    pub async fn decide_to_respond(
+        &self,
+        messages: Vec<Message>,
+        decision_model: Option<&str>,
+    ) -> Result<DecisionResponse> {
+        let model = decision_model.unwrap_or(&self.model);
+
+        let response = self.generate_with_model(messages, model).await?;
+
+        // Try to parse as JSON
+        match serde_json::from_str::<DecisionResponse>(&response) {
+            Ok(decision) => Ok(decision),
+            Err(_) => {
+                // If JSON parsing fails, try to extract from markdown code block
+                let json_content = if let Some(start) = response.find("```json") {
+                    let after_start = &response[start + 7..];
+                    if let Some(end) = after_start.find("```") {
+                        after_start[..end].trim()
+                    } else {
+                        &response
+                    }
+                } else if let Some(start) = response.find('{') {
+                    if let Some(end) = response.rfind('}') {
+                        &response[start..=end]
+                    } else {
+                        &response
+                    }
+                } else {
+                    &response
+                };
+
+                serde_json::from_str::<DecisionResponse>(json_content)
+                    .context("Failed to parse decision response as JSON")
+            }
+        }
     }
 }

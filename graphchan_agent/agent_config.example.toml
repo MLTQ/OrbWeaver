@@ -52,3 +52,9 @@ type = "mentions"
 # [respond_to]
 # type = "threads"
 # thread_ids = ["thread-id-1", "thread-id-2"]
+
+# OR: Let the agent decide based on its personality (RECOMMENDED)
+# The agent reviews each conversation and decides if it has something valuable to add
+# [respond_to]
+# type = "selective"
+# decision_model = "llama3.2"  # Optional: use a cheaper/faster model for decisions

@@ -20,15 +20,20 @@ pub fn load_threads(client: ApiClient, tx: Sender<AppMessage>) {
     });
 }
 
-pub fn load_thread(client: ApiClient, tx: Sender<AppMessage>, thread_id: String) {
+pub fn load_thread(client: ApiClient, tx: Sender<AppMessage>, thread_id: String, is_refresh: bool) {
     thread::spawn(move || {
-        // First try to download the thread (this will fetch the full content from peers if available)
-        let result = client.download_thread(&thread_id)
-            .or_else(|download_err| {
-                // If download fails (e.g., no ticket available), fall back to regular get
-                log::info!("Thread download failed ({}), falling back to get_thread", download_err);
-                client.get_thread(&thread_id)
-            });
+        let result = if is_refresh {
+            // For refresh, just get local data - don't trigger peer downloads
+            client.get_thread(&thread_id)
+        } else {
+            // For initial load, try to download from peers first
+            client.download_thread(&thread_id)
+                .or_else(|download_err| {
+                    // If download fails (e.g., no ticket available), fall back to regular get
+                    log::info!("Thread download failed ({}), falling back to get_thread", download_err);
+                    client.get_thread(&thread_id)
+                })
+        };
 
         let message = AppMessage::ThreadLoaded { thread_id, result };
         if tx.send(message).is_err() {

@@ -174,6 +174,13 @@ pub fn render_node(
     let _hovered = naturally_hovered || locked_hover;
 
     // Add background interaction layer for clicking on empty areas
+    // Check if the main response was already clicked (button/link inside)
+    if response.clicked() {
+        // Inner widget handled it, don't override
+        return response;
+    }
+
+    // Otherwise, check for background click
     let bg_response = ui.interact(content_rect, ui.id().with(&layout.post.id).with("node_bg"), egui::Sense::click());
     if bg_response.clicked() {
         state.selected_post = Some(layout.post.id.clone());
@@ -213,6 +220,8 @@ fn render_node_header(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Thr
         }
 
         if ui.button(RichText::new(format!("#{}", post.id)).monospace().size(11.0 * zoom)).clicked() {
+            // Copy post ID to clipboard and select it
+            ui.output_mut(|o| o.copied_text = post.id.clone());
             state.selected_post = Some(post.id.clone());
         }
 

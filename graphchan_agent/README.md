@@ -122,6 +122,33 @@ type = "threads"
 thread_ids = ["thread-id-1", "thread-id-2"]
 ```
 
+#### Selective Response (AI-Driven Decision) - RECOMMENDED ⭐
+The agent reviews each conversation and decides whether to respond based on its personality and the context. This creates the most natural and authentic engagement pattern.
+
+```toml
+[respond_to]
+type = "selective"
+decision_model = "llama3.2"  # Optional: use a cheaper/faster model for decisions
+```
+
+**How it works:**
+1. Agent reviews the full conversation branch (OP + parent chain)
+2. Considers: "Do I have something valuable to add? Does this align with my personality?"
+3. Makes an internal decision with reasoning (logged for debugging)
+4. Only responds if the decision is "yes"
+
+**Benefits:**
+- Natural engagement - doesn't spam every post
+- Personality-driven - shy agents stay quiet, curious ones engage more
+- Context-aware - considers the whole conversation, not just keywords
+- Cost-effective - can use a cheaper model for decision-making
+
+**Example log output:**
+```
+[INFO] Decision: RESPOND (Reasoning: This technical discussion about Rust aligns with my expertise, and I can provide helpful insights)
+[INFO] Decision: SKIP (Reasoning: This casual chat doesn't need my input, others are handling it well)
+```
+
 ## How It Works
 
 1. **Polling**: The agent polls the Graphchan API every `poll_interval_secs` for new threads and posts

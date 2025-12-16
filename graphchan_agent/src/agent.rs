@@ -131,12 +131,41 @@ impl Agent {
                 // If we got here, we're already in a thread we care about
                 true
             }
+            RespondStrategy::Selective { .. } => {
+                // For Selective, we always pass the initial check
+                // The actual decision happens in respond_to_post
+                true
+            }
         }
     }
 
     async fn respond_to_post(&self, thread: &ThreadDetails, post: &Post) -> Result<()> {
         // Build context from thread
         let messages = self.build_context(thread, post)?;
+
+        // If using Selective strategy, ask the LLM to decide first
+        if let RespondStrategy::Selective { decision_model } = &self.config.respond_to {
+            let decision_messages = self.build_decision_context(thread, post)?;
+
+            let decision = self
+                .llm
+                .decide_to_respond(
+                    decision_messages,
+                    decision_model.as_deref(),
+                )
+                .await
+                .context("Failed to get decision from LLM")?;
+
+            info!(
+                "Decision: {} (Reasoning: {})",
+                if decision.should_respond { "RESPOND" } else { "SKIP" },
+                decision.reasoning
+            );
+
+            if !decision.should_respond {
+                return Ok(());
+            }
+        }
 
         // Generate response
         let llm_response = self
@@ -212,6 +241,65 @@ impl Agent {
                 ("user".to_string(), p.body.clone())
             };
 
+            messages.push(Message { role, content });
+        }
+
+        Ok(messages)
+    }
+
+    fn build_decision_context(&self, thread: &ThreadDetails, post: &Post) -> Result<Vec<Message>> {
+        let mut messages = vec![Message {
+            role: "system".to_string(),
+            content: format!(
+                "{}\n\n\
+                You are deciding whether to respond to a conversation in a discussion thread. \
+                Your task is to review the conversation and decide if you have something valuable to add \
+                based on your personality and interests.\n\n\
+                Consider:\n\
+                - Does this conversation align with your personality and interests?\n\
+                - Do you have unique insights or knowledge to contribute?\n\
+                - Would your response add value or just be noise?\n\
+                - Is the conversation still active and relevant?\n\n\
+                Respond with a JSON object in this format:\n\
+                {{\n  \
+                  \"should_respond\": true or false,\n  \
+                  \"reasoning\": \"Brief explanation of your decision\"\n\
+                }}",
+                self.config.system_prompt
+            ),
+        }];
+
+        // Add thread context
+        messages.push(Message {
+            role: "system".to_string(),
+            content: format!(
+                "Thread: '{}'\n\nYou are reviewing this conversation to decide if you want to participate.",
+                thread.thread.title
+            ),
+        });
+
+        // Add the conversation chain
+        let conversation_chain = self.build_conversation_chain(thread, post);
+
+        // Add the OP if not in chain
+        if let Some(op) = thread.posts.first() {
+            if !conversation_chain.iter().any(|p| p.id == op.id) {
+                messages.push(Message {
+                    role: "user".to_string(),
+                    content: format!("Original post:\n{}", op.body),
+                });
+            }
+        }
+
+        // Add conversation chain
+        for p in &conversation_chain {
+            let bot_prefix = format!("[{}]: ", self.config.username);
+            let (role, content) = if p.body.starts_with(&bot_prefix) {
+                let stripped = p.body.strip_prefix(&bot_prefix).unwrap_or(&p.body);
+                ("assistant".to_string(), format!("Your previous message:\n{}", stripped))
+            } else {
+                ("user".to_string(), p.body.clone())
+            };
             messages.push(Message { role, content });
         }
 

@@ -112,6 +112,9 @@ pub struct GraphchanApp {
     show_ignored_threads: bool, // Toggle to show/hide ignored threads in peer catalog
     dm_state: DmState,
     blocking_state: BlockingState,
+    auto_refresh_enabled: bool, // Toggle for auto-refresh
+    is_refreshing: bool, // Track if currently refreshing
+    last_refresh_time: Option<std::time::Instant>, // Track animation timing
 }
 
 #[derive(Debug, Clone)]
@@ -266,6 +269,9 @@ impl GraphchanApp {
             show_ignored_threads: false, // Default to hiding ignored threads
             dm_state: DmState::default(),
             blocking_state: BlockingState::default(),
+            auto_refresh_enabled: true, // Auto-refresh on by default
+            is_refreshing: false,
+            last_refresh_time: None,
         };
         app.spawn_load_threads();
         app.spawn_load_peers();
@@ -281,11 +287,17 @@ impl GraphchanApp {
         }
         self.threads_loading = true;
         self.threads_error = None;
+        self.is_refreshing = true;
+        self.last_refresh_time = Some(std::time::Instant::now());
         tasks::load_threads(self.api.clone(), self.tx.clone());
     }
 
     fn spawn_load_thread(&mut self, thread_id: &str) {
-        tasks::load_thread(self.api.clone(), self.tx.clone(), thread_id.to_string());
+        tasks::load_thread(self.api.clone(), self.tx.clone(), thread_id.to_string(), false);
+    }
+
+    fn spawn_refresh_thread(&mut self, thread_id: &str) {
+        tasks::load_thread(self.api.clone(), self.tx.clone(), thread_id.to_string(), true);
     }
 
     fn spawn_create_thread(&mut self) {
@@ -868,6 +880,33 @@ impl eframe::App for GraphchanApp {
 
         self.process_messages();
 
+        // Request repaint for animation (show for 1 second after refresh starts)
+        let show_animation = self.last_refresh_time
+            .map(|t| t.elapsed().as_secs_f32() < 1.0)
+            .unwrap_or(false);
+        if show_animation {
+            ctx.request_repaint();
+        }
+
+        // Auto-refresh logic - poll every 5 seconds
+        if self.auto_refresh_enabled && !self.threads_loading {
+            let should_refresh = self.last_refresh_time
+                .map(|t| t.elapsed().as_secs() >= 5)
+                .unwrap_or(true);
+
+            if should_refresh {
+                self.spawn_load_threads();
+
+                // Also refresh current thread if viewing one
+                if let ViewState::Thread(state) = &self.view {
+                    if !state.is_loading {
+                        let thread_id = state.summary.id.clone();
+                        self.spawn_refresh_thread(&thread_id);
+                    }
+                }
+            }
+        }
+
         egui::TopBottomPanel::top("top_controls").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("Catalog").clicked() {
@@ -890,9 +929,50 @@ impl eframe::App for GraphchanApp {
                     if ui.button("⚙ Settings").clicked() {
                         self.view = ViewState::Settings;
                     }
-                    if ui.button("🔄 Refresh").clicked() {
-                        self.spawn_load_threads();
-                    }
+
+                    // Auto-refresh toggle with animated indicator
+                    ui.horizontal(|ui| {
+                        // Show animation for 1 second after refresh starts
+                        let show_animation = self.last_refresh_time
+                            .map(|t| t.elapsed().as_secs_f32() < 1.0)
+                            .unwrap_or(false);
+
+                        // Animated green dot
+                        let (dot_size, dot_color) = if show_animation {
+                            // Pulsing animation - faster and more pronounced
+                            let elapsed = self.last_refresh_time
+                                .map(|t| t.elapsed().as_secs_f32())
+                                .unwrap_or(0.0);
+                            let pulse = (elapsed * 8.0).sin().abs(); // Faster pulse
+                            let size = 5.0 + pulse * 4.0; // More pronounced (5-9px)
+                            let brightness = 50 + (pulse * 100.0) as u8; // Pulse brightness too
+                            (size, egui::Color32::from_rgb(brightness, 255, brightness))
+                        } else if self.auto_refresh_enabled {
+                            (6.0, egui::Color32::from_rgb(50, 205, 50)) // Static green
+                        } else {
+                            (6.0, egui::Color32::GRAY) // Gray when disabled
+                        };
+
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::vec2(dot_size, dot_size),
+                            egui::Sense::hover()
+                        );
+                        ui.painter().circle_filled(rect.center(), dot_size / 2.0, dot_color);
+
+                        // Toggle button
+                        let button_text = if self.auto_refresh_enabled {
+                            "🔄 Auto-Refresh: ON"
+                        } else {
+                            "🔄 Auto-Refresh: OFF"
+                        };
+
+                        if ui.button(button_text).clicked() {
+                            self.auto_refresh_enabled = !self.auto_refresh_enabled;
+                            if self.auto_refresh_enabled {
+                                self.spawn_load_threads();
+                            }
+                        }
+                    });
                 });
             });
 

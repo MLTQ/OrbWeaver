@@ -48,6 +48,13 @@ pub enum RespondStrategy {
 
     /// Respond to posts in specific threads
     Threads { thread_ids: Vec<String> },
+
+    /// Use LLM to decide whether to respond based on personality and context
+    Selective {
+        /// Optional: Model to use for decision-making (defaults to main model if not specified)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        decision_model: Option<String>,
+    },
 }
 
 impl Default for RespondStrategy {

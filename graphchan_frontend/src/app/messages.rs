@@ -111,6 +111,7 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
         match message {
             AppMessage::ThreadsLoaded(result) => {
                 app.threads_loading = false;
+                app.is_refreshing = false;
                 match result {
                     Ok(mut threads) => {
                         threads.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -137,29 +138,86 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                         match result {
                             Ok(details) => {
                                 post_ids = details.posts.iter().map(|p| p.id.clone()).collect();
-                                state.summary = details.thread.clone();
-                                state.graph_nodes = build_initial_graph(&details.posts);
-                                state.chronological_nodes = HashMap::new();
-                                state.sugiyama_nodes = HashMap::new();
-                                state.sim_start_time = None;
-                                
+
+                                // Check if this is a refresh (we already have details) or initial load
+                                let is_refresh = state.details.is_some();
+
+                                if is_refresh {
+                                    // Smooth update - only add new posts
+                                    let existing_post_ids: HashSet<String> = state.details.as_ref()
+                                        .map(|d| d.posts.iter().map(|p| p.id.clone()).collect())
+                                        .unwrap_or_default();
+
+                                    // Find new posts
+                                    let new_posts: Vec<_> = details.posts.iter()
+                                        .filter(|p| !existing_post_ids.contains(&p.id))
+                                        .collect();
+
+                                    if !new_posts.is_empty() {
+                                        // Add new posts to details
+                                        if let Some(current_details) = &mut state.details {
+                                            for new_post in &new_posts {
+                                                current_details.posts.push((*new_post).clone());
+                                            }
+                                        }
+
+                                        // Add new graph nodes for new posts only
+                                        for post in &new_posts {
+                                            if !state.graph_nodes.contains_key(&post.id) {
+                                                state.graph_nodes.insert(
+                                                    post.id.clone(),
+                                                    super::state::GraphNode {
+                                                        pos: egui::pos2(0.0, 0.0),
+                                                        vel: egui::vec2(0.0, 0.0),
+                                                        size: egui::vec2(300.0, 100.0),
+                                                        dragging: false,
+                                                        pinned: false,
+                                                    }
+                                                );
+                                            }
+                                        }
+
+                                        // Update chronological/sugiyama nodes will happen on next render
+                                        state.chronological_nodes.clear();
+                                        state.sugiyama_nodes.clear();
+                                    }
+
+                                    // Update thread summary but preserve viewport
+                                    state.summary = details.thread.clone();
+                                } else {
+                                    // Initial load - full reset
+                                    state.summary = details.thread.clone();
+                                    state.graph_nodes = build_initial_graph(&details.posts);
+                                    state.chronological_nodes = HashMap::new();
+                                    state.sugiyama_nodes = HashMap::new();
+                                    state.sim_start_time = None;
+                                    state.graph_zoom = 1.0;
+                                    state.graph_offset = egui::vec2(0.0, 0.0);
+                                    state.graph_dragging = false;
+                                    state.repulsion_force = 500.0;
+                                    state.sim_paused = false;
+                                }
+
                                 // Update global peer cache
                                 for peer in &details.peers {
                                     app.peers.insert(peer.id.clone(), peer.clone());
                                 }
-                                
-                                state.details = Some(details);
-                                state.graph_zoom = 1.0;
-                                state.graph_offset = egui::vec2(0.0, 0.0);
-                                state.graph_dragging = false;
+
+                                // Update details (or set for first time)
+                                if !is_refresh {
+                                    state.details = Some(details);
+                                }
+
                                 state.error = None;
-                                state.attachments.clear();
-                                state.attachments_errors.clear();
-                                state.attachments_loading.clear();
-                                state.reply_to.clear();
-                                state.repulsion_force = 500.0;
-                                state.sim_paused = false;
-                                state.draft_attachments.clear();
+
+                                // Only clear these on initial load
+                                if !is_refresh {
+                                    state.attachments.clear();
+                                    state.attachments_errors.clear();
+                                    state.attachments_loading.clear();
+                                    state.reply_to.clear();
+                                    state.draft_attachments.clear();
+                                }
                                 
                                 // Populate attachments from posts
                                 // Populate attachments from posts
