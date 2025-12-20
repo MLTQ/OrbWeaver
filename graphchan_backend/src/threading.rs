@@ -195,6 +195,7 @@ impl ThreadService {
             updated_at: stored_post.updated_at,
             parent_post_ids: input.parent_post_ids,
             files: Vec::new(),
+            thread_hash: None, // Only populated for network broadcast
         })
     }
 }
@@ -221,6 +222,9 @@ pub struct PostView {
     pub parent_post_ids: Vec<String>,
     #[serde(default)]
     pub files: Vec<crate::files::FileView>,
+    /// Thread hash for synchronization - allows peers to detect they're out of sync
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -285,6 +289,7 @@ impl PostView {
             updated_at: record.updated_at,
             parent_post_ids,
             files,
+            thread_hash: None, // Only populated for network broadcast
         }
     }
 }

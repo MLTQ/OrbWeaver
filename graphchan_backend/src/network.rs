@@ -451,10 +451,10 @@ impl NetworkHandle {
                         }
                     }
                     Ok(iroh_gossip::api::Event::NeighborUp(peer_id)) => {
-                        tracing::debug!(peer = %peer_id.fmt_short(), topic = %topic_name, "neighbor up on thread topic");
+                        tracing::info!(peer = %peer_id.fmt_short(), topic = %topic_name, "🤝 neighbor UP on thread topic");
                     }
                     Ok(iroh_gossip::api::Event::NeighborDown(peer_id)) => {
-                        tracing::debug!(peer = %peer_id.fmt_short(), topic = %topic_name, "neighbor down on thread topic");
+                        tracing::info!(peer = %peer_id.fmt_short(), topic = %topic_name, "👋 neighbor DOWN on thread topic");
                     }
                     Ok(iroh_gossip::api::Event::Lagged) => {
                         tracing::warn!(topic = %topic_name, "gossip receiver lagged, some messages may have been dropped");

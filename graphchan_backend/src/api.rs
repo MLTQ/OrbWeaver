@@ -417,10 +417,20 @@ async fn create_post(
     }
 
     match service.create_post(payload) {
-        Ok(post) => {
-            // Broadcast the individual post update
-            let outbound = post.clone();
-            if let Err(err) = state.network.publish_post_update(outbound).await {
+        Ok(mut post) => {
+            // Calculate thread hash for synchronization
+            // Get all posts in thread to calculate the hash
+            let service_with_paths = ThreadService::with_file_paths(
+                state.database.clone(),
+                state.config.paths.clone()
+            );
+            if let Ok(Some(thread_details)) = service_with_paths.get_thread(&thread_id) {
+                let thread_hash = crate::threading::calculate_thread_hash(&thread_details.posts);
+                post.thread_hash = Some(thread_hash);
+            }
+
+            // Broadcast the post update with thread hash for synchronization
+            if let Err(err) = state.network.publish_post_update(post.clone()).await {
                 tracing::warn!(
                     error = ?err,
                     thread_id = %post.thread_id,
@@ -429,9 +439,8 @@ async fn create_post(
                 );
             }
 
-            // Note: We only broadcast the PostUpdate, not the full thread.
-            // If a peer doesn't have the thread yet, they'll see the post references it
-            // and can request the thread on-demand.
+            // Clear thread_hash before returning to client (they don't need it)
+            post.thread_hash = None;
 
             Ok((StatusCode::CREATED, Json(PostResponse { post })))
         }

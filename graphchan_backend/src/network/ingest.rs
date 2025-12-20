@@ -13,9 +13,16 @@ use blake3::Hasher;
 use iroh::endpoint::Endpoint;
 use iroh_blobs::store::fs::FsStore;
 use iroh_blobs::ticket::BlobTicket;
+use rusqlite::OptionalExtension;
 use std::fs;
 use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, Sender};
+
+/// Request to resynchronize a thread due to detected hash mismatch
+struct ResyncRequest {
+    thread_id: String,
+    ticket: BlobTicket,
+}
 
 pub async fn run_ingest_loop(
     database: Database,
@@ -28,7 +35,7 @@ pub async fn run_ingest_loop(
     tracing::info!("network ingest loop started");
     while let Some(message) = rx.recv().await {
         let peer = message.peer_id.clone();
-        if let Err(err) = handle_message(
+        match handle_message(
             &database,
             &paths,
             &publisher,
@@ -37,7 +44,46 @@ pub async fn run_ingest_loop(
             &blobs,
             &endpoint,
         ) {
-            tracing::warn!(error = ?err, ?peer, "failed to apply inbound gossip payload");
+            Ok(Some(resync_request)) => {
+                // Spawn background task to re-download thread
+                let db = database.clone();
+                let p = paths.clone();
+                let pub_clone = publisher.clone();
+                let blobs_clone = blobs.clone();
+                let ep = endpoint.clone();
+
+                tokio::spawn(async move {
+                    tracing::info!(
+                        thread_id = %resync_request.thread_id,
+                        "🔄 triggering automatic thread re-sync due to hash mismatch"
+                    );
+                    if let Err(err) = download_thread_snapshot_blob(
+                        &db,
+                        &p,
+                        &pub_clone,
+                        resync_request.ticket,
+                        blobs_clone,
+                        ep,
+                    ).await {
+                        tracing::warn!(
+                            error = ?err,
+                            thread_id = %resync_request.thread_id,
+                            "failed to auto-resync thread"
+                        );
+                    } else {
+                        tracing::info!(
+                            thread_id = %resync_request.thread_id,
+                            "✅ thread auto-resync completed successfully"
+                        );
+                    }
+                });
+            }
+            Ok(None) => {
+                // No resync needed
+            }
+            Err(err) => {
+                tracing::warn!(error = ?err, ?peer, "failed to apply inbound gossip payload");
+            }
         }
     }
     tracing::info!("network ingest loop shutting down");
@@ -51,7 +97,7 @@ fn handle_message(
     payload: EventPayload,
     blobs: &FsStore,
     endpoint: &Arc<Endpoint>,
-) -> Result<()> {
+) -> Result<Option<ResyncRequest>> {
     match payload {
         EventPayload::ThreadAnnouncement(announcement) => {
             tracing::info!(
@@ -61,9 +107,18 @@ fn handle_message(
                 announcer = %announcement.announcer_peer_id,
                 "📢 received thread announcement (will download on-demand)"
             );
-            apply_thread_announcement(database, announcement)
+            apply_thread_announcement(database, announcement)?;
+            Ok(None)
         }
-        EventPayload::PostUpdate(post) => apply_post_update(database, post),
+        EventPayload::PostUpdate(post) => {
+            tracing::info!(
+                post_id = %post.id,
+                thread_id = %post.thread_id,
+                author = ?post.author_peer_id,
+                "📝 received PostUpdate"
+            );
+            apply_post_update(database, post)
+        }
         EventPayload::FileAvailable(announcement) => {
             let fetch_needed = apply_file_announcement(database, paths, &announcement)?;
             if fetch_needed && announcement.ticket.is_some() {
@@ -89,7 +144,7 @@ fn handle_message(
                     "file needed but no blob ticket available"
                 );
             }
-            Ok(())
+            Ok(None)
         }
         EventPayload::FileRequest(request) => {
             if let Some(peer_id) = peer_id {
@@ -98,14 +153,21 @@ fn handle_message(
             } else {
                 tracing::debug!(file_id = %request.file_id, "received file request without peer_id");
             }
-            Ok(())
+            Ok(None)
         }
         EventPayload::FileChunk(chunk) => {
             tracing::info!(file_id = %chunk.file_id, size = %chunk.data.len(), "📦 received file chunk");
-            apply_file_chunk(database, paths, chunk)
+            apply_file_chunk(database, paths, chunk)?;
+            Ok(None)
         }
-        EventPayload::ProfileUpdate(update) => apply_profile_update(database, update),
-        EventPayload::ReactionUpdate(reaction) => apply_reaction_update(database, reaction),
+        EventPayload::ProfileUpdate(update) => {
+            apply_profile_update(database, update)?;
+            Ok(None)
+        }
+        EventPayload::ReactionUpdate(reaction) => {
+            apply_reaction_update(database, reaction)?;
+            Ok(None)
+        }
     }
 }
 
@@ -431,15 +493,90 @@ fn apply_thread_snapshot(
     Ok(())
 }
 
-fn apply_post_update(database: &Database, post: PostView) -> Result<()> {
+fn apply_post_update(database: &Database, post: PostView) -> Result<Option<ResyncRequest>> {
     database.with_repositories(|repos| {
         if repos.threads().get(&post.thread_id)?.is_none() {
-            tracing::debug!(
+            tracing::warn!(
                 thread_id = %post.thread_id,
                 post_id = %post.id,
-                "skipping post update because thread is unknown"
+                "⚠️ skipping PostUpdate - thread unknown (may need to download thread first)"
             );
-            return Ok(());
+            return Ok(None);
+        }
+
+        // Check thread hash for synchronization
+        let mut resync_request = None;
+        if let Some(remote_hash) = &post.thread_hash {
+            // Get current local posts and calculate local hash
+            let posts = repos.posts().list_for_thread(&post.thread_id)?;
+            let local_posts: Vec<PostView> = posts.iter().map(|p| {
+                let parents = repos.posts().parents_of(&p.id).unwrap_or_default();
+                let files = repos.files().list_for_post(&p.id).unwrap_or_default();
+                let file_views = files.into_iter()
+                    .map(crate::files::FileView::from_record)
+                    .collect();
+                PostView {
+                    id: p.id.clone(),
+                    thread_id: p.thread_id.clone(),
+                    author_peer_id: p.author_peer_id.clone(),
+                    body: p.body.clone(),
+                    created_at: p.created_at.clone(),
+                    updated_at: p.updated_at.clone(),
+                    parent_post_ids: parents,
+                    files: file_views,
+                    thread_hash: None,
+                }
+            }).collect();
+
+            let local_hash = crate::threading::calculate_thread_hash(&local_posts);
+
+            if &local_hash != remote_hash {
+                tracing::warn!(
+                    thread_id = %post.thread_id,
+                    post_id = %post.id,
+                    local_hash = %local_hash,
+                    remote_hash = %remote_hash,
+                    "🔄 thread hash mismatch detected - will trigger auto-resync"
+                );
+
+                // Check if we have a download ticket for this thread
+                let ticket_result = repos.conn().query_row(
+                    "SELECT ticket FROM thread_tickets WHERE thread_id = ?1",
+                    rusqlite::params![post.thread_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .context("failed to query thread_tickets");
+
+                if let Ok(Some(ticket_str)) = ticket_result {
+                    match ticket_str.parse::<BlobTicket>() {
+                        Ok(ticket) => {
+                            resync_request = Some(ResyncRequest {
+                                thread_id: post.thread_id.clone(),
+                                ticket,
+                            });
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = ?e,
+                                thread_id = %post.thread_id,
+                                "invalid blob ticket, cannot auto-resync"
+                            );
+                        }
+                    }
+                } else {
+                    tracing::warn!(
+                        thread_id = %post.thread_id,
+                        "no download ticket available, cannot auto-resync (need ThreadAnnouncement)"
+                    );
+                }
+            } else {
+                tracing::debug!(
+                    thread_id = %post.thread_id,
+                    hash = %local_hash,
+                    "thread hash matches - in sync"
+                );
+            }
         }
 
         // Ensure the author peer exists - create stub if unknown
@@ -466,7 +603,14 @@ fn apply_post_update(database: &Database, post: PostView) -> Result<()> {
 
         let posts_repo = repos.posts();
         upsert_post(&posts_repo, &post)?;
-        Ok(())
+
+        tracing::info!(
+            post_id = %post.id,
+            thread_id = %post.thread_id,
+            "✅ applied PostUpdate successfully"
+        );
+
+        Ok(resync_request)
     })
 }
 

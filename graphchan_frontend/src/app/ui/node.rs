@@ -166,31 +166,6 @@ pub fn render_node(
         }
     ).response;
 
-    // Update actual content rect for interaction
-    let naturally_hovered = ui.ctx().pointer_hover_pos()
-        .map(|pos| content_rect.contains(pos))
-        .unwrap_or(false);
-    let locked_hover = state.locked_hover_post.as_ref() == Some(&layout.post.id);
-    let _hovered = naturally_hovered || locked_hover;
-
-    // Add background interaction layer for clicking on empty areas
-    // Check if the main response was already clicked (button/link inside)
-    if response.clicked() {
-        // Inner widget handled it, don't override
-        return response;
-    }
-
-    // Otherwise, check for background click
-    let bg_response = ui.interact(content_rect, ui.id().with(&layout.post.id).with("node_bg"), egui::Sense::click());
-    if bg_response.clicked() {
-        state.selected_post = Some(layout.post.id.clone());
-        if state.locked_hover_post.as_ref() == Some(&layout.post.id) {
-            state.locked_hover_post = None;
-        } else {
-            state.locked_hover_post = Some(layout.post.id.clone());
-        }
-    }
-
     response
 }
 
