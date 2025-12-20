@@ -2,6 +2,8 @@ name: Release Build
 
 on:
   push:
+    branches:
+      - master
     tags:
       - 'v*'
   workflow_dispatch:
@@ -101,3 +103,48 @@ jobs:
         with:
           name: graphchan_desktop-linux
           path: target/release/graphchan_desktop
+
+  create-release:
+    needs: [build-macos, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release tag
+        id: release_info
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+            echo "is_tag=true" >> $GITHUB_OUTPUT
+          else
+            SHORT_SHA=$(git rev-parse --short HEAD)
+            TAG="build-${SHORT_SHA}-$(date +%Y%m%d-%H%M%S)"
+            echo "tag=${TAG}" >> $GITHUB_OUTPUT
+            echo "is_tag=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Package binaries
+        run: |
+          cd artifacts
+          tar -czf graphchan_desktop-macos.tar.gz -C graphchan_desktop-macos .
+          tar -czf graphchan_desktop-linux.tar.gz -C graphchan_desktop-linux .
+          mv *.tar.gz ..
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.release_info.outputs.tag }}
+          name: OrbWeaver ${{ steps.release_info.outputs.tag }}
+          draft: false
+          prerelease: ${{ steps.release_info.outputs.is_tag == 'false' }}
+          generate_release_notes: true
+          files: |
+            graphchan_desktop-macos.tar.gz
+            graphchan_desktop-linux.tar.gz
