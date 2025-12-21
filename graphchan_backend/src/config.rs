@@ -97,7 +97,7 @@ impl NetworkConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct GraphchanPaths {
     pub base: PathBuf,
     pub data_dir: PathBuf,

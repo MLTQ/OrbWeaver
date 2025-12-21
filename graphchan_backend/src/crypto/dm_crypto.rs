@@ -58,6 +58,7 @@ pub fn derive_dm_shared_secret(my_secret: &X25519StaticSecret, their_pubkey: &X2
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::RngCore;
 
     #[test]
     fn test_encrypt_decrypt_dm() {

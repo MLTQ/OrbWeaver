@@ -344,6 +344,7 @@ mod tests {
                 body: "Reply".into(),
                 parent_post_ids: vec![],
                 created_at: None,
+                ..Default::default()
             })
             .expect("create post");
         assert_eq!(post.body, "Reply");

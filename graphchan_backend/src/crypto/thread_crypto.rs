@@ -102,6 +102,7 @@ pub fn unwrap_thread_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::RngCore;
 
     #[test]
     fn test_encrypt_decrypt_roundtrip() {

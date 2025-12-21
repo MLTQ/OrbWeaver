@@ -724,7 +724,14 @@ mod tests {
 
     fn setup_conn() -> Connection {
         let conn = Connection::open_in_memory().expect("in-memory db");
-        conn.execute_batch(MIGRATIONS).expect("migrations");
+        conn.execute_batch(MIGRATIONS).expect("base migrations");
+
+        // Apply additional migrations that are normally run by Database::ensure_migrations()
+        // These will error if columns already exist, which is fine - we ignore the error
+        let _ = conn.execute("ALTER TABLE peers ADD COLUMN x25519_pubkey TEXT", []);
+        let _ = conn.execute("ALTER TABLE threads ADD COLUMN visibility TEXT DEFAULT 'social'", []);
+        let _ = conn.execute("ALTER TABLE threads ADD COLUMN topic_secret TEXT", []);
+
         conn
     }
 
@@ -736,9 +743,12 @@ mod tests {
         let peer = PeerRecord {
             id: "peer-1".into(),
             alias: Some("author".into()),
+            username: None,
+            bio: None,
             friendcode: None,
             iroh_peer_id: None,
             gpg_fingerprint: None,
+            x25519_pubkey: None,
             last_seen: None,
             trust_state: "unknown".into(),
             avatar_file_id: None,
@@ -752,6 +762,8 @@ mod tests {
             created_at: "2024-01-01T00:00:00Z".into(),
             pinned: false,
             thread_hash: None,
+            visibility: "social".into(),
+            topic_secret: None,
         };
         repos.threads().create(&thread).unwrap();
 
@@ -781,9 +793,12 @@ mod tests {
         let peer = PeerRecord {
             id: "peer-1".into(),
             alias: Some("alice".into()),
+            username: None,
+            bio: None,
             friendcode: Some("friend-code".into()),
             iroh_peer_id: Some("peer-id".into()),
             gpg_fingerprint: Some("fingerprint".into()),
+            x25519_pubkey: None,
             last_seen: Some("2024-01-01T00:00:00Z".into()),
             trust_state: "trusted".into(),
             avatar_file_id: None,
@@ -799,6 +814,8 @@ mod tests {
             created_at: "2024-01-01T00:00:00Z".into(),
             pinned: false,
             thread_hash: None,
+            visibility: "social".into(),
+            topic_secret: None,
         };
         repos.threads().create(&thread).unwrap();
 

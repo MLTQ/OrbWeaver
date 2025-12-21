@@ -106,6 +106,7 @@ async fn rest_roundtrip_with_file_upload() {
             body: Some("hello world".to_string()),
             creator_peer_id: None,
             pinned: Some(false),
+            ..Default::default()
         })
         .send()
         .await
@@ -127,6 +128,7 @@ async fn rest_roundtrip_with_file_upload() {
             author_peer_id: None,
             body: "second post".into(),
             parent_post_ids: vec![],
+            ..Default::default()
         })
         .send()
         .await
@@ -294,6 +296,7 @@ async fn two_node_gossip_replication() {
             body: Some("hello from A".to_string()),
             creator_peer_id: None,
             pinned: Some(false),
+            ..Default::default()
         })
         .send()
         .await
@@ -336,6 +339,7 @@ async fn two_node_gossip_replication() {
             author_peer_id: None,
             body: "hello from B".into(),
             parent_post_ids: vec![],
+            ..Default::default()
         })
         .send()
         .await
