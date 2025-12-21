@@ -19,12 +19,15 @@ if [ -n "$SDL2_DIR" ]; then
     # Patch 1: Fix CMakeLists.txt cmake_minimum_required versions
     if grep -q "cmake_minimum_required(VERSION 3.0.0)" "$SDL2_DIR/CMakeLists.txt" 2>/dev/null; then
         echo "  Patching SDL2 CMakeLists.txt (version 3.0.0 -> 3.5.0)..."
-        sed -i 's/cmake_minimum_required(VERSION 3\.0\.0)/cmake_minimum_required(VERSION 3.5.0)/' "$SDL2_DIR/CMakeLists.txt"
+        # Use portable sed syntax that works on both Linux and macOS
+        sed -i.bak 's/cmake_minimum_required(VERSION 3\.0\.0)/cmake_minimum_required(VERSION 3.5.0)/' "$SDL2_DIR/CMakeLists.txt"
+        rm -f "$SDL2_DIR/CMakeLists.txt.bak"
     fi
 
     if grep -q "cmake_minimum_required(VERSION 3.4)" "$SDL2_DIR/CMakeLists.txt" 2>/dev/null; then
         echo "  Patching SDL2 CMakeLists.txt (version 3.4 -> 3.5)..."
-        sed -i 's/cmake_minimum_required(VERSION 3\.4)/cmake_minimum_required(VERSION 3.5)/' "$SDL2_DIR/CMakeLists.txt"
+        sed -i.bak 's/cmake_minimum_required(VERSION 3\.4)/cmake_minimum_required(VERSION 3.5)/' "$SDL2_DIR/CMakeLists.txt"
+        rm -f "$SDL2_DIR/CMakeLists.txt.bak"
     fi
 
     # Patch 2: Disable PipeWire and force C11 in build.rs
@@ -33,7 +36,14 @@ if [ -n "$SDL2_DIR" ]; then
         if ! grep -q "SDL_PIPEWIRE" "$SDL2_BUILD_RS" 2>/dev/null; then
             echo "  Patching SDL2 build.rs (disable PipeWire, force C11)..."
             # Find the line with cfg.build() and add patches before it
-            sed -i '/cfg\.build()/i\    // Disable PipeWire to avoid compatibility issues with newer versions\n    cfg.define("SDL_PIPEWIRE", "OFF");\n\n    // Force C11 standard to avoid C23 keyword conflicts with old SDL2 code\n    cfg.cflag("-std=c11");\n' "$SDL2_BUILD_RS"
+            sed -i.bak '/cfg\.build()/i\
+    // Disable PipeWire to avoid compatibility issues with newer versions\
+    cfg.define("SDL_PIPEWIRE", "OFF");\
+\
+    // Force C11 standard to avoid C23 keyword conflicts with old SDL2 code\
+    cfg.cflag("-std=c11");\
+' "$SDL2_BUILD_RS"
+            rm -f "$SDL2_BUILD_RS.bak"
         fi
     fi
 else
@@ -49,7 +59,12 @@ if [ -n "$FFMPEG_BUILD_RS" ]; then
     if ! grep -q '"--disable-doc"' "$FFMPEG_BUILD_RS" 2>/dev/null; then
         echo "  Patching FFmpeg build.rs (disable doc build)..."
         # Add --disable-doc after --disable-programs
-        sed -i '/configure\.arg("--disable-programs");/a\    \n    // do not build documentation\n    configure.arg("--disable-doc");' "$FFMPEG_BUILD_RS"
+        sed -i.bak '/configure\.arg("--disable-programs");/a\
+    \
+    // do not build documentation\
+    configure.arg("--disable-doc");
+' "$FFMPEG_BUILD_RS"
+        rm -f "$FFMPEG_BUILD_RS.bak"
     fi
 else
     echo "FFmpeg build.rs not found (might be using system library)"
