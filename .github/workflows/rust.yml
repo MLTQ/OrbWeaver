@@ -16,11 +16,20 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential pkg-config libsdl2-dev libasound2-dev libudev-dev clang cmake yasm nasm libx11-dev libxext-dev libxrender-dev libxinerama-dev libxi-dev libxrandr-dev libxcursor-dev libgl1-mesa-dev libglu1-mesa-dev libwayland-dev libxkbcommon-dev
+
     - name: Fetch dependencies
       run: cargo fetch
+
     - name: Patch dependencies
       run: ./scripts/patch_deps.sh
+
     - name: Build
       run: cargo build --verbose
+
     - name: Run tests
       run: cargo test --verbose
