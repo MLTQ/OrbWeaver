@@ -32,6 +32,13 @@ jobs:
       - name: Install NASM
         uses: ilammy/setup-nasm@v1
 
+      - name: Fetch dependencies
+        run: cargo fetch
+
+      - name: Patch dependencies
+        shell: bash
+        run: ./scripts/patch_deps.sh
+
       - name: Build
         run: cargo build --release --bin graphchan_desktop
 
@@ -51,6 +58,12 @@ jobs:
 
       - name: Install Dependencies
         run: brew install ffmpeg sdl2
+
+      - name: Fetch dependencies
+        run: cargo fetch
+
+      - name: Patch dependencies
+        run: ./scripts/patch_deps.sh
 
       - name: Build
         run: cargo build --release --bin graphchan_desktop
@@ -94,7 +107,13 @@ jobs:
           
           echo "Verifying alsa with pkg-config..."
           pkg-config --libs --cflags alsa
-          
+
+          echo "Fetching dependencies..."
+          cargo fetch
+
+          echo "Patching dependencies..."
+          ./scripts/patch_deps.sh
+
           echo "Building..."
           cargo build --release --bin graphchan_desktop
 
