@@ -157,13 +157,13 @@ jobs:
             echo "is_tag=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Package binaries
+      - name: Prepare binaries for release
         run: |
           cd artifacts
-          zip -r graphchan_desktop-windows.zip graphchan_desktop-windows
-          tar -czf graphchan_desktop-macos.tar.gz -C graphchan_desktop-macos .
-          tar -czf graphchan_desktop-linux.tar.gz -C graphchan_desktop-linux .
-          mv *.zip *.tar.gz ..
+          cp graphchan_desktop-windows/graphchan_desktop.exe ../graphchan_desktop-windows.exe
+          cp graphchan_desktop-macos/graphchan_desktop ../graphchan_desktop-macos
+          cp graphchan_desktop-linux/graphchan_desktop ../graphchan_desktop-linux
+          chmod +x ../graphchan_desktop-macos ../graphchan_desktop-linux
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -174,6 +174,6 @@ jobs:
           prerelease: ${{ steps.release_info.outputs.is_tag == 'false' }}
           generate_release_notes: true
           files: |
-            graphchan_desktop-windows.zip
-            graphchan_desktop-macos.tar.gz
-            graphchan_desktop-linux.tar.gz
+            graphchan_desktop-windows.exe
+            graphchan_desktop-macos
+            graphchan_desktop-linux
