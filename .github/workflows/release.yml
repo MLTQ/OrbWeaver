@@ -34,8 +34,11 @@ jobs:
 
       - name: Install FFmpeg via vcpkg
         run: |
+          vcpkg install pkgconf:x64-windows-static
           vcpkg install ffmpeg:x64-windows-static
           echo "VCPKG_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "C:\vcpkg\installed\x64-windows-static\tools\pkgconf" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "PKG_CONFIG_PATH=C:\vcpkg\installed\x64-windows-static\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Fetch dependencies
         run: cargo fetch
