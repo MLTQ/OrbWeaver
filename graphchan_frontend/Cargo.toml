@@ -14,7 +14,6 @@ egui_extras = { version = "0.29", features = ["image"] }
 egui-video = "0.9"
 egui_commonmark = "0.18"
 sdl2 = { version = "0.37", features = ["static-link"] }
-ffmpeg-the-third = { version = "2.0", features = ["static", "build"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 lazy_static = "1.4"
 log = "0.4"
@@ -29,6 +28,13 @@ uuid = { version = "1", features = ["serde", "v4"] }
 rand = "0.8"
 rfd = "0.14"
 rodio = "0.18.1"
+
+# FFmpeg: Build from source on Unix platforms, use vcpkg on Windows
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+ffmpeg-the-third = { version = "2.0", features = ["static", "build"] }
+
+[target.'cfg(target_env = "msvc")'.dependencies]
+ffmpeg-the-third = { version = "2.0", features = ["static"] }
 
 [dev-dependencies]
 pretty_assertions = "1"
