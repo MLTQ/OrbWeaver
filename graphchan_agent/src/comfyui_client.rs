@@ -110,7 +110,16 @@ impl ComfyUIClient {
         // Minimal SD/SDXL workflow (works for both)
         let seed = rand::random::<u32>() as i64;
 
-        Ok(json!({
+        // Determine which VAE to use: dedicated loader or checkpoint's VAE
+        let vae_input = if self.config.vae_name.is_some() {
+            // Use dedicated VAE loader (node 10)
+            json!(["10", 0])
+        } else {
+            // Use VAE from checkpoint
+            json!(["4", 2])
+        };
+
+        let mut workflow = json!({
             "3": {
                 "inputs": {
                     "seed": seed,
@@ -157,7 +166,7 @@ impl ComfyUIClient {
             "8": {
                 "inputs": {
                     "samples": ["3", 0],
-                    "vae": ["4", 2]
+                    "vae": vae_input
                 },
                 "class_type": "VAEDecode"
             },
@@ -168,7 +177,19 @@ impl ComfyUIClient {
                 },
                 "class_type": "SaveImage"
             }
-        }))
+        });
+
+        // Add VAELoader node if a specific VAE is configured
+        if let Some(vae_name) = &self.config.vae_name {
+            workflow["10"] = json!({
+                "inputs": {
+                    "vae_name": vae_name
+                },
+                "class_type": "VAELoader"
+            });
+        }
+
+        Ok(workflow)
     }
 
     async fn poll_until_complete(&self, prompt_id: &str) -> Result<ImageOutput> {

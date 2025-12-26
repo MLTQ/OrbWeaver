@@ -67,6 +67,25 @@ impl GraphchanClient {
         Ok(threads)
     }
 
+    /// Delete a thread
+    pub async fn delete_thread(&self, thread_id: &str) -> Result<()> {
+        let url = format!("{}/threads/{}", self.base_url, thread_id);
+        let response = self
+            .client
+            .delete(&url)
+            .send()
+            .await
+            .with_context(|| format!("Failed to delete thread {}", thread_id))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_else(|_| "Unable to read body".to_string());
+            anyhow::bail!("Failed to delete thread {}: {} - {}", thread_id, status, body);
+        }
+
+        Ok(())
+    }
+
     /// Get thread details with all posts
     pub async fn get_thread(&self, thread_id: &str) -> Result<ThreadDetails> {
         let url = format!("{}/threads/{}", self.base_url, thread_id);

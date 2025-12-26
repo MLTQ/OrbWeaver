@@ -54,6 +54,9 @@ enable_image_generation = true  # Enable image generation for posts
 api_url = "http://192.168.0.156:8188"  # Your ComfyUI server URL
 workflow_type = "sd"  # "sd", "sdxl", or "flux"
 model_name = "1P5/v1-5-pruned-emaonly.safetensors"  # Checkpoint model loaded in ComfyUI
+vae_name = "vae-ft-mse-840000-ema-pruned.ckpt"  # Optional: High-quality VAE for better colors (recommended for SD 1.5)
+# vae_name = "sdxl_vae.safetensors"  # For SDXL models
+# Leave vae_name commented to use the checkpoint's built-in VAE
 width = 512
 height = 512
 steps = 20

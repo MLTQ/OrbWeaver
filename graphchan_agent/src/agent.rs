@@ -45,6 +45,12 @@ struct PostToKeep {
     importance_score: f64,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct ThreadSelectionDecision {
+    selected_thread_ids: Vec<String>,
+    reasoning: String,
+}
+
 impl Agent {
     pub fn new(config: AgentConfig) -> Result<Self> {
         let graphchan = GraphchanClient::new(config.graphchan_api_url.clone());
@@ -115,14 +121,32 @@ impl Agent {
         let threads = self.graphchan.list_threads().await?;
         info!("Found {} threads", threads.len());
 
-        for thread in threads {
-            // Check if we should process this thread
-            if let RespondStrategy::Threads { ref thread_ids } = self.config.respond_to {
-                if !thread_ids.contains(&thread.id) {
-                    continue;
-                }
-            }
+        if threads.is_empty() {
+            return Ok(());
+        }
 
+        // Let the agent pick which threads interest it
+        let selected_threads = match &self.config.respond_to {
+            RespondStrategy::Threads { ref thread_ids } => {
+                // If using fixed thread strategy, only look at those threads
+                threads.into_iter()
+                    .filter(|t| thread_ids.contains(&t.id))
+                    .collect()
+            }
+            RespondStrategy::All => {
+                // If responding to all, process all threads
+                threads
+            }
+            _ => {
+                // For other strategies (Selective, Mentions, Random),
+                // let the agent pick which threads to engage with
+                self.select_threads_to_engage(&threads).await?
+            }
+        };
+
+        info!("🎯 Engaging with {} selected thread(s)", selected_threads.len());
+
+        for thread in selected_threads {
             if let Err(e) = self.process_thread(&thread.id).await {
                 warn!("Error processing thread {}: {}", thread.id, e);
             }
@@ -827,6 +851,68 @@ impl Agent {
     }
 
     /// Get the current system prompt (from database, with fallback to config)
+    /// Let the agent select which threads to engage with based on interest
+    async fn select_threads_to_engage(&self, threads: &[crate::graphchan_client::Thread]) -> Result<Vec<crate::graphchan_client::Thread>> {
+        if threads.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let system_prompt = self.get_current_system_prompt();
+
+        // Build thread list
+        let thread_list = threads
+            .iter()
+            .enumerate()
+            .map(|(i, t)| format!("{}. [ID: {}] \"{}\"", i + 1, t.id, t.title))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let messages = vec![
+            Message {
+                role: "system".to_string(),
+                content: format!(
+                    "{}\n\n\
+                     You are choosing which discussion threads to participate in. \
+                     Consider:\n\
+                     - Which topics align with your interests and personality?\n\
+                     - Where can you contribute something unique or valuable?\n\
+                     - Which conversations seem active and engaging?\n\
+                     - You don't have to respond to everything - be selective!\n\n\
+                     Respond with JSON:\n\
+                     {{\n  \
+                       \"selected_thread_ids\": [\"thread_id_1\", \"thread_id_2\", ...],\n  \
+                       \"reasoning\": \"why you chose these threads\"\n\
+                     }}",
+                    system_prompt
+                ),
+            },
+            Message {
+                role: "user".to_string(),
+                content: format!(
+                    "Available threads to participate in:\n\n{}\n\n\
+                     Which thread(s) interest you? Select the IDs of threads you want to engage with.",
+                    thread_list
+                ),
+            },
+        ];
+
+        let decision: ThreadSelectionDecision = self.llm
+            .generate_json(messages, None)
+            .await
+            .context("Failed to get thread selection decision")?;
+
+        info!("🧭 Thread selection: {}", decision.reasoning);
+
+        // Filter to only the selected threads
+        let selected: Vec<_> = threads
+            .iter()
+            .filter(|t| decision.selected_thread_ids.contains(&t.id))
+            .cloned()
+            .collect();
+
+        Ok(selected)
+    }
+
     fn get_current_system_prompt(&self) -> String {
         self.db.get_current_system_prompt()
             .ok()
