@@ -3162,6 +3162,8 @@ name = "graphchan_agent"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
+ "bytes",
  "chrono",
  "env_logger",
  "log",

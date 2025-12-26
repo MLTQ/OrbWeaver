@@ -35,3 +35,5 @@ test_instance2/
 test_portable/
 
 graphchan_agent/graphchan_agent
+
+agent_memory.db

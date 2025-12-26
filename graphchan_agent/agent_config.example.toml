@@ -43,3 +43,20 @@ guiding_principles = [
 
 # Database for agent's memory and evolution
 database_path = "agent_memory.db"  # SQLite database file
+
+# Maximum number of important posts to retain in memory
+max_important_posts = 100  # When full, new important posts compete to replace existing ones
+
+# 🎨 IMAGE GENERATION: ComfyUI Integration
+enable_image_generation = true  # Enable image generation for posts
+
+[comfyui]
+api_url = "http://192.168.0.156:8188"  # Your ComfyUI server URL
+workflow_type = "sd"  # "sd", "sdxl", or "flux"
+model_name = "1P5/v1-5-pruned-emaonly.safetensors"  # Checkpoint model loaded in ComfyUI
+width = 512
+height = 512
+steps = 20
+cfg_scale = 7.0
+sampler = "euler"  # e.g., "euler", "euler_a", "dpmpp_2m"
+scheduler = "normal"  # e.g., "normal", "karras"

@@ -4,6 +4,7 @@ use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+use crate::comfyui_client;
 use crate::config::{AgentConfig, RespondStrategy};
 use crate::database::{AgentDatabase, ImportantPost, ReflectionRecord};
 use crate::graphchan_client::{GraphchanClient, Post, ThreadDetails};
@@ -15,6 +16,7 @@ pub struct Agent {
     llm: LlmClient,
     db: AgentDatabase,
     seen_posts: HashSet<String>,
+    comfyui: Option<comfyui_client::ComfyUIClient>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -62,12 +64,19 @@ impl Agent {
             db.set_current_system_prompt(&config.system_prompt)?;
         }
 
+        // Initialize ComfyUI client if configured
+        let comfyui = config.comfyui.as_ref().map(|cfg| {
+            info!("🎨 ComfyUI configured at: {}", cfg.api_url);
+            comfyui_client::ComfyUIClient::new(cfg.clone())
+        });
+
         Ok(Self {
             config,
             graphchan,
             llm,
             db,
             seen_posts: HashSet::new(),
+            comfyui,
         })
     }
 
@@ -233,6 +242,25 @@ impl Agent {
 
         info!("Generated response ({} chars)", llm_response.len());
 
+        // Decide if we should generate an image
+        let mut image_bytes: Option<Vec<u8>> = None;
+        if let Some(img_decision) = self.should_generate_image(thread, post).await? {
+            info!("Generating image: {}", img_decision.reasoning);
+
+            match self.generate_and_refine_image(
+                img_decision.image_description.as_deref().unwrap_or(""),
+                &format!("Thread: {}\nPost: {}", thread.thread.title, post.body),
+            ).await {
+                Ok(bytes) => {
+                    image_bytes = Some(bytes);
+                    info!("Image generated successfully");
+                }
+                Err(e) => {
+                    warn!("Failed to generate image: {:?}, posting without image", e);
+                }
+            }
+        }
+
         // Prepend bot name to clearly indicate this is from the AI
         let response_body = format!("[{}]: {}", self.config.username, llm_response);
 
@@ -250,6 +278,25 @@ impl Agent {
             .context("Failed to post response")?;
 
         info!("Posted reply: {}", created_post.id);
+
+        // Upload image if generated
+        if let Some(img_data) = image_bytes {
+            info!("Uploading generated image to post {}", created_post.id);
+
+            match self.graphchan.upload_file(
+                &created_post.id,
+                "generated_image.png",
+                "image/png",
+                img_data,
+            ).await {
+                Ok(file_response) => {
+                    info!("Image uploaded successfully: {}", file_response.id);
+                }
+                Err(e) => {
+                    warn!("Failed to upload image: {}", e);
+                }
+            }
+        }
 
         // Evaluate if this interaction was important enough to remember
         if let Err(e) = self
@@ -786,4 +833,192 @@ impl Agent {
             .flatten()
             .unwrap_or_else(|| self.config.system_prompt.clone())
     }
+
+    /// Decide whether to generate an image for this response
+    async fn should_generate_image(
+        &self,
+        thread: &ThreadDetails,
+        post: &Post,
+    ) -> Result<Option<ImageGenerationDecision>> {
+        // Skip if ComfyUI not configured
+        if self.comfyui.is_none() {
+            debug!("ComfyUI not configured, skipping image generation");
+            return Ok(None);
+        }
+
+        if !self.config.enable_image_generation {
+            debug!("Image generation disabled in config, skipping");
+            return Ok(None);
+        }
+
+        info!("🎨 Deciding whether to generate image for post...");
+
+        let system_prompt = self.get_current_system_prompt();
+
+        let messages = vec![
+            Message {
+                role: "system".to_string(),
+                content: format!(
+                    "{}\n\n\
+                     You are deciding whether to generate an image to attach to your response. \
+                     Consider:\n\
+                     - Would an image enhance your response?\n\
+                     - Is the conversation visual in nature?\n\
+                     - Would an illustration, meme, or artwork add value?\n\
+                     - Is this a request for visual content?\n\n\
+                     Respond with JSON:\n\
+                     {{\n  \
+                       \"should_generate\": true/false,\n  \
+                       \"reasoning\": \"why or why not\",\n  \
+                       \"image_description\": \"what to generate if true, null otherwise\"\n\
+                     }}",
+                    system_prompt
+                ),
+            },
+            Message {
+                role: "user".to_string(),
+                content: format!(
+                    "Thread: {}\n\nPost: {}\n\nYour planned response context",
+                    thread.thread.title,
+                    post.body
+                ),
+            },
+        ];
+
+        let decision: ImageGenerationDecision = self.llm
+            .generate_json(messages, None)
+            .await
+            .context("Failed to get image generation decision")?;
+
+        info!(
+            "🎨 Image decision: {} - {}",
+            if decision.should_generate { "GENERATE" } else { "SKIP" },
+            decision.reasoning
+        );
+
+        if decision.should_generate {
+            Ok(Some(decision))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Generate an image with iterative refinement
+    async fn generate_and_refine_image(
+        &self,
+        initial_description: &str,
+        context: &str,
+    ) -> Result<Vec<u8>> {
+        let comfyui = self.comfyui.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("ComfyUI not configured"))?;
+
+        let mut current_prompt = self.create_image_prompt(initial_description).await?;
+        let mut iteration = 0;
+
+        loop {
+            iteration += 1;
+            info!("Generating image (iteration {}): {}", iteration, current_prompt.positive);
+
+            // Generate image
+            let image_bytes = comfyui.generate_image(
+                &current_prompt.positive,
+                current_prompt.negative.as_deref(),
+            ).await.context("Failed to generate image")?;
+
+            info!("Image generated ({} bytes)", image_bytes.len());
+
+            // Try to evaluate with vision model (optional - not all models support vision)
+            match self.llm.evaluate_image(
+                &image_bytes,
+                &current_prompt.positive,
+                context,
+            ).await {
+                Ok(evaluation) => {
+                    info!("✨ Vision evaluation: satisfactory={}, reasoning={}",
+                          evaluation.satisfactory, evaluation.reasoning);
+
+                    if evaluation.satisfactory {
+                        info!("Image accepted after {} iteration(s)", iteration);
+                        return Ok(image_bytes);
+                    }
+
+                    // Refine prompt if suggested
+                    if let Some(refinement) = evaluation.suggested_prompt_refinement {
+                        info!("Refining prompt: {}", refinement);
+                        current_prompt = self.create_image_prompt(&refinement).await?;
+                    } else {
+                        warn!("Vision model not satisfied but no refinement suggested, accepting anyway");
+                        return Ok(image_bytes);
+                    }
+
+                    if iteration >= 10 {
+                        warn!("Max iterations reached, accepting current image");
+                        return Ok(image_bytes);
+                    }
+                }
+                Err(e) => {
+                    // Vision evaluation not supported or failed - accept the image
+                    info!("⚠️  Vision evaluation not available ({}), accepting image", e);
+                    return Ok(image_bytes);
+                }
+            }
+        }
+    }
+
+    /// Create an image prompt (tags or natural language based on workflow type)
+    async fn create_image_prompt(&self, description: &str) -> Result<ImagePrompt> {
+        let comfyui = self.comfyui.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("ComfyUI not configured"))?;
+
+        let prompt_style = comfyui.prompt_style();
+        let system_prompt = self.get_current_system_prompt();
+
+        let messages = vec![
+            Message {
+                role: "system".to_string(),
+                content: format!(
+                    "{}\n\n\
+                     You are crafting an image prompt that aligns with your personality and aesthetic. \
+                     {}",
+                    system_prompt,
+                    if prompt_style == "tags" {
+                        "Convert the description into Stable Diffusion tags using comma-separated keywords. \
+                         Use emphasis syntax: (emphasis), ((strong emphasis)), [de-emphasis].\n\n\
+                         Respond with JSON:\n\
+                         {\n  \
+                           \"positive\": \"masterpiece, high quality, detailed, ...\",\n  \
+                           \"negative\": \"ugly, blurry, low quality, ...\"\n\
+                         }"
+                    } else {
+                        "Write a vivid, detailed natural language prompt for Flux/Black Forest Labs models. \
+                         Use your unique voice and aesthetic sensibility.\n\n\
+                         Respond with JSON:\n\
+                         {\n  \
+                           \"positive\": \"A detailed natural language description...\",\n  \
+                           \"negative\": null\n\
+                         }"
+                    }
+                ),
+            },
+            Message {
+                role: "user".to_string(),
+                content: format!("Create an image prompt for: {}", description),
+            },
+        ];
+
+        self.llm.generate_json(messages, None).await
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ImageGenerationDecision {
+    should_generate: bool,
+    reasoning: String,
+    image_description: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ImagePrompt {
+    positive: String,
+    negative: Option<String>,
 }

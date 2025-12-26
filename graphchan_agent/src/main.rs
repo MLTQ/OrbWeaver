@@ -1,4 +1,5 @@
 mod agent;
+mod comfyui_client;
 mod config;
 mod database;
 mod graphchan_client;

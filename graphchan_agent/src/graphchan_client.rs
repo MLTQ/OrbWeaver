@@ -131,4 +131,59 @@ impl GraphchanClient {
 
         Ok(response_data.post)
     }
+
+    /// Upload a file to a post
+    pub async fn upload_file(
+        &self,
+        post_id: &str,
+        filename: &str,
+        mime_type: &str,
+        file_data: Vec<u8>,
+    ) -> Result<FileUploadResponse> {
+        let url = format!("{}/posts/{}/files", self.base_url, post_id);
+
+        // Create multipart form
+        let file_part = reqwest::multipart::Part::bytes(file_data)
+            .file_name(filename.to_string())
+            .mime_str(mime_type)
+            .context("Invalid MIME type")?;
+
+        let form = reqwest::multipart::Form::new()
+            .part("file", file_part);
+
+        let response = self.client
+            .post(&url)
+            .multipart(form)
+            .send()
+            .await
+            .with_context(|| format!("Failed to upload file to post {}", post_id))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_else(|_| "Unable to read body".to_string());
+            anyhow::bail!(
+                "API returned error uploading file to post {}: {} - {}",
+                post_id,
+                status,
+                body
+            );
+        }
+
+        let file_response: FileUploadResponse = response
+            .json()
+            .await
+            .context("Failed to parse file upload response")?;
+
+        Ok(file_response)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FileUploadResponse {
+    pub id: String,
+    pub post_id: String,
+    pub original_name: Option<String>,
+    pub mime_type: Option<String>,
+    pub size_bytes: Option<i64>,
+    pub blob_id: Option<String>,
 }
