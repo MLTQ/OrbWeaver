@@ -14,3 +14,5 @@ env_logger = "0.11"
 toml = "0.8"
 uuid = { version = "1.11", features = ["v4"] }
 rand = "0.8"
+rusqlite = { version = "0.30", features = ["bundled"] }
+chrono = { version = "0.4", features = ["serde"] }

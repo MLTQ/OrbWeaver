@@ -142,6 +142,7 @@ impl Database {
             self.ensure_thread_member_keys_table(conn)?;
             self.ensure_dm_tables(conn)?;
             self.ensure_blocking_tables(conn)?;
+            self.ensure_fts5_search_tables(conn)?;
             Ok(())
         })?;
         Ok(self.newly_created)
@@ -522,6 +523,107 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_blocklist_entries_peer
             ON blocklist_entries(peer_id)
             "#,
+            [],
+        )?;
+
+        Ok(())
+    }
+
+    fn ensure_fts5_search_tables(&self, conn: &Connection) -> Result<()> {
+        // Drop old triggers and tables if they exist (for migration safety)
+        conn.execute("DROP TRIGGER IF EXISTS posts_fts_insert", [])?;
+        conn.execute("DROP TRIGGER IF EXISTS posts_fts_update", [])?;
+        conn.execute("DROP TRIGGER IF EXISTS posts_fts_delete", [])?;
+        conn.execute("DROP TRIGGER IF EXISTS files_fts_insert", [])?;
+        conn.execute("DROP TRIGGER IF EXISTS files_fts_delete", [])?;
+        conn.execute("DROP TABLE IF EXISTS posts_fts", [])?;
+        conn.execute("DROP TABLE IF EXISTS files_fts", [])?;
+
+        // Posts FTS5 table
+        conn.execute(
+            r#"CREATE VIRTUAL TABLE IF NOT EXISTS posts_fts USING fts5(
+                post_id UNINDEXED,
+                thread_id UNINDEXED,
+                body,
+                content='posts',
+                content_rowid='rowid',
+                tokenize='porter unicode61'
+            )"#,
+            [],
+        )?;
+
+        // Files FTS5 table
+        conn.execute(
+            r#"CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
+                file_id UNINDEXED,
+                post_id UNINDEXED,
+                original_name,
+                path,
+                content='files',
+                content_rowid='rowid',
+                tokenize='porter unicode61'
+            )"#,
+            [],
+        )?;
+
+        // Populate existing posts
+        conn.execute(
+            "INSERT INTO posts_fts(rowid, post_id, thread_id, body)
+             SELECT rowid, id, thread_id, body FROM posts
+             WHERE rowid NOT IN (SELECT rowid FROM posts_fts)",
+            [],
+        )?;
+
+        // Populate existing files (join with posts to get thread_id)
+        conn.execute(
+            "INSERT INTO files_fts(rowid, file_id, post_id, original_name, path)
+             SELECT f.rowid, f.id, f.post_id, f.original_name, f.path
+             FROM files f
+             WHERE f.rowid NOT IN (SELECT rowid FROM files_fts)",
+            [],
+        )?;
+
+        // Triggers for posts
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS posts_fts_insert
+             AFTER INSERT ON posts BEGIN
+                 INSERT INTO posts_fts(rowid, post_id, thread_id, body)
+                 VALUES (new.rowid, new.id, new.thread_id, new.body);
+             END",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS posts_fts_update
+             AFTER UPDATE ON posts BEGIN
+                 UPDATE posts_fts SET body = new.body WHERE rowid = old.rowid;
+             END",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS posts_fts_delete
+             AFTER DELETE ON posts BEGIN
+                 DELETE FROM posts_fts WHERE rowid = old.rowid;
+             END",
+            [],
+        )?;
+
+        // Triggers for files
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS files_fts_insert
+             AFTER INSERT ON files BEGIN
+                 INSERT INTO files_fts(rowid, file_id, post_id, original_name, path)
+                 VALUES (new.rowid, new.id, new.post_id, new.original_name, new.path);
+             END",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS files_fts_delete
+             AFTER DELETE ON files BEGIN
+                 DELETE FROM files_fts WHERE rowid = old.rowid;
+             END",
             [],
         )?;
 

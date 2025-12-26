@@ -32,6 +32,31 @@ pub struct AgentConfig {
     /// Agent's username in Graphchan
     #[serde(default = "default_username")]
     pub username: String,
+
+    /// Guiding principles/adjectives that define the agent's core values
+    #[serde(default = "default_guiding_principles")]
+    pub guiding_principles: Vec<String>,
+
+    /// How often to run self-reflection (in hours)
+    #[serde(default = "default_reflection_interval")]
+    pub reflection_interval_hours: u64,
+
+    /// Enable self-reflection and prompt evolution
+    #[serde(default = "default_enable_reflection")]
+    pub enable_self_reflection: bool,
+
+    /// Model to use for reflection (can be different/cheaper than main model)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reflection_model: Option<String>,
+
+    /// Path to the agent's database file
+    #[serde(default = "default_database_path")]
+    pub database_path: String,
+
+    /// Maximum number of important posts to retain in memory
+    /// When full, new important posts must compete to replace existing ones
+    #[serde(default = "default_max_important_posts")]
+    pub max_important_posts: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,4 +109,28 @@ fn default_poll_interval() -> u64 {
 
 fn default_username() -> String {
     "AgentBot".to_string()
+}
+
+fn default_guiding_principles() -> Vec<String> {
+    vec![
+        "helpful".to_string(),
+        "curious".to_string(),
+        "thoughtful".to_string(),
+    ]
+}
+
+fn default_reflection_interval() -> u64 {
+    24 // Reflect once per day
+}
+
+fn default_enable_reflection() -> bool {
+    true
+}
+
+fn default_database_path() -> String {
+    "agent_memory.db".to_string()
+}
+
+fn default_max_important_posts() -> usize {
+    100 // Keep the 100 most formative experiences
 }

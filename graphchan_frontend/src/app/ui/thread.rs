@@ -16,6 +16,11 @@ pub enum ThreadAction {
 
 pub fn render_post_body(ui: &mut egui::Ui, body: &str) -> Option<String> {
     let mut clicked_thread = None;
+    
+    // Tighten line spacing to match 4chan's compact text rendering
+    let original_spacing = ui.spacing().item_spacing.y;
+    ui.spacing_mut().item_spacing.y = 2.0; // Tight line spacing
+    
     for line in body.lines() {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -48,6 +53,10 @@ pub fn render_post_body(ui: &mut egui::Ui, body: &str) -> Option<String> {
             }
         });
     }
+    
+    // Restore original spacing
+    ui.spacing_mut().item_spacing.y = original_spacing;
+    
     clicked_thread
 }
 

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use eframe::egui;
 
 use crate::models::{
-    ConversationView, DirectMessageView, FileResponse, PeerView, ReactionsResponse, ThreadDetails,
+    ConversationView, DirectMessageView, FileResponse, PeerView, ReactionsResponse, SearchResultView, ThreadDetails,
     ThreadSummary,
 };
 
@@ -36,6 +36,7 @@ pub enum ViewState {
     Settings,
     Conversation(ConversationState),
     Blocking,
+    SearchResults(SearchState),
 }
 
 #[derive(Default)]
@@ -213,4 +214,14 @@ pub struct BlockingState {
     pub blocklist_entries: Vec<crate::models::BlocklistEntryView>,
     pub blocklist_entries_loading: bool,
     pub blocklist_entries_error: Option<String>,
+}
+
+// Search State
+
+#[derive(Default)]
+pub struct SearchState {
+    pub query: String,
+    pub results: Vec<SearchResultView>,
+    pub is_loading: bool,
+    pub error: Option<String>,
 }

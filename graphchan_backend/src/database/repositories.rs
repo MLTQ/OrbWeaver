@@ -1,7 +1,7 @@
 use super::models::{
     FileRecord, PeerRecord, PostRecord, ReactionRecord, ThreadRecord, ThreadMemberKey,
     DirectMessageRecord, ConversationRecord, BlockedPeerRecord, BlocklistSubscriptionRecord,
-    BlocklistEntryRecord, RedactedPostRecord,
+    BlocklistEntryRecord, RedactedPostRecord, SearchResultRecord, SearchResultType,
 };
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -97,6 +97,10 @@ pub trait RedactedPostRepository {
     fn list_for_thread(&self, thread_id: &str) -> Result<Vec<RedactedPostRecord>>;
 }
 
+pub trait SearchRepository {
+    fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResultRecord>>;
+}
+
 /// Thin wrapper that will eventually host rusqlite-backed implementations.
 pub struct SqliteRepositories<'conn> {
     conn: &'conn Connection,
@@ -149,6 +153,10 @@ impl<'conn> SqliteRepositories<'conn> {
 
     pub fn redacted_posts(&self) -> impl RedactedPostRepository + '_ {
         SqliteRedactedPostRepository { conn: self.conn }
+    }
+
+    pub fn search(&self) -> impl SearchRepository + '_ {
+        SqliteSearchRepository { conn: self.conn }
     }
 
     pub fn conn(&self) -> &'conn Connection {
@@ -1478,5 +1486,115 @@ impl<'conn> RedactedPostRepository for SqliteRedactedPostRepository<'conn> {
             posts.push(row?);
         }
         Ok(posts)
+    }
+}
+
+struct SqliteSearchRepository<'conn> {
+    conn: &'conn Connection,
+}
+
+impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
+    fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResultRecord>> {
+        if query.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut results = Vec::new();
+
+        // Search posts
+        let mut stmt = self.conn.prepare(
+            r#"SELECT
+                p.id, p.thread_id, p.author_peer_id, p.body, p.created_at, p.updated_at,
+                bm25(posts_fts) as score,
+                t.title,
+                snippet(posts_fts, -1, '<mark>', '</mark>', '...', 30) as snippet
+            FROM posts_fts
+            JOIN posts p ON posts_fts.post_id = p.id
+            JOIN threads t ON p.thread_id = t.id
+            WHERE posts_fts MATCH ?1
+            ORDER BY score ASC, datetime(p.created_at) DESC
+            LIMIT ?2"#,
+        )?;
+
+        let post_results = stmt.query_map(params![query, limit as i64], |row| {
+            Ok(SearchResultRecord {
+                result_type: SearchResultType::Post,
+                post: PostRecord {
+                    id: row.get(0)?,
+                    thread_id: row.get(1)?,
+                    author_peer_id: row.get(2)?,
+                    body: row.get(3)?,
+                    created_at: row.get(4)?,
+                    updated_at: row.get(5)?,
+                },
+                file: None,
+                bm25_score: row.get(6)?,
+                thread_title: row.get(7)?,
+                snippet: row.get(8)?,
+            })
+        })?;
+
+        for result in post_results {
+            results.push(result?);
+        }
+
+        // Search files
+        let mut stmt = self.conn.prepare(
+            r#"SELECT
+                p.id, p.thread_id, p.author_peer_id, p.body, p.created_at, p.updated_at,
+                f.id, f.post_id, f.path, f.original_name, f.mime, f.size_bytes, f.blob_id, f.checksum, f.ticket,
+                bm25(files_fts) as score,
+                t.title,
+                snippet(files_fts, -1, '<mark>', '</mark>', '...', 30) as snippet
+            FROM files_fts
+            JOIN files f ON files_fts.file_id = f.id
+            JOIN posts p ON f.post_id = p.id
+            JOIN threads t ON p.thread_id = t.id
+            WHERE files_fts MATCH ?1
+            ORDER BY score ASC, datetime(p.created_at) DESC
+            LIMIT ?2"#,
+        )?;
+
+        let file_results = stmt.query_map(params![query, limit as i64], |row| {
+            Ok(SearchResultRecord {
+                result_type: SearchResultType::File,
+                post: PostRecord {
+                    id: row.get(0)?,
+                    thread_id: row.get(1)?,
+                    author_peer_id: row.get(2)?,
+                    body: row.get(3)?,
+                    created_at: row.get(4)?,
+                    updated_at: row.get(5)?,
+                },
+                file: Some(FileRecord {
+                    id: row.get(6)?,
+                    post_id: row.get(7)?,
+                    path: row.get(8)?,
+                    original_name: row.get(9)?,
+                    mime: row.get(10)?,
+                    blob_id: row.get(12)?,
+                    size_bytes: row.get(11)?,
+                    checksum: row.get(13)?,
+                    ticket: row.get(14)?,
+                }),
+                bm25_score: row.get(15)?,
+                thread_title: row.get(16)?,
+                snippet: row.get(17)?,
+            })
+        })?;
+
+        for result in file_results {
+            results.push(result?);
+        }
+
+        // Re-sort combined results by score
+        results.sort_by(|a, b| {
+            a.bm25_score.partial_cmp(&b.bm25_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.post.created_at.cmp(&a.post.created_at))
+        });
+
+        results.truncate(limit);
+        Ok(results)
     }
 }

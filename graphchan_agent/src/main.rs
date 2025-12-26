@@ -1,5 +1,6 @@
 mod agent;
 mod config;
+mod database;
 mod graphchan_client;
 mod llm_client;
 
@@ -24,7 +25,7 @@ async fn main() -> Result<()> {
     info!("  Username: {}", config.username);
 
     // Create and run agent
-    let mut agent = agent::Agent::new(config);
+    let mut agent = agent::Agent::new(config)?;
     agent.run().await?;
 
     Ok(())

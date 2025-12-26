@@ -51,8 +51,8 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
 
                         // Follow button
                         if let Some(friendcode) = &peer.friendcode {
-                            // Check if we already have this peer in our list
-                            let already_following = app.peers.contains_key(&peer.id);
+                            // Check if we already follow this peer (trust_state == "trusted")
+                            let already_following = peer.trust_state == "trusted";
 
                             if already_following {
                                 ui.label("✓ Following");

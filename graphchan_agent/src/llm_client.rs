@@ -107,12 +107,20 @@ impl LlmClient {
         decision_model: Option<&str>,
     ) -> Result<DecisionResponse> {
         let model = decision_model.unwrap_or(&self.model);
+        self.generate_json(messages, Some(model)).await
+    }
 
+    /// Generate a JSON response using the LLM
+    pub async fn generate_json<T>(&self, messages: Vec<Message>, model: Option<&str>) -> Result<T>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let model = model.unwrap_or(&self.model);
         let response = self.generate_with_model(messages, model).await?;
 
         // Try to parse as JSON
-        match serde_json::from_str::<DecisionResponse>(&response) {
-            Ok(decision) => Ok(decision),
+        match serde_json::from_str::<T>(&response) {
+            Ok(parsed) => Ok(parsed),
             Err(_) => {
                 // If JSON parsing fails, try to extract from markdown code block
                 let json_content = if let Some(start) = response.find("```json") {
@@ -132,8 +140,8 @@ impl LlmClient {
                     &response
                 };
 
-                serde_json::from_str::<DecisionResponse>(json_content)
-                    .context("Failed to parse decision response as JSON")
+                serde_json::from_str::<T>(json_content)
+                    .context(format!("Failed to parse JSON response. Raw response: {}", response))
             }
         }
     }

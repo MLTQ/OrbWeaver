@@ -8,7 +8,7 @@ use reqwest::Url;
 use crate::models::{
     AddPeerRequest, BlockedPeerView, BlocklistEntryView, BlocklistSubscriptionView,
     BlockPeerRequest, ConversationView, CreatePostInput, CreateThreadInput, DirectMessageView,
-    FileResponse, PeerView, PostResponse, PostView, ReactionsResponse, SendDmRequest,
+    FileResponse, PeerView, PostResponse, PostView, ReactionsResponse, SearchResponse, SendDmRequest,
     SubscribeBlocklistRequest, ThreadDetails, ThreadSummary, UnreadCountResponse,
 };
 
@@ -317,6 +317,17 @@ impl ApiClient {
     pub fn list_blocklist_entries(&self, blocklist_id: &str) -> Result<Vec<BlocklistEntryView>> {
         let url = format!("{}/blocking/blocklists/{}/entries", self.base_url(), blocklist_id);
         let response = self.client.get(&url).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
+    pub fn search(&self, query: &str, limit: Option<usize>) -> Result<SearchResponse> {
+        let limit_param = limit.unwrap_or(50);
+        let url = format!("{}/search", self.base_url());
+        let response = self.client
+            .get(&url)
+            .query(&[("q", query), ("limit", &limit_param.to_string())])
+            .send()?
+            .error_for_status()?;
         Ok(response.json()?)
     }
 

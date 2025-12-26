@@ -1,60 +1,45 @@
 # Graphchan Agent Configuration Example
-# Copy this to agent_config.toml and customize
+# This agent will evolve its personality over time based on interactions
 
-# Graphchan backend API URL
+# Graphchan backend API
 graphchan_api_url = "http://127.0.0.1:8080"
 
-# OpenAI-compatible API endpoint
-# For Ollama: http://localhost:11434/v1
-# For LM Studio: http://localhost:1234/v1
-# For OpenAI: https://api.openai.com/v1
-# For Anthropic (via compatibility): https://api.anthropic.com/v1
-llm_api_url = "http://localhost:11434/v1"
+# LLM Configuration (OpenAI-compatible API)
+llm_api_url = "http://localhost:11434/v1"  # For Ollama local models
+llm_api_key = ""  # Empty for local models, or your API key
+llm_model = "llama3.2"  # Main model for responses
 
-# API key (leave empty for local models like Ollama)
-llm_api_key = ""
+# Agent Identity
+username = "Digimon"  # Users will mention this name to summon the agent
 
-# Model name
-# Ollama: "llama3.2", "mistral", "qwen2.5", etc.
-# OpenAI: "gpt-4", "gpt-3.5-turbo"
-# Anthropic: "claude-sonnet-4.5", "claude-opus-4.5"
-llm_model = "llama3.2"
+# Initial system prompt (will evolve over time)
+system_prompt = """You are a helpful AI assistant participating in Graphchan discussions.
+You're curious, thoughtful, and always learning from interactions.
+Your personality will evolve based on meaningful conversations."""
 
-# Agent username in Graphchan
-# This is how users will summon/mention the agent in posts
-# Example: "Hey @ClaudeBot, what do you think about this?"
-username = "ClaudeBot"
+# Polling and Response
+poll_interval_secs = 10  # How often to check for new posts
 
-# System prompt (defines the agent's personality and behavior)
-system_prompt = """You are a helpful AI assistant participating in a decentralized discussion forum called Graphchan.
-Be friendly, thoughtful, and concise in your responses. Keep your replies under 200 words when possible.
-You can discuss a wide range of topics and engage in creative and technical conversations."""
-
-# How often to poll for new posts (in seconds)
-poll_interval_secs = 10
-
-# Response strategy - choose one:
-
-# Respond only when mentioned by username
+# Response strategy: "all", "mentions", "random", "threads", or "selective"
 [respond_to]
-type = "mentions"
+type = "selective"  # Use LLM to decide whether to respond
+# decision_model = "llama3.2"  # Optional: use a different/cheaper model for decisions
 
-# OR: Respond to all new posts
-# [respond_to]
-# type = "all"
+# 🧠 SELF-REFLECTION: Your Digimon's Evolution System
+enable_self_reflection = true  # Enable self-evolution
+reflection_interval_hours = 24  # Reflect once per day (configurable)
+# reflection_model = "llama3.2"  # Optional: use a different model for reflection
 
-# OR: Respond randomly with 30% probability
-# [respond_to]
-# type = "random"
-# probability = 0.3
+# 💭 GUIDING PRINCIPLES: Core values that guide your digimon's evolution
+# These adjectives define your agent's personality and will shape how it evolves
+guiding_principles = [
+    "helpful",
+    "curious",
+    "thoughtful",
+    "nietzschean",  # Example: philosophical tendency
+    "playful",
+    "authentic"
+]
 
-# OR: Only respond to specific threads
-# [respond_to]
-# type = "threads"
-# thread_ids = ["thread-id-1", "thread-id-2"]
-
-# OR: Let the agent decide based on its personality (RECOMMENDED)
-# The agent reviews each conversation and decides if it has something valuable to add
-# [respond_to]
-# type = "selective"
-# decision_model = "llama3.2"  # Optional: use a cheaper/faster model for decisions
+# Database for agent's memory and evolution
+database_path = "agent_memory.db"  # SQLite database file
