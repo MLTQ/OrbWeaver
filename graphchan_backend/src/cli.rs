@@ -404,6 +404,16 @@ impl CliSession {
             .await
             .inspect_err(|err| tracing::warn!(error = ?err, "failed to gossip post"))
             .ok();
+
+        // Re-announce thread so peers can discover it with updated post_count
+        if let Ok(Some(thread_details)) = self.thread_service.get_thread(&thread_id) {
+            self.network
+                .publish_thread_announcement(thread_details, &self.identity.gpg_fingerprint)
+                .await
+                .inspect_err(|err| tracing::warn!(error = ?err, "failed to re-announce thread"))
+                .ok();
+        }
+
         self.last_seen_posts.insert(thread_id, post.id);
         Ok(())
     }

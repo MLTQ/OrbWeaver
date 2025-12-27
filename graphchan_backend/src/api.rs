@@ -441,6 +441,27 @@ async fn create_post(
                 );
             }
 
+            // Re-announce the thread so peers can discover it (with updated post_count and hash)
+            // This allows transitive discovery: if peer B adds to a thread, peer C who isn't subscribed
+            // yet can discover the thread exists
+            let service_with_paths = ThreadService::with_file_paths(
+                state.database.clone(),
+                state.config.paths.clone()
+            );
+            if let Ok(Some(thread_details)) = service_with_paths.get_thread(&thread_id) {
+                // Re-announce thread with updated metadata
+                if let Err(err) = state.network.publish_thread_announcement(
+                    thread_details,
+                    &state.identity.gpg_fingerprint
+                ).await {
+                    tracing::warn!(
+                        error = ?err,
+                        thread_id = %thread_id,
+                        "failed to re-announce thread after new post"
+                    );
+                }
+            }
+
             // Clear thread_hash before returning to client (they don't need it)
             post.thread_hash = None;
 
