@@ -12,26 +12,20 @@ impl GraphchanApp {
         });
         ui.add_space(10.0);
 
-        let local_peer_id = self.identity_state.local_peer.as_ref().map(|p| p.id.clone());
+        // All threads in self.threads are locally downloaded
+        let my_threads = self.threads.clone();
 
-        let (my_threads, network_threads): (Vec<ThreadSummary>, Vec<ThreadSummary>) = self.threads.iter().cloned().partition(|t| {
-            if let Some(local_id) = &local_peer_id {
-                t.creator_peer_id.as_ref() == Some(local_id)
-            } else {
-                false
-            }
-        });
-
-        let conversations = self.dm_state.conversations.clone();
+        // Network threads would come from thread announcements not yet downloaded
+        // For now, this is empty - requires backend support
+        let network_threads: Vec<ThreadSummary> = Vec::new();
 
         self.render_catalog_three_columns(
             ui,
-            "Private Threads",
-            &conversations,
             "My Threads",
             &my_threads,
             "Network Threads",
-            &network_threads
+            &network_threads,
+            "Recent Posts",
         );
     }
 
@@ -60,12 +54,11 @@ impl GraphchanApp {
     fn render_catalog_three_columns(
         &mut self,
         ui: &mut egui::Ui,
-        dm_title: &str,
-        conversations: &[crate::models::ConversationView],
+        title1: &str,
+        threads1: &[ThreadSummary],
         title2: &str,
         threads2: &[ThreadSummary],
         title3: &str,
-        threads3: &[ThreadSummary],
     ) {
         if self.threads_loading && self.threads.is_empty() {
             ui.add(egui::Spinner::new());
@@ -79,36 +72,31 @@ impl GraphchanApp {
         }
 
         ui.columns(3, |columns| {
-            // Column 1: Private Threads (DMs)
+            // Column 1: My Threads (all downloaded threads)
             columns[0].vertical(|ui| {
-                ui.heading(dm_title);
+                ui.heading(title1);
                 ui.add_space(10.0);
-
-                if self.dm_state.conversations_loading && conversations.is_empty() {
-                    ui.add(egui::Spinner::new());
-                }
-                if let Some(err) = &self.dm_state.conversations_error {
-                    ui.colored_label(Color32::LIGHT_RED, err);
-                    if ui.button("Retry").clicked() {
-                        self.spawn_load_conversations();
-                    }
-                }
-
-                super::conversations::render_conversations_list(self, ui, conversations);
+                self.render_thread_list(ui, threads1);
             });
 
-            // Column 2: My Threads
+            // Column 2: Network Threads (announced but not downloaded)
             columns[1].vertical(|ui| {
                 ui.heading(title2);
                 ui.add_space(10.0);
-                self.render_thread_list(ui, threads2);
+                if threads2.is_empty() {
+                    ui.label(RichText::new("No network threads available").italics().weak());
+                    ui.add_space(5.0);
+                    ui.label("Thread announcements from peers will appear here.");
+                } else {
+                    self.render_thread_list(ui, threads2);
+                }
             });
 
-            // Column 3: Network Threads
+            // Column 3: Recent Posts
             columns[2].vertical(|ui| {
                 ui.heading(title3);
                 ui.add_space(10.0);
-                self.render_thread_list(ui, threads3);
+                self.render_recent_posts(ui);
             });
         });
     }
@@ -210,5 +198,24 @@ impl GraphchanApp {
         if let Some(thread_id) = thread_to_ignore {
             self.spawn_ignore_thread(thread_id);
         }
+    }
+
+    fn render_recent_posts(&mut self, ui: &mut egui::Ui) {
+        // TODO: This requires backend support to stream posts or a dedicated API endpoint
+        // For now, show a placeholder
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.label(RichText::new("Recent Posts feed coming soon...").italics().weak());
+            ui.add_space(10.0);
+            ui.label("This will show a live feed of new posts from all your subscribed threads, with:");
+            ui.label("• Post previews");
+            ui.label("• Image thumbnails");
+            ui.label("• Thread context");
+            ui.label("• Click to navigate to thread");
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.label(RichText::new("Requires backend implementation").size(11.0).weak());
+        });
     }
 }

@@ -962,6 +962,9 @@ impl eframe::App for GraphchanApp {
                 if ui.button("Catalog").clicked() {
                     self.view = ViewState::Catalog;
                 }
+                if ui.button("Messages").clicked() {
+                    self.view = ViewState::Messages;
+                }
                 if ui.button("New Thread").clicked() {
                     self.show_create_thread = true;
                 }
@@ -1082,6 +1085,7 @@ impl eframe::App for GraphchanApp {
         // We need to extract mutable state to avoid double-borrowing self in the CentralPanel closure
         let view_type = match &self.view {
             ViewState::Catalog => "catalog",
+            ViewState::Messages => "messages",
             ViewState::Thread(_) => "thread",
             ViewState::Following => "following",
             ViewState::FollowingCatalog(_) => "following_catalog",
@@ -1095,6 +1099,10 @@ impl eframe::App for GraphchanApp {
         if view_type == "catalog" {
             egui::CentralPanel::default().show(ctx, |ui| {
                 self.render_catalog(ui);
+            });
+        } else if view_type == "messages" {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui::conversations::render_conversations_list(self, ui, &self.dm_state.conversations.clone());
             });
         } else if view_type == "import" {
             egui::CentralPanel::default().show(ctx, |ui| {
