@@ -12,12 +12,11 @@ impl GraphchanApp {
         });
         ui.add_space(10.0);
 
-        // All threads in self.threads are locally downloaded
-        let my_threads = self.threads.clone();
-
-        // Network threads would come from thread announcements not yet downloaded
-        // For now, this is empty - requires backend support
-        let network_threads: Vec<ThreadSummary> = Vec::new();
+        // Partition threads based on sync_status
+        let (my_threads, network_threads): (Vec<ThreadSummary>, Vec<ThreadSummary>) =
+            self.threads.iter().cloned().partition(|t| {
+                t.sync_status == "downloaded"
+            });
 
         self.render_catalog_three_columns(
             ui,
@@ -201,21 +200,105 @@ impl GraphchanApp {
     }
 
     fn render_recent_posts(&mut self, ui: &mut egui::Ui) {
-        // TODO: This requires backend support to stream posts or a dedicated API endpoint
-        // For now, show a placeholder
+        // Show loading/error states
+        if self.recent_posts_loading && self.recent_posts.is_empty() {
+            ui.centered_and_justified(|ui| {
+                ui.spinner();
+            });
+            return;
+        }
+
+        if let Some(error) = &self.recent_posts_error {
+            ui.colored_label(Color32::RED, format!("Error: {}", error));
+            return;
+        }
+
+        if self.recent_posts.is_empty() {
+            ui.centered_and_justified(|ui| {
+                ui.label(RichText::new("No recent posts yet").italics().weak());
+            });
+            return;
+        }
+
+        let mut thread_to_open: Option<String> = None;
 
         egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.label(RichText::new("Recent Posts feed coming soon...").italics().weak());
-            ui.add_space(10.0);
-            ui.label("This will show a live feed of new posts from all your subscribed threads, with:");
-            ui.label("• Post previews");
-            ui.label("• Image thumbnails");
-            ui.label("• Thread context");
-            ui.label("• Click to navigate to thread");
+            for recent_post in &self.recent_posts.clone() {
+                let post = &recent_post.post;
+                let thread_title = &recent_post.thread_title;
 
-            ui.add_space(10.0);
-            ui.separator();
-            ui.label(RichText::new("Requires backend implementation").size(11.0).weak());
+                ui.group(|ui| {
+                    ui.set_width(ui.available_width());
+
+                    // Thread title context
+                    ui.label(RichText::new(thread_title).strong().size(12.0));
+
+                    ui.add_space(4.0);
+
+                    // Post preview - truncate to ~200 characters
+                    let preview = if post.body.len() > 200 {
+                        format!("{}...", &post.body[..200])
+                    } else {
+                        post.body.clone()
+                    };
+                    ui.label(RichText::new(preview).size(11.0));
+
+                    // Show image thumbnails if available
+                    if !recent_post.files.is_empty() {
+                        ui.add_space(4.0);
+                        ui.horizontal_wrapped(|ui| {
+                            for file in &recent_post.files {
+                                if let Some(mime) = &file.mime {
+                                    if mime.starts_with("image/") {
+                                        // Show image thumbnail (32x32)
+                                        if let Some(texture) = self.image_textures.get(&file.id) {
+                                            ui.image((texture.id(), egui::vec2(32.0, 32.0)));
+                                        } else if !self.image_loading.contains(&file.id) {
+                                            // Queue image for loading
+                                            if let Some(url) = &file.download_url {
+                                                let file_id = file.id.clone();
+                                                let url = url.clone();
+                                                self.image_loading.insert(file_id.clone());
+                                                super::super::tasks::download_image(
+                                                    self.tx.clone(),
+                                                    file_id,
+                                                    url,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+
+                    ui.add_space(4.0);
+
+                    // Timestamp and click to navigate
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format_timestamp(&post.created_at)).size(10.0).weak());
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("View →").clicked() {
+                                thread_to_open = Some(post.thread_id.clone());
+                            }
+                        });
+                    });
+                });
+
+                ui.add_space(6.0);
+            }
         });
+
+        // Handle thread opening after UI loop
+        if let Some(thread_id) = thread_to_open {
+            // Find the thread summary in our threads list
+            if let Some(summary) = self.threads.iter().find(|t| t.id == thread_id).cloned() {
+                self.open_thread(summary);
+            } else {
+                // Thread not in list yet, try to load it
+                self.spawn_load_thread(&thread_id);
+            }
+        }
     }
 }

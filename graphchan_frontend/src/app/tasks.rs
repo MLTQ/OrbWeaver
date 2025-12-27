@@ -20,6 +20,15 @@ pub fn load_threads(client: ApiClient, tx: Sender<AppMessage>) {
     });
 }
 
+pub fn load_recent_posts(client: ApiClient, tx: Sender<AppMessage>) {
+    thread::spawn(move || {
+        let result = client.list_recent_posts(Some(50));
+        if tx.send(AppMessage::RecentPostsLoaded(result)).is_err() {
+            error!("failed to send RecentPostsLoaded message");
+        }
+    });
+}
+
 pub fn load_thread(client: ApiClient, tx: Sender<AppMessage>, thread_id: String, is_refresh: bool) {
     thread::spawn(move || {
         let result = if is_refresh {

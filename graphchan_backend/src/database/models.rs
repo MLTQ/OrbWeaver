@@ -25,6 +25,7 @@ pub struct ThreadRecord {
     pub thread_hash: Option<String>,
     pub visibility: String,  // 'social' or 'private'
     pub topic_secret: Option<String>,  // base64-encoded 32-byte secret for private threads
+    pub sync_status: String,  // 'announced', 'downloading', 'downloaded', 'failed'
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

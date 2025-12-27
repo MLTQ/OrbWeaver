@@ -60,6 +60,15 @@ impl ApiClient {
         Ok(response.json()?)
     }
 
+    pub fn list_recent_posts(&self, limit: Option<usize>) -> Result<crate::models::RecentPostsResponse> {
+        let mut url = self.url("/posts/recent")?;
+        if let Some(lim) = limit {
+            url.set_query(Some(&format!("limit={}", lim)));
+        }
+        let response = self.client.get(url).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
     pub fn get_thread(&self, thread_id: &str) -> Result<ThreadDetails> {
         let url = self.url(&format!("/threads/{thread_id}"))?;
         let response = self.client.get(url).send()?.error_for_status()?;

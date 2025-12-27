@@ -3,7 +3,7 @@ use crate::blocking::{
 };
 use crate::config::GraphchanConfig;
 use crate::database::Database;
-use crate::database::repositories::{ThreadRepository, PeerRepository};
+use crate::database::repositories::{ThreadRepository, PeerRepository, PostRepository};
 use crate::dms::{ConversationView, DirectMessageView, DmService};
 use crate::files::{FileService, FileView, SaveFileInput};
 use crate::identity::decode_friendcode;
@@ -110,6 +110,7 @@ pub async fn serve_http(
         .route("/threads/:id/delete", post(delete_thread))
         .route("/threads/:id/ignore", post(set_thread_ignored))
         .route("/threads/:id/posts", post(create_post))
+        .route("/posts/recent", get(list_recent_posts))
         .route("/posts/:id/files", get(list_post_files))
         .route("/posts/:id/files", post(upload_post_file))
         .route("/posts/:id/reactions", get(get_post_reactions))
@@ -640,6 +641,71 @@ async fn download_file(
     Ok(response)
 }
 
+async fn list_recent_posts(
+    State(state): State<AppState>,
+    Query(params): Query<RecentPostsParams>,
+) -> ApiResult<RecentPostsResponse> {
+    let limit = params.limit.unwrap_or(50);
+
+    let service = ThreadService::with_file_paths(
+        state.database.clone(),
+        state.config.paths.clone(),
+    );
+
+    let file_service = FileService::new(
+        state.database.clone(),
+        state.config.paths.clone(),
+        state.config.file.clone(),
+        state.blobs.clone(),
+    );
+
+    let post_records = state.database.with_repositories(|repos| {
+        repos.posts().list_recent(limit)
+    }).map_err(ApiError::Internal)?;
+
+    let mut recent_posts = Vec::new();
+
+    for post_record in post_records {
+        // Get thread title
+        let thread_title = state.database.with_repositories(|repos| {
+            repos.threads().get(&post_record.thread_id)
+                .map(|t| t.map(|thread| thread.title).unwrap_or_else(|| "Unknown Thread".to_string()))
+        }).map_err(ApiError::Internal)?;
+
+        // Get parent IDs
+        let parent_post_ids = state.database.with_repositories(|repos| {
+            repos.posts().parents_of(&post_record.id)
+        }).map_err(ApiError::Internal)?;
+
+        // Get files
+        let file_views = file_service.list_post_files(&post_record.id)
+            .map_err(ApiError::Internal)?;
+
+        let files: Vec<FileResponse> = file_views.iter().map(|f| map_file_view(f.clone())).collect();
+
+        // Convert to PostView
+        let post_view = crate::threading::PostView {
+            id: post_record.id.clone(),
+            thread_id: post_record.thread_id.clone(),
+            author_peer_id: post_record.author_peer_id.clone(),
+            body: post_record.body.clone(),
+            created_at: post_record.created_at.clone(),
+            updated_at: post_record.updated_at.clone(),
+            parent_post_ids,
+            files: file_views,
+            thread_hash: None,
+        };
+
+        recent_posts.push(RecentPostView {
+            post: post_view,
+            thread_title,
+            files,
+        });
+    }
+
+    Ok(Json(RecentPostsResponse { posts: recent_posts }))
+}
+
 async fn list_peers(State(state): State<AppState>) -> ApiResult<Vec<PeerView>> {
     let service = PeerService::new(state.database.clone());
     let peers = service.list_peers()?;
@@ -800,6 +866,28 @@ struct SearchResultView {
     pub thread_title: String,
     pub bm25_score: f64,
     pub snippet: String,
+}
+
+#[derive(Debug, Serialize)]
+struct RecentPostView {
+    pub post: crate::threading::PostView,
+    pub thread_title: String,
+    pub files: Vec<FileResponse>,
+}
+
+#[derive(Debug, Serialize)]
+struct RecentPostsResponse {
+    pub posts: Vec<RecentPostView>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RecentPostsParams {
+    #[serde(default = "default_recent_limit")]
+    limit: Option<usize>,
+}
+
+fn default_recent_limit() -> Option<usize> {
+    Some(50)
 }
 
 #[derive(Debug, Serialize)]

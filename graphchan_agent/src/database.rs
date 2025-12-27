@@ -25,6 +25,17 @@ pub struct ReflectionRecord {
     pub guiding_principles: String, // JSON array
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CharacterCard {
+    pub id: String,
+    pub imported_at: DateTime<Utc>,
+    pub format: String, // "tavernai_v2", "wpp", "boostyle"
+    pub original_data: String, // Raw JSON/text of original card
+    pub derived_prompt: String, // System prompt derived from card
+    pub name: Option<String>,
+    pub description: Option<String>,
+}
+
 pub struct AgentDatabase {
     conn: Connection,
 }
@@ -76,6 +87,20 @@ impl AgentDatabase {
         // Create index for faster lookups
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_important_posts_marked_at ON important_posts(marked_at DESC)",
+            [],
+        )?;
+
+        // Character card storage
+        self.conn.execute(
+            r#"CREATE TABLE IF NOT EXISTS character_cards (
+                id TEXT PRIMARY KEY,
+                imported_at TEXT NOT NULL,
+                format TEXT NOT NULL,
+                original_data TEXT NOT NULL,
+                derived_prompt TEXT NOT NULL,
+                name TEXT,
+                description TEXT
+            )"#,
             [],
         )?;
 
@@ -280,5 +305,68 @@ impl AgentDatabase {
     /// Set last reflection time
     pub fn set_last_reflection_time(&self, time: DateTime<Utc>) -> Result<()> {
         self.set_state("last_reflection_time", &time.to_rfc3339())
+    }
+
+    /// Save a character card (only keeps one at a time)
+    pub fn save_character_card(&self, card: &CharacterCard) -> Result<()> {
+        // Delete any existing character card
+        self.conn.execute("DELETE FROM character_cards", [])?;
+
+        // Insert the new one
+        self.conn.execute(
+            "INSERT INTO character_cards (id, imported_at, format, original_data, derived_prompt, name, description)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                card.id,
+                card.imported_at.to_rfc3339(),
+                card.format,
+                card.original_data,
+                card.derived_prompt,
+                card.name,
+                card.description
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Get the current character card (if any)
+    pub fn get_character_card(&self) -> Result<Option<CharacterCard>> {
+        let result = self.conn.query_row(
+            "SELECT id, imported_at, format, original_data, derived_prompt, name, description
+             FROM character_cards
+             ORDER BY imported_at DESC
+             LIMIT 1",
+            [],
+            |row| {
+                Ok(CharacterCard {
+                    id: row.get(0)?,
+                    imported_at: row
+                        .get::<_, String>(1)?
+                        .parse()
+                        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+                            1,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        ))?,
+                    format: row.get(2)?,
+                    original_data: row.get(3)?,
+                    derived_prompt: row.get(4)?,
+                    name: row.get(5)?,
+                    description: row.get(6)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(card) => Ok(Some(card)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Delete the current character card
+    pub fn delete_character_card(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM character_cards", [])?;
+        Ok(())
     }
 }

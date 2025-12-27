@@ -248,6 +248,7 @@ fn apply_thread_announcement(
                         thread_hash: Some(announcement.thread_hash.clone()),
                         visibility: existing_thread.visibility.clone(),
                         topic_secret: existing_thread.topic_secret.clone(),
+                        sync_status: existing_thread.sync_status.clone(),
                     };
                     repos.threads().upsert(&updated_thread)?;
 
@@ -298,6 +299,7 @@ fn apply_thread_announcement(
             thread_hash: Some(announcement.thread_hash.clone()),
             visibility: "social".to_string(),
             topic_secret: None,
+            sync_status: "announced".to_string(),  // Mark as announced but not yet downloaded
         };
         repos.threads().upsert(&thread_record)?;
 
@@ -408,6 +410,7 @@ fn apply_thread_snapshot(
             thread_hash: Some(thread_hash),
             visibility: thread.visibility.clone(),
             topic_secret: thread.topic_secret.clone(),
+            sync_status: "downloaded".to_string(),
         };
         repos.threads().upsert(&thread_record)?;
 
@@ -1065,6 +1068,7 @@ mod tests {
                     thread_hash: None,
                     visibility: "social".to_string(),
                     topic_secret: None,
+                    sync_status: "downloaded".to_string(),
                 })?;
                 repos.posts().create(&PostRecord {
                     id: "post-1".into(),

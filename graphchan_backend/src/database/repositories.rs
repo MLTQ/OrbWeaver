@@ -24,8 +24,10 @@ pub trait PostRepository {
     fn upsert(&self, record: &PostRecord) -> Result<()>;
     fn get(&self, id: &str) -> Result<Option<PostRecord>>;
     fn list_for_thread(&self, thread_id: &str) -> Result<Vec<PostRecord>>;
+    fn list_recent(&self, limit: usize) -> Result<Vec<PostRecord>>;
     fn add_relationships(&self, child_id: &str, parent_ids: &[String]) -> Result<()>;
     fn parents_of(&self, child_id: &str) -> Result<Vec<String>>;
+    fn has_children(&self, post_id: &str) -> Result<bool>;
 }
 
 pub trait PeerRepository {
@@ -172,8 +174,8 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
     fn create(&self, record: &ThreadRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO threads (id, title, creator_peer_id, created_at, pinned, thread_hash, visibility, topic_secret)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            INSERT INTO threads (id, title, creator_peer_id, created_at, pinned, thread_hash, visibility, topic_secret, sync_status)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             "#,
             params![
                 record.id,
@@ -183,7 +185,8 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
                 if record.pinned { 1 } else { 0 },
                 record.thread_hash,
                 record.visibility,
-                record.topic_secret
+                record.topic_secret,
+                record.sync_status
             ],
         )?;
         Ok(())
@@ -192,8 +195,8 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
     fn upsert(&self, record: &ThreadRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO threads (id, title, creator_peer_id, created_at, pinned, thread_hash, visibility, topic_secret)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            INSERT INTO threads (id, title, creator_peer_id, created_at, pinned, thread_hash, visibility, topic_secret, sync_status)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 creator_peer_id = excluded.creator_peer_id,
@@ -201,7 +204,8 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
                 pinned = excluded.pinned,
                 thread_hash = excluded.thread_hash,
                 visibility = excluded.visibility,
-                topic_secret = excluded.topic_secret
+                topic_secret = excluded.topic_secret,
+                sync_status = excluded.sync_status
             "#,
             params![
                 record.id,
@@ -211,7 +215,8 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
                 if record.pinned { 1 } else { 0 },
                 record.thread_hash,
                 record.visibility,
-                record.topic_secret
+                record.topic_secret,
+                record.sync_status
             ],
         )?;
         Ok(())
@@ -223,7 +228,8 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
             .query_row(
                 r#"
                 SELECT id, title, creator_peer_id, created_at, pinned, thread_hash,
-                       COALESCE(visibility, 'social') as visibility, topic_secret
+                       COALESCE(visibility, 'social') as visibility, topic_secret,
+                       COALESCE(sync_status, 'downloaded') as sync_status
                 FROM threads
                 WHERE id = ?1
                 "#,
@@ -238,6 +244,7 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
                         thread_hash: row.get(5)?,
                         visibility: row.get(6)?,
                         topic_secret: row.get(7)?,
+                        sync_status: row.get(8)?,
                     })
                 },
             )
@@ -249,7 +256,8 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT id, title, creator_peer_id, created_at, pinned, thread_hash,
-                   COALESCE(visibility, 'social') as visibility, topic_secret
+                   COALESCE(visibility, 'social') as visibility, topic_secret,
+                   COALESCE(sync_status, 'downloaded') as sync_status
             FROM threads
             WHERE deleted = 0 AND ignored = 0
             ORDER BY datetime(created_at) DESC
@@ -266,6 +274,7 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
                 thread_hash: row.get(5)?,
                 visibility: row.get(6)?,
                 topic_secret: row.get(7)?,
+                sync_status: row.get(8)?,
             })
         })?;
 
@@ -442,6 +451,34 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
         Ok(posts)
     }
 
+    fn list_recent(&self, limit: usize) -> Result<Vec<PostRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT p.id, p.thread_id, p.author_peer_id, p.body, p.created_at, p.updated_at
+            FROM posts p
+            INNER JOIN threads t ON p.thread_id = t.id
+            WHERE t.sync_status = 'downloaded'
+            ORDER BY datetime(p.created_at) DESC
+            LIMIT ?1
+            "#,
+        )?;
+        let rows = stmt.query_map(params![limit], |row| {
+            Ok(PostRecord {
+                id: row.get(0)?,
+                thread_id: row.get(1)?,
+                author_peer_id: row.get(2)?,
+                body: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+            })
+        })?;
+        let mut posts = Vec::new();
+        for row in rows {
+            posts.push(row?);
+        }
+        Ok(posts)
+    }
+
     fn add_relationships(&self, child_id: &str, parent_ids: &[String]) -> Result<()> {
         if parent_ids.is_empty() {
             return Ok(());
@@ -477,6 +514,19 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
             parents.push(row?);
         }
         Ok(parents)
+    }
+
+    fn has_children(&self, post_id: &str) -> Result<bool> {
+        let count: i64 = self.conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM post_relationships
+            WHERE parent_id = ?1
+            "#,
+            params![post_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
     }
 }
 

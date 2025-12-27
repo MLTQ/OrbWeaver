@@ -140,6 +140,7 @@ impl Database {
             self.ensure_thread_hash_column(conn)?;
             self.ensure_x25519_pubkey_column(conn)?;
             self.ensure_thread_visibility_columns(conn)?;
+            self.ensure_thread_sync_status_column(conn)?;
             self.ensure_thread_member_keys_table(conn)?;
             self.ensure_dm_tables(conn)?;
             self.ensure_blocking_tables(conn)?;
@@ -402,6 +403,28 @@ impl Database {
         }
         if !has_topic_secret {
             conn.execute("ALTER TABLE threads ADD COLUMN topic_secret TEXT", [])?;
+        }
+        Ok(())
+    }
+
+    fn ensure_thread_sync_status_column(&self, conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare("PRAGMA table_info(threads)")?;
+        let mut has_sync_status = false;
+        let rows = stmt.query_map([], |row| {
+            let name: String = row.get(1)?;
+            Ok(name)
+        })?;
+        for row in rows {
+            let name = row?;
+            if name.eq_ignore_ascii_case("sync_status") {
+                has_sync_status = true;
+                break;
+            }
+        }
+        if !has_sync_status {
+            // Default to 'downloaded' for existing threads (they're already in DB)
+            // Values: 'announced', 'downloading', 'downloaded', 'failed'
+            conn.execute("ALTER TABLE threads ADD COLUMN sync_status TEXT DEFAULT 'downloaded'", [])?;
         }
         Ok(())
     }

@@ -10,6 +10,12 @@ pub struct ThreadSummary {
     pub created_at: String,
     #[serde(default)]
     pub pinned: bool,
+    #[serde(default = "default_sync_status")]
+    pub sync_status: String,
+}
+
+fn default_sync_status() -> String {
+    "downloaded".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -233,4 +239,16 @@ pub struct SearchResultView {
 pub struct SearchResponse {
     pub results: Vec<SearchResultView>,
     pub query: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecentPostView {
+    pub post: PostView,
+    pub thread_title: String,
+    pub files: Vec<FileResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecentPostsResponse {
+    pub posts: Vec<RecentPostView>,
 }

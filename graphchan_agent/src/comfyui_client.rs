@@ -264,4 +264,12 @@ impl ComfyUIClient {
             crate::config::WorkflowType::Flux => "natural",
         }
     }
+
+    pub fn workflow_type(&self) -> &crate::config::WorkflowType {
+        &self.config.workflow_type
+    }
+
+    pub fn negative_prompt(&self) -> &str {
+        &self.config.negative_prompt
+    }
 }
