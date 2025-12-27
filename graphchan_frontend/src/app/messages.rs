@@ -5,7 +5,7 @@ use log::error;
 
 use crate::models::{
     BlockedPeerView, BlocklistEntryView, BlocklistSubscriptionView, ConversationView,
-    DirectMessageView, FileResponse, PeerView, PostView, ReactionsResponse, ThreadDetails,
+    DirectMessageView, FileResponse, PeerView, PostView, ReactionsResponse, SearchResponse, ThreadDetails,
     ThreadSummary,
 };
 
@@ -103,6 +103,10 @@ pub enum AppMessage {
     BlocklistEntriesLoaded {
         blocklist_id: String,
         result: Result<Vec<BlocklistEntryView>, anyhow::Error>,
+    },
+    SearchCompleted {
+        query: String,
+        result: Result<SearchResponse, anyhow::Error>,
     },
 }
 
@@ -775,6 +779,23 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                     Err(err) => {
                         error!("Failed to load entries for blocklist {}: {}", blocklist_id, err);
                         app.blocking_state.blocklist_entries_error = Some(err.to_string());
+                    }
+                }
+            }
+            AppMessage::SearchCompleted { query, result } => {
+                if let ViewState::SearchResults(state) = &mut app.view {
+                    if state.query == query {
+                        state.is_loading = false;
+                        match result {
+                            Ok(response) => {
+                                state.results = response.results;
+                                state.error = None;
+                            }
+                            Err(err) => {
+                                state.error = Some(err.to_string());
+                                state.results.clear();
+                            }
+                        }
                     }
                 }
             }

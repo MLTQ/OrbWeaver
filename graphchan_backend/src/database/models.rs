@@ -129,3 +129,19 @@ pub struct RedactedPostRecord {
     pub redaction_reason: String,
     pub discovered_at: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SearchResultType {
+    Post,
+    File,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchResultRecord {
+    pub result_type: SearchResultType,
+    pub post: PostRecord,
+    pub file: Option<FileRecord>,
+    pub bm25_score: f64,
+    pub thread_title: String,
+    pub snippet: String,
+}

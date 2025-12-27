@@ -115,6 +115,8 @@ pub struct GraphchanApp {
     auto_refresh_enabled: bool, // Toggle for auto-refresh
     is_refreshing: bool, // Track if currently refreshing
     last_refresh_time: Option<std::time::Instant>, // Track animation timing
+    search_query_input: String,
+    search_focused: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -272,6 +274,8 @@ impl GraphchanApp {
             auto_refresh_enabled: true, // Auto-refresh on by default
             is_refreshing: false,
             last_refresh_time: None,
+            search_query_input: String::new(),
+            search_focused: false,
         };
         app.spawn_load_threads();
         app.spawn_load_peers();
@@ -524,6 +528,47 @@ impl GraphchanApp {
             self.active_downloads -= 1;
         }
         self.process_download_queue();
+    }
+
+    fn execute_search(&mut self, query: String) {
+        // Reuse existing SearchState if present, otherwise create new
+        if let ViewState::SearchResults(ref mut state) = self.view {
+            state.query = query.clone();
+            state.is_loading = true;
+            state.error = None;
+        } else {
+            self.view = ViewState::SearchResults(state::SearchState {
+                query: query.clone(),
+                results: Vec::new(),
+                is_loading: true,
+                error: None,
+            });
+        }
+        self.spawn_search(query);
+    }
+
+    fn spawn_search(&self, query: String) {
+        let tx = self.tx.clone();
+        let api = self.api.clone();
+
+        std::thread::spawn(move || {
+            let result = api.search(&query, Some(50));
+            let _ = tx.send(AppMessage::SearchCompleted { query, result });
+        });
+    }
+
+    pub fn open_thread_and_scroll_to_post(&mut self, thread_id: String, post_id: String) {
+        if let Some(summary) = self.threads.iter().find(|t| t.id == thread_id).cloned() {
+            let state = ThreadState {
+                summary,
+                details: None,
+                is_loading: true,
+                scroll_to_post: Some(post_id),
+                ..Default::default()
+            };
+            self.view = ViewState::Thread(state);
+            self.spawn_load_thread(&thread_id);
+        }
     }
 
     fn set_reply_target(state: &mut ThreadState, post_id: &str) {
@@ -907,6 +952,11 @@ impl eframe::App for GraphchanApp {
             }
         }
 
+        // Keyboard shortcut: Ctrl+F / Cmd+F for search
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
+            self.search_focused = true;
+        }
+
         egui::TopBottomPanel::top("top_controls").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("Catalog").clicked() {
@@ -929,6 +979,39 @@ impl eframe::App for GraphchanApp {
                     if ui.button("⚙ Settings").clicked() {
                         self.view = ViewState::Settings;
                     }
+
+                    ui.add_space(10.0);
+                    ui.separator();
+
+                    // Search input
+                    if !self.search_query_input.is_empty() && ui.button("✖").clicked() {
+                        self.search_query_input.clear();
+                    }
+
+                    if !self.search_query_input.is_empty() && ui.button("Search").clicked() {
+                        self.execute_search(self.search_query_input.clone());
+                    }
+
+                    let search_response = ui.add_sized(
+                        egui::vec2(200.0, 20.0),
+                        egui::TextEdit::singleline(&mut self.search_query_input)
+                            .hint_text("Search posts & files...")
+                    );
+
+                    if self.search_focused {
+                        search_response.request_focus();
+                        self.search_focused = false;
+                    }
+
+                    if search_response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        if !self.search_query_input.trim().is_empty() {
+                            self.execute_search(self.search_query_input.clone());
+                        }
+                    }
+
+                    ui.label("🔍");
+
+                    ui.add_space(10.0);
 
                     // Auto-refresh toggle with animated indicator
                     ui.horizontal(|ui| {
@@ -1006,6 +1089,7 @@ impl eframe::App for GraphchanApp {
             ViewState::Settings => "settings",
             ViewState::Conversation(_) => "conversation",
             ViewState::Blocking => "blocking",
+            ViewState::SearchResults(_) => "search",
         };
 
         if view_type == "catalog" {
@@ -1109,6 +1193,25 @@ impl eframe::App for GraphchanApp {
             }
 
             self.blocking_state = temp_state;
+        } else if view_type == "search" {
+            // Extract search state temporarily
+            let mut temp_state = if let ViewState::SearchResults(state) = &mut self.view {
+                std::mem::replace(
+                    state,
+                    state::SearchState::default(),
+                )
+            } else {
+                unreachable!()
+            };
+
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui::search::render_search_results(self, ui, &mut temp_state);
+            });
+
+            // Restore state
+            if let ViewState::SearchResults(state) = &mut self.view {
+                *state = temp_state;
+            }
         }
 
 

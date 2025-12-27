@@ -14,3 +14,4 @@ pub mod input;
 pub mod settings;
 pub mod reaction_colors;
 pub mod blocking;
+pub mod search;

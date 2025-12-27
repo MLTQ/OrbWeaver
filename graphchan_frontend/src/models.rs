@@ -217,3 +217,20 @@ pub struct SubscribeBlocklistRequest {
 fn default_auto_apply() -> bool {
     true
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchResultView {
+    pub result_type: String,
+    pub post: PostView,
+    pub file: Option<FileResponse>,
+    pub thread_id: String,
+    pub thread_title: String,
+    pub bm25_score: f64,
+    pub snippet: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchResponse {
+    pub results: Vec<SearchResultView>,
+    pub query: String,
+}

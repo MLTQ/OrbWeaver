@@ -155,15 +155,49 @@ pub fn download_image(tx: Sender<AppMessage>, file_id: String, url: String) {
 
         let result = (|| {
             let client = crate::api::get_shared_client().map_err(|e| format!("HTTP client error: {}", e))?;
-            let resp = client.get(&url).send().map_err(|e| format!("Request error: {}", e))?;
-            let bytes = resp.bytes().map_err(|e| format!("Download error: {}", e))?;
-            let dyn_img = image::load_from_memory(&bytes).map_err(|e| format!("Image decode error: {}", e))?;
-            let rgba = dyn_img.to_rgba8();
-            let size = [dyn_img.width() as usize, dyn_img.height() as usize];
-            Ok(LoadedImage {
-                size,
-                pixels: rgba.as_flat_samples().as_slice().to_vec(),
-            })
+
+            // Retry up to 3 times for transient errors
+            let mut last_error = String::new();
+            for attempt in 1..=3 {
+                match client.get(&url).send() {
+                    Ok(resp) => {
+                        // Check status code before reading body
+                        let status = resp.status();
+                        if !status.is_success() {
+                            return Err(format!("HTTP error: {} (URL: {})", status, url));
+                        }
+
+                        match resp.bytes() {
+                            Ok(bytes) => {
+                                let dyn_img = image::load_from_memory(&bytes).map_err(|e| format!("Image decode error: {}", e))?;
+                                let rgba = dyn_img.to_rgba8();
+                                let size = [dyn_img.width() as usize, dyn_img.height() as usize];
+                                return Ok(LoadedImage {
+                                    size,
+                                    pixels: rgba.as_flat_samples().as_slice().to_vec(),
+                                });
+                            }
+                            Err(e) => {
+                                last_error = format!("Download error: {}", e);
+                                if attempt < 3 {
+                                    log::warn!("Image download attempt {} failed for {}: {}, retrying...", attempt, file_id, last_error);
+                                    std::thread::sleep(std::time::Duration::from_millis(500 * attempt as u64));
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        last_error = format!("Request error: {}", e);
+                        if attempt < 3 {
+                            log::warn!("Image download attempt {} failed for {}: {}, retrying...", attempt, file_id, last_error);
+                            std::thread::sleep(std::time::Duration::from_millis(500 * attempt as u64));
+                            continue;
+                        }
+                    }
+                }
+            }
+            Err(last_error)
         })();
 
         let message = AppMessage::ImageLoaded { file_id, result };
