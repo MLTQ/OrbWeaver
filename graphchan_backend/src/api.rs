@@ -1006,9 +1006,17 @@ async fn delete_thread(
 ) -> Result<StatusCode, ApiError> {
     use crate::database::repositories::FileRepository;
 
+    tracing::info!("delete_thread: Starting deletion for thread_id={}", id);
+
     // Get all file paths before deletion so we can clean them up
     let file_paths: Vec<std::path::PathBuf> = state.database.with_repositories(|repos| {
-        let files = FileRepository::list_for_thread(&repos.files(), &id)?;
+        tracing::info!("delete_thread: Calling FileRepository::list_for_thread");
+        let files = FileRepository::list_for_thread(&repos.files(), &id)
+            .map_err(|e| {
+                tracing::error!("delete_thread: FileRepository::list_for_thread failed: {:?}", e);
+                e
+            })?;
+        tracing::info!("delete_thread: Found {} files to delete", files.len());
         Ok(files.into_iter()
             .map(|f| std::path::PathBuf::from(f.path))
             .collect())

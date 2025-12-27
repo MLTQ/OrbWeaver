@@ -303,13 +303,19 @@ impl<'conn> ThreadRepository for SqliteThreadRepository<'conn> {
 
     fn delete(&self, thread_id: &str) -> Result<()> {
         // Real DELETE - will cascade to posts, post_relationships, files, thread_tickets
-        self.conn.execute(
+        tracing::info!("ThreadRepository::delete: Deleting thread_id={}", thread_id);
+        let result = self.conn.execute(
             r#"
             DELETE FROM threads
             WHERE id = ?1
             "#,
             params![thread_id],
-        )?;
+        );
+        match &result {
+            Ok(rows) => tracing::info!("ThreadRepository::delete: Deleted {} rows", rows),
+            Err(e) => tracing::error!("ThreadRepository::delete FAILED: {:?}", e),
+        }
+        result?;
         Ok(())
     }
 
@@ -668,15 +674,21 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
     }
 
     fn list_for_thread(&self, thread_id: &str) -> Result<Vec<FileRecord>> {
-        let mut stmt = self.conn.prepare(
-            r#"
+        tracing::info!("FileRepository::list_for_thread called for thread_id: {}", thread_id);
+        let query = r#"
             SELECT f.id, f.post_id, f.path, f.original_name, f.mime, f.blob_id, f.size_bytes, f.checksum, f.ticket
             FROM files f
             INNER JOIN posts p ON f.post_id = p.id
             WHERE p.thread_id = ?1
             ORDER BY f.id ASC
-            "#,
-        )?;
+            "#;
+        tracing::info!("Preparing query: {}", query);
+        let mut stmt = self.conn.prepare(query)
+            .map_err(|e| {
+                tracing::error!("PREPARE FAILED: {:?}", e);
+                e
+            })?;
+        tracing::info!("Query prepared successfully, executing query_map");
         let rows = stmt.query_map(params![thread_id], |row| {
             Ok(FileRecord {
                 id: row.get(0)?,
@@ -1509,7 +1521,7 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
                 t.title,
                 snippet(posts_fts, -1, '<mark>', '</mark>', '...', 30) as snippet
             FROM posts_fts
-            JOIN posts p ON posts_fts.post_id = p.id
+            JOIN posts p ON posts_fts.id = p.id
             JOIN threads t ON p.thread_id = t.id
             WHERE posts_fts MATCH ?1
             ORDER BY score ASC, datetime(p.created_at) DESC
@@ -1547,7 +1559,7 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
                 t.title,
                 snippet(files_fts, -1, '<mark>', '</mark>', '...', 30) as snippet
             FROM files_fts
-            JOIN files f ON files_fts.file_id = f.id
+            JOIN files f ON files_fts.id = f.id
             JOIN posts p ON f.post_id = p.id
             JOIN threads t ON p.thread_id = t.id
             WHERE files_fts MATCH ?1

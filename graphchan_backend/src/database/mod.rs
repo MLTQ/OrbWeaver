@@ -135,6 +135,7 @@ impl Database {
             self.ensure_node_identity_schema_locked(conn)?;
             self.ensure_files_schema_locked(conn)?;
             self.ensure_avatar_column(conn)?;
+            self.ensure_peer_profile_columns(conn)?;
             self.ensure_thread_blob_ticket_column(conn)?;
             self.ensure_thread_hash_column(conn)?;
             self.ensure_x25519_pubkey_column(conn)?;
@@ -290,6 +291,32 @@ impl Database {
         }
         if !has_avatar {
             conn.execute("ALTER TABLE peers ADD COLUMN avatar_file_id TEXT", [])?;
+        }
+        Ok(())
+    }
+
+    fn ensure_peer_profile_columns(&self, conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare("PRAGMA table_info(peers)")?;
+        let mut has_username = false;
+        let mut has_bio = false;
+        let rows = stmt.query_map([], |row| {
+            let name: String = row.get(1)?;
+            Ok(name)
+        })?;
+        for row in rows {
+            let name = row?;
+            if name.eq_ignore_ascii_case("username") {
+                has_username = true;
+            }
+            if name.eq_ignore_ascii_case("bio") {
+                has_bio = true;
+            }
+        }
+        if !has_username {
+            conn.execute("ALTER TABLE peers ADD COLUMN username TEXT", [])?;
+        }
+        if !has_bio {
+            conn.execute("ALTER TABLE peers ADD COLUMN bio TEXT", [])?;
         }
         Ok(())
     }
@@ -539,10 +566,13 @@ impl Database {
         conn.execute("DROP TABLE IF EXISTS posts_fts", [])?;
         conn.execute("DROP TABLE IF EXISTS files_fts", [])?;
 
+        // Ensure FTS5 internal tables are also cleaned up
+        conn.execute("VACUUM", [])?;
+
         // Posts FTS5 table
         conn.execute(
-            r#"CREATE VIRTUAL TABLE IF NOT EXISTS posts_fts USING fts5(
-                post_id UNINDEXED,
+            r#"CREATE VIRTUAL TABLE posts_fts USING fts5(
+                id UNINDEXED,
                 thread_id UNINDEXED,
                 body,
                 content='posts',
@@ -554,8 +584,8 @@ impl Database {
 
         // Files FTS5 table
         conn.execute(
-            r#"CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
-                file_id UNINDEXED,
+            r#"CREATE VIRTUAL TABLE files_fts USING fts5(
+                id UNINDEXED,
                 post_id UNINDEXED,
                 original_name,
                 path,
@@ -568,7 +598,7 @@ impl Database {
 
         // Populate existing posts
         conn.execute(
-            "INSERT INTO posts_fts(rowid, post_id, thread_id, body)
+            "INSERT INTO posts_fts(rowid, id, thread_id, body)
              SELECT rowid, id, thread_id, body FROM posts
              WHERE rowid NOT IN (SELECT rowid FROM posts_fts)",
             [],
@@ -576,7 +606,7 @@ impl Database {
 
         // Populate existing files (join with posts to get thread_id)
         conn.execute(
-            "INSERT INTO files_fts(rowid, file_id, post_id, original_name, path)
+            "INSERT INTO files_fts(rowid, id, post_id, original_name, path)
              SELECT f.rowid, f.id, f.post_id, f.original_name, f.path
              FROM files f
              WHERE f.rowid NOT IN (SELECT rowid FROM files_fts)",
@@ -587,7 +617,7 @@ impl Database {
         conn.execute(
             "CREATE TRIGGER IF NOT EXISTS posts_fts_insert
              AFTER INSERT ON posts BEGIN
-                 INSERT INTO posts_fts(rowid, post_id, thread_id, body)
+                 INSERT INTO posts_fts(rowid, id, thread_id, body)
                  VALUES (new.rowid, new.id, new.thread_id, new.body);
              END",
             [],
@@ -613,7 +643,7 @@ impl Database {
         conn.execute(
             "CREATE TRIGGER IF NOT EXISTS files_fts_insert
              AFTER INSERT ON files BEGIN
-                 INSERT INTO files_fts(rowid, file_id, post_id, original_name, path)
+                 INSERT INTO files_fts(rowid, id, post_id, original_name, path)
                  VALUES (new.rowid, new.id, new.post_id, new.original_name, new.path);
              END",
             [],
