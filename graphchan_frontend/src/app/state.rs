@@ -29,6 +29,7 @@ pub struct ImporterState {
 
 pub enum ViewState {
     Catalog,
+    Messages,  // List of all DM conversations (formerly "Private Threads" in catalog)
     Thread(ThreadState),
     Following,
     FollowingCatalog(PeerView),

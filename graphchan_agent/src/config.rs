@@ -140,6 +140,11 @@ pub struct ComfyUIConfig {
     /// Scheduler (e.g., "karras", "normal")
     #[serde(default = "default_scheduler")]
     pub scheduler: String,
+
+    /// Negative prompt for SD/SDXL (ignored for Flux)
+    /// Used to specify what NOT to generate
+    #[serde(default = "default_negative_prompt")]
+    pub negative_prompt: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -179,6 +184,15 @@ fn default_sampler() -> String {
 
 fn default_scheduler() -> String {
     "normal".to_string()
+}
+
+fn default_negative_prompt() -> String {
+    "ugly, blurry, low quality, distorted, deformed, bad anatomy, \
+     poorly drawn, bad proportions, gross proportions, malformed limbs, \
+     missing arms, missing legs, extra arms, extra legs, mutated hands, \
+     long neck, duplicate, morbid, mutilated, extra fingers, poorly drawn hands, \
+     poorly drawn face, mutation, bad art, bad hands, text, error, watermark, \
+     signature, username, worst quality, jpeg artifacts".to_string()
 }
 
 fn default_graphchan_url() -> String {

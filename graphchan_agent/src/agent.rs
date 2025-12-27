@@ -187,6 +187,15 @@ impl Agent {
                 continue;
             }
 
+            // Only respond to leaf nodes (posts without children) to avoid spam on restart
+            let has_children = thread_details.posts.iter().any(|p| {
+                p.parent_post_id.as_ref() == Some(&post.id)
+            });
+            if has_children {
+                debug!("Skipping post {} (already has replies - not a leaf node)", post.id);
+                continue;
+            }
+
             if self.should_respond_to_post(post) {
                 info!(
                     "Responding to post {} in thread '{}'",
@@ -1001,14 +1010,22 @@ impl Agent {
         let mut current_prompt = self.create_image_prompt(initial_description).await?;
         let mut iteration = 0;
 
+        // Use static negative prompt from config for SD/SDXL, None for Flux
+        let negative_prompt = match *comfyui.workflow_type() {
+            crate::config::WorkflowType::SD | crate::config::WorkflowType::SDXL => {
+                Some(comfyui.negative_prompt())
+            }
+            crate::config::WorkflowType::Flux => None,
+        };
+
         loop {
             iteration += 1;
-            info!("Generating image (iteration {}): {}", iteration, current_prompt.positive);
+            info!("Generating image (iteration {}): {}", iteration, current_prompt);
 
-            // Generate image
+            // Generate image with static negative prompt
             let image_bytes = comfyui.generate_image(
-                &current_prompt.positive,
-                current_prompt.negative.as_deref(),
+                &current_prompt,
+                negative_prompt,
             ).await.context("Failed to generate image")?;
 
             info!("Image generated ({} bytes)", image_bytes.len());
@@ -1016,7 +1033,7 @@ impl Agent {
             // Try to evaluate with vision model (optional - not all models support vision)
             match self.llm.evaluate_image(
                 &image_bytes,
-                &current_prompt.positive,
+                &current_prompt,
                 context,
             ).await {
                 Ok(evaluation) => {
@@ -1052,7 +1069,7 @@ impl Agent {
     }
 
     /// Create an image prompt (tags or natural language based on workflow type)
-    async fn create_image_prompt(&self, description: &str) -> Result<ImagePrompt> {
+    async fn create_image_prompt(&self, description: &str) -> Result<String> {
         let comfyui = self.comfyui.as_ref()
             .ok_or_else(|| anyhow::anyhow!("ComfyUI not configured"))?;
 
@@ -1069,20 +1086,12 @@ impl Agent {
                     system_prompt,
                     if prompt_style == "tags" {
                         "Convert the description into Stable Diffusion tags using comma-separated keywords. \
-                         Use emphasis syntax: (emphasis), ((strong emphasis)), [de-emphasis].\n\n\
-                         Respond with JSON:\n\
-                         {\n  \
-                           \"positive\": \"masterpiece, high quality, detailed, ...\",\n  \
-                           \"negative\": \"ugly, blurry, low quality, ...\"\n\
-                         }"
+                         Use emphasis syntax: (emphasis), ((strong emphasis)), [de-emphasis]. \
+                         Output ONLY the positive prompt tags - negative prompts are handled separately."
                     } else {
                         "Write a vivid, detailed natural language prompt for Flux/Black Forest Labs models. \
-                         Use your unique voice and aesthetic sensibility.\n\n\
-                         Respond with JSON:\n\
-                         {\n  \
-                           \"positive\": \"A detailed natural language description...\",\n  \
-                           \"negative\": null\n\
-                         }"
+                         Use your unique voice and aesthetic sensibility. \
+                         Output ONLY the prompt description."
                     }
                 ),
             },
@@ -1092,7 +1101,7 @@ impl Agent {
             },
         ];
 
-        self.llm.generate_json(messages, None).await
+        self.llm.generate(messages).await
     }
 }
 
@@ -1101,10 +1110,4 @@ struct ImageGenerationDecision {
     should_generate: bool,
     reasoning: String,
     image_description: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct ImagePrompt {
-    positive: String,
-    negative: Option<String>,
 }

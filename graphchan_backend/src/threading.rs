@@ -131,6 +131,7 @@ impl ThreadService {
             thread_hash: None, // Will be calculated after posts are added
             visibility: "social".to_string(),
             topic_secret: None,
+            sync_status: "downloaded".to_string(), // Locally created thread
         };
 
         let initial_post_body = input.body.clone();
@@ -209,6 +210,7 @@ pub struct ThreadSummary {
     pub pinned: bool,
     pub visibility: String,
     pub topic_secret: Option<String>,
+    pub sync_status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -274,6 +276,7 @@ impl ThreadSummary {
             pinned: record.pinned,
             visibility: record.visibility,
             topic_secret: record.topic_secret,
+            sync_status: record.sync_status,
         }
     }
 }

@@ -108,6 +108,7 @@ pub enum AppMessage {
         query: String,
         result: Result<SearchResponse, anyhow::Error>,
     },
+    RecentPostsLoaded(Result<crate::models::RecentPostsResponse, anyhow::Error>),
 }
 
 pub(super) fn process_messages(app: &mut GraphchanApp) {
@@ -796,6 +797,19 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                                 state.results.clear();
                             }
                         }
+                    }
+                }
+            }
+            AppMessage::RecentPostsLoaded(result) => {
+                app.recent_posts_loading = false;
+                match result {
+                    Ok(response) => {
+                        app.recent_posts = response.posts;
+                        app.recent_posts_error = None;
+                    }
+                    Err(err) => {
+                        error!("Failed to load recent posts: {}", err);
+                        app.recent_posts_error = Some(err.to_string());
                     }
                 }
             }

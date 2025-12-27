@@ -12,26 +12,19 @@ impl GraphchanApp {
         });
         ui.add_space(10.0);
 
-        let local_peer_id = self.identity_state.local_peer.as_ref().map(|p| p.id.clone());
-
-        let (my_threads, network_threads): (Vec<ThreadSummary>, Vec<ThreadSummary>) = self.threads.iter().cloned().partition(|t| {
-            if let Some(local_id) = &local_peer_id {
-                t.creator_peer_id.as_ref() == Some(local_id)
-            } else {
-                false
-            }
-        });
-
-        let conversations = self.dm_state.conversations.clone();
+        // Partition threads based on sync_status
+        let (my_threads, network_threads): (Vec<ThreadSummary>, Vec<ThreadSummary>) =
+            self.threads.iter().cloned().partition(|t| {
+                t.sync_status == "downloaded"
+            });
 
         self.render_catalog_three_columns(
             ui,
-            "Private Threads",
-            &conversations,
             "My Threads",
             &my_threads,
             "Network Threads",
-            &network_threads
+            &network_threads,
+            "Recent Posts",
         );
     }
 
@@ -60,12 +53,11 @@ impl GraphchanApp {
     fn render_catalog_three_columns(
         &mut self,
         ui: &mut egui::Ui,
-        dm_title: &str,
-        conversations: &[crate::models::ConversationView],
+        title1: &str,
+        threads1: &[ThreadSummary],
         title2: &str,
         threads2: &[ThreadSummary],
         title3: &str,
-        threads3: &[ThreadSummary],
     ) {
         if self.threads_loading && self.threads.is_empty() {
             ui.add(egui::Spinner::new());
@@ -79,36 +71,31 @@ impl GraphchanApp {
         }
 
         ui.columns(3, |columns| {
-            // Column 1: Private Threads (DMs)
+            // Column 1: My Threads (all downloaded threads)
             columns[0].vertical(|ui| {
-                ui.heading(dm_title);
+                ui.heading(title1);
                 ui.add_space(10.0);
-
-                if self.dm_state.conversations_loading && conversations.is_empty() {
-                    ui.add(egui::Spinner::new());
-                }
-                if let Some(err) = &self.dm_state.conversations_error {
-                    ui.colored_label(Color32::LIGHT_RED, err);
-                    if ui.button("Retry").clicked() {
-                        self.spawn_load_conversations();
-                    }
-                }
-
-                super::conversations::render_conversations_list(self, ui, conversations);
+                self.render_thread_list(ui, threads1);
             });
 
-            // Column 2: My Threads
+            // Column 2: Network Threads (announced but not downloaded)
             columns[1].vertical(|ui| {
                 ui.heading(title2);
                 ui.add_space(10.0);
-                self.render_thread_list(ui, threads2);
+                if threads2.is_empty() {
+                    ui.label(RichText::new("No network threads available").italics().weak());
+                    ui.add_space(5.0);
+                    ui.label("Thread announcements from peers will appear here.");
+                } else {
+                    self.render_thread_list(ui, threads2);
+                }
             });
 
-            // Column 3: Network Threads
+            // Column 3: Recent Posts
             columns[2].vertical(|ui| {
                 ui.heading(title3);
                 ui.add_space(10.0);
-                self.render_thread_list(ui, threads3);
+                self.render_recent_posts(ui);
             });
         });
     }
@@ -209,6 +196,109 @@ impl GraphchanApp {
 
         if let Some(thread_id) = thread_to_ignore {
             self.spawn_ignore_thread(thread_id);
+        }
+    }
+
+    fn render_recent_posts(&mut self, ui: &mut egui::Ui) {
+        // Show loading/error states
+        if self.recent_posts_loading && self.recent_posts.is_empty() {
+            ui.centered_and_justified(|ui| {
+                ui.spinner();
+            });
+            return;
+        }
+
+        if let Some(error) = &self.recent_posts_error {
+            ui.colored_label(Color32::RED, format!("Error: {}", error));
+            return;
+        }
+
+        if self.recent_posts.is_empty() {
+            ui.centered_and_justified(|ui| {
+                ui.label(RichText::new("No recent posts yet").italics().weak());
+            });
+            return;
+        }
+
+        let mut thread_to_open: Option<String> = None;
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for recent_post in &self.recent_posts.clone() {
+                let post = &recent_post.post;
+                let thread_title = &recent_post.thread_title;
+
+                ui.group(|ui| {
+                    ui.set_width(ui.available_width());
+
+                    // Thread title context
+                    ui.label(RichText::new(thread_title).strong().size(12.0));
+
+                    ui.add_space(4.0);
+
+                    // Post preview - truncate to ~200 characters
+                    let preview = if post.body.len() > 200 {
+                        format!("{}...", &post.body[..200])
+                    } else {
+                        post.body.clone()
+                    };
+                    ui.label(RichText::new(preview).size(11.0));
+
+                    // Show image thumbnails if available
+                    if !recent_post.files.is_empty() {
+                        ui.add_space(4.0);
+                        ui.horizontal_wrapped(|ui| {
+                            for file in &recent_post.files {
+                                if let Some(mime) = &file.mime {
+                                    if mime.starts_with("image/") {
+                                        // Show image thumbnail (32x32)
+                                        if let Some(texture) = self.image_textures.get(&file.id) {
+                                            ui.image((texture.id(), egui::vec2(32.0, 32.0)));
+                                        } else if !self.image_loading.contains(&file.id) {
+                                            // Queue image for loading
+                                            if let Some(url) = &file.download_url {
+                                                let file_id = file.id.clone();
+                                                let url = url.clone();
+                                                self.image_loading.insert(file_id.clone());
+                                                super::super::tasks::download_image(
+                                                    self.tx.clone(),
+                                                    file_id,
+                                                    url,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+
+                    ui.add_space(4.0);
+
+                    // Timestamp and click to navigate
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format_timestamp(&post.created_at)).size(10.0).weak());
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("View →").clicked() {
+                                thread_to_open = Some(post.thread_id.clone());
+                            }
+                        });
+                    });
+                });
+
+                ui.add_space(6.0);
+            }
+        });
+
+        // Handle thread opening after UI loop
+        if let Some(thread_id) = thread_to_open {
+            // Find the thread summary in our threads list
+            if let Some(summary) = self.threads.iter().find(|t| t.id == thread_id).cloned() {
+                self.open_thread(summary);
+            } else {
+                // Thread not in list yet, try to load it
+                self.spawn_load_thread(&thread_id);
+            }
         }
     }
 }

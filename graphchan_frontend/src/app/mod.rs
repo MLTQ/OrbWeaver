@@ -117,6 +117,12 @@ pub struct GraphchanApp {
     last_refresh_time: Option<std::time::Instant>, // Track animation timing
     search_query_input: String,
     search_focused: bool,
+    // Recent posts feed
+    recent_posts: Vec<crate::models::RecentPostView>,
+    recent_posts_loading: bool,
+    recent_posts_error: Option<String>,
+    last_recent_posts_refresh: Option<std::time::Instant>,
+    recent_posts_poll_interval: u64, // In seconds
 }
 
 #[derive(Debug, Clone)]
@@ -276,8 +282,15 @@ impl GraphchanApp {
             last_refresh_time: None,
             search_query_input: String::new(),
             search_focused: false,
+            // Recent posts feed
+            recent_posts: Vec::new(),
+            recent_posts_loading: false,
+            recent_posts_error: None,
+            last_recent_posts_refresh: None,
+            recent_posts_poll_interval: 5, // Poll every 5 seconds by default
         };
         app.spawn_load_threads();
+        app.spawn_load_recent_posts();
         app.spawn_load_peers();
         app.spawn_load_conversations();
         app.spawn_load_blocked_peers();
@@ -356,6 +369,16 @@ impl GraphchanApp {
 
     fn spawn_load_peers(&mut self) {
         tasks::load_peers(self.api.clone(), self.tx.clone());
+    }
+
+    fn spawn_load_recent_posts(&mut self) {
+        if self.recent_posts_loading {
+            return;
+        }
+        self.recent_posts_loading = true;
+        self.recent_posts_error = None;
+        self.last_recent_posts_refresh = Some(std::time::Instant::now());
+        tasks::load_recent_posts(self.api.clone(), self.tx.clone());
     }
 
     fn spawn_load_conversations(&mut self) {
@@ -952,6 +975,17 @@ impl eframe::App for GraphchanApp {
             }
         }
 
+        // Recent posts polling
+        if !self.recent_posts_loading {
+            let should_poll = self.last_recent_posts_refresh
+                .map(|t| t.elapsed().as_secs() >= self.recent_posts_poll_interval)
+                .unwrap_or(true);
+
+            if should_poll {
+                self.spawn_load_recent_posts();
+            }
+        }
+
         // Keyboard shortcut: Ctrl+F / Cmd+F for search
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
             self.search_focused = true;
@@ -961,6 +995,9 @@ impl eframe::App for GraphchanApp {
             ui.horizontal(|ui| {
                 if ui.button("Catalog").clicked() {
                     self.view = ViewState::Catalog;
+                }
+                if ui.button("Messages").clicked() {
+                    self.view = ViewState::Messages;
                 }
                 if ui.button("New Thread").clicked() {
                     self.show_create_thread = true;
@@ -1082,6 +1119,7 @@ impl eframe::App for GraphchanApp {
         // We need to extract mutable state to avoid double-borrowing self in the CentralPanel closure
         let view_type = match &self.view {
             ViewState::Catalog => "catalog",
+            ViewState::Messages => "messages",
             ViewState::Thread(_) => "thread",
             ViewState::Following => "following",
             ViewState::FollowingCatalog(_) => "following_catalog",
@@ -1095,6 +1133,10 @@ impl eframe::App for GraphchanApp {
         if view_type == "catalog" {
             egui::CentralPanel::default().show(ctx, |ui| {
                 self.render_catalog(ui);
+            });
+        } else if view_type == "messages" {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui::conversations::render_conversations_list(self, ui, &self.dm_state.conversations.clone());
             });
         } else if view_type == "import" {
             egui::CentralPanel::default().show(ctx, |ui| {
