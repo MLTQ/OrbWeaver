@@ -57,7 +57,7 @@ pub async fn run_cli(
     };
 
     println!("Graphchan CLI ready. Type 'help' for a list of commands.");
-    println!("Your friendcode: {}", session.identity.friendcode);
+    println!("Your friend code: {}", session.identity.short_friendcode);
     session.print_addresses();
 
     let stdin = tokio::io::stdin();
@@ -123,6 +123,9 @@ impl CliSession {
                 Ok(LoopAction::Continue)
             }
             "friendcode" => {
+                println!("\nYour Friend Code (share this with others):");
+                println!("{}", self.identity.short_friendcode);
+                println!("\nLegacy format (for compatibility):");
                 println!("{}", self.identity.friendcode);
                 self.print_addresses();
                 Ok(LoopAction::Continue)
@@ -219,8 +222,8 @@ impl CliSession {
     fn print_help(&self) {
         println!("Available commands:");
         println!("  help                 Show this help message");
-        println!("  friendcode           Print your friendcode and known addresses");
-        println!("  add-friend <code>    Register a remote friendcode and attempt connection");
+        println!("  friendcode           Print your friend code (short and legacy formats)");
+        println!("  add-friend <code>    Register a friend code (accepts both short and legacy formats)");
         println!("  list-friends         Show known peers and online status");
         println!("  list-threads [N]     List recent threads (default 20)");
         println!("  view-thread <id>     Display posts within a thread");

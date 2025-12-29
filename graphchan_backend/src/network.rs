@@ -10,6 +10,8 @@ use crate::threading::{PostView, ThreadDetails};
 use anyhow::{Context, Result};
 use events::{EventPayload, NetworkEvent};
 use iroh::endpoint::{Endpoint, RelayMode};
+use iroh::discovery::pkarr::dht::DhtDiscovery;
+use iroh::discovery::mdns::MdnsDiscovery;
 use iroh::protocol::Router;
 use iroh_base::{EndpointAddr, PublicKey, RelayUrl};
 use iroh_blobs::store::fs::FsStore;
@@ -56,14 +58,44 @@ impl NetworkHandle {
         local_peer_id: String,
     ) -> Result<Self> {
         let secret = load_iroh_secret(paths)?;
-        let mut builder = Endpoint::builder().secret_key(secret);
+        let endpoint_id = secret.public();
 
-        if let Some(relay_url) = &config.relay_url {
+        // Determine relay mode
+        let relay_mode = if let Some(relay_url) = &config.relay_url {
             let relay_url: RelayUrl = relay_url
                 .parse()
                 .with_context(|| format!("invalid GRAPHCHAN_RELAY_URL value: {relay_url}"))?;
-            let relay_map: RelayMap = relay_url.into();
-            builder = builder.relay_mode(RelayMode::Custom(relay_map));
+            tracing::info!(relay = %relay_url, "using custom relay server");
+            RelayMode::Custom(relay_url.into())
+        } else {
+            // Use default public relays (n0's servers)
+            tracing::info!("using default public relays (n0/iroh team)");
+            RelayMode::Default
+        };
+
+        // Create endpoint builder with relay mode
+        let mut builder = Endpoint::empty_builder(relay_mode).secret_key(secret);
+
+        // Conditionally add DHT discovery if enabled
+        if config.enable_dht {
+            let dht_discovery = DhtDiscovery::builder()
+                .build()
+                .context("Failed to create DHT discovery")?;
+            builder = builder.discovery(dht_discovery);
+            tracing::info!("DHT discovery enabled (BitTorrent mainline)");
+        } else {
+            tracing::info!("DHT discovery disabled via config");
+        }
+
+        // Conditionally add mDNS discovery if enabled
+        if config.enable_mdns {
+            let mdns_discovery = MdnsDiscovery::builder()
+                .build(endpoint_id)
+                .context("Failed to create mDNS discovery")?;
+            builder = builder.discovery(mdns_discovery);
+            tracing::info!("mDNS discovery enabled (local network)");
+        } else {
+            tracing::info!("mDNS discovery disabled via config");
         }
 
         let endpoint = builder

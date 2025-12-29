@@ -44,13 +44,25 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                         if let Some(bio) = &peer.bio {
                             ui.label(format!("Bio: {}", bio));
                         }
-                        ui.label(format!("Friendcode: {}", peer.friendcode.as_deref().unwrap_or("Unknown")));
+
+                        // Show short friend code prominently
+                        if let Some(short_code) = &peer.short_friendcode {
+                            ui.label(egui::RichText::new("Friend Code:").strong());
+                            ui.monospace(short_code);
+                            if ui.small_button("📋 Copy").clicked() {
+                                ui.output_mut(|o| o.copied_text = short_code.clone());
+                            }
+                        } else if let Some(legacy_code) = &peer.friendcode {
+                            ui.label(format!("Friend Code: {}", legacy_code));
+                        }
+
                         ui.label(format!("Fingerprint: {}", peer.gpg_fingerprint.as_deref().unwrap_or("Unknown")));
 
                         ui.add_space(10.0);
 
                         // Follow button
-                        if let Some(friendcode) = &peer.friendcode {
+                        // Prefer short_friendcode, fall back to legacy friendcode
+                        if let Some(friendcode) = peer.short_friendcode.as_ref().or(peer.friendcode.as_ref()) {
                             // Check if we already follow this peer (trust_state == "trusted")
                             let already_following = peer.trust_state == "trusted";
 
@@ -97,9 +109,20 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                     }
 
                     ui.group(|ui| {
-                        ui.label(format!("Friendcode: {}", peer.friendcode.as_deref().unwrap_or("Unknown")));
+                        // Show short friend code prominently for local peer
+                        if let Some(short_code) = &peer.short_friendcode {
+                            ui.label(egui::RichText::new("Your Friend Code:").strong());
+                            ui.label("Share this with others to connect:");
+                            ui.monospace(short_code);
+                            if ui.button("📋 Copy to Clipboard").clicked() {
+                                ui.output_mut(|o| o.copied_text = short_code.clone());
+                            }
+                        } else if let Some(legacy_code) = &peer.friendcode {
+                            ui.label(format!("Your Friend Code: {}", legacy_code));
+                        }
+
                         ui.label(format!("Fingerprint: {}", peer.gpg_fingerprint.as_deref().unwrap_or("Unknown")));
-                        
+
                         ui.add_space(10.0);
                         ui.label("Username:");
                         ui.text_edit_singleline(&mut state.username_input);

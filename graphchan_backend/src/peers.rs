@@ -1,7 +1,7 @@
 use crate::database::models::PeerRecord;
 use crate::database::repositories::PeerRepository;
 use crate::database::Database;
-use crate::identity::{decode_friendcode, FriendCodePayload};
+use crate::identity::{decode_friendcode_auto, encode_short_friendcode, FriendCodePayload};
 use crate::utils::now_utc_iso;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -51,7 +51,7 @@ impl PeerService {
     }
 
     pub fn register_friendcode(&self, friendcode: &str) -> Result<PeerView> {
-        let payload = decode_friendcode(friendcode)
+        let payload = decode_friendcode_auto(friendcode)
             .with_context(|| "failed to decode friendcode".to_string())?;
         let record = payload_to_peer_record(friendcode, &payload);
         self.database.with_repositories(|repos| {
@@ -88,6 +88,7 @@ pub struct PeerView {
     pub username: Option<String>,
     pub bio: Option<String>,
     pub friendcode: Option<String>,
+    pub short_friendcode: Option<String>,
     pub iroh_peer_id: Option<String>,
     pub gpg_fingerprint: Option<String>,
     pub x25519_pubkey: Option<String>,
@@ -98,12 +99,21 @@ pub struct PeerView {
 
 impl PeerView {
     pub fn from_record(record: PeerRecord) -> Self {
+        // Generate short friend code if we have both iroh_peer_id and gpg_fingerprint
+        let short_friendcode = match (&record.iroh_peer_id, &record.gpg_fingerprint) {
+            (Some(peer_id), Some(fingerprint)) => {
+                Some(encode_short_friendcode(peer_id, fingerprint))
+            }
+            _ => None,
+        };
+
         Self {
             id: record.id,
             alias: record.alias,
             username: record.username,
             bio: record.bio,
             friendcode: record.friendcode,
+            short_friendcode,
             iroh_peer_id: record.iroh_peer_id,
             gpg_fingerprint: record.gpg_fingerprint,
             x25519_pubkey: record.x25519_pubkey,

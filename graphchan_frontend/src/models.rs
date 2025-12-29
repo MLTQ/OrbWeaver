@@ -109,6 +109,8 @@ pub struct PeerView {
     pub username: Option<String>,
     pub bio: Option<String>,
     pub friendcode: Option<String>,
+    #[serde(default)]
+    pub short_friendcode: Option<String>,
     pub iroh_peer_id: Option<String>,
     pub gpg_fingerprint: Option<String>,
     pub last_seen: Option<String>,

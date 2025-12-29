@@ -173,6 +173,7 @@ async fn health_handler(State(state): State<AppState>) -> Json<HealthResponse> {
             gpg_fingerprint: state.identity.gpg_fingerprint.clone(),
             iroh_peer_id: state.identity.iroh_peer_id.clone(),
             friendcode: state.identity.friendcode.clone(),
+            short_friendcode: state.identity.short_friendcode.clone(),
         },
         network: NetworkInfo::from_handle(&state.network),
     })
@@ -819,6 +820,7 @@ struct IdentityInfo {
     gpg_fingerprint: String,
     iroh_peer_id: String,
     friendcode: String,
+    short_friendcode: String,
 }
 
 #[derive(Serialize)]
