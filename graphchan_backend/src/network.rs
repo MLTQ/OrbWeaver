@@ -53,6 +53,7 @@ impl NetworkHandle {
         config: &NetworkConfig,
         blob_store: FsStore,
         database: Database,
+        local_peer_id: String,
     ) -> Result<Self> {
         let secret = load_iroh_secret(paths)?;
         let mut builder = Endpoint::builder().secret_key(secret);
@@ -93,6 +94,7 @@ impl NetworkHandle {
         let ingest_paths = paths.clone();
         let ingest_store = blob_store.clone();
         let ingest_endpoint = endpoint.clone();
+        let ingest_local_peer_id = local_peer_id.clone();
         let ingest_worker = tokio::spawn(async move {
             ingest::run_ingest_loop(
                 ingest_database,
@@ -101,6 +103,7 @@ impl NetworkHandle {
                 inbound_rx,
                 ingest_store,
                 ingest_endpoint,
+                ingest_local_peer_id,
             )
             .await;
         });

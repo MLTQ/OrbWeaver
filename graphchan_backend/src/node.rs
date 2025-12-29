@@ -28,6 +28,7 @@ impl GraphchanNode {
             &config.network,
             blob_store.clone(),
             bootstrap.database.clone(),
+            bootstrap.identity.gpg_fingerprint.clone(),
         )
         .await?;
 

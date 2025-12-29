@@ -14,9 +14,11 @@ use iroh::endpoint::Endpoint;
 use iroh_blobs::store::fs::FsStore;
 use iroh_blobs::ticket::BlobTicket;
 use rusqlite::OptionalExtension;
+use std::collections::HashSet;
 use std::fs;
 use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::Mutex;
 
 /// Request to resynchronize a thread due to detected hash mismatch
 struct ResyncRequest {
@@ -31,8 +33,14 @@ pub async fn run_ingest_loop(
     mut rx: Receiver<InboundGossip>,
     blobs: FsStore,
     endpoint: Arc<Endpoint>,
+    local_peer_id: String,
 ) {
     tracing::info!("network ingest loop started");
+
+    // Cache of recently seen message IDs to prevent re-broadcast loops
+    // Format: "post:{id}" or "thread:{id}" or "file:{id}" etc.
+    let seen_messages: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+
     while let Some(message) = rx.recv().await {
         let peer = message.peer_id.clone();
         match handle_message(
@@ -43,7 +51,9 @@ pub async fn run_ingest_loop(
             message.payload,
             &blobs,
             &endpoint,
-        ) {
+            &seen_messages,
+            &local_peer_id,
+        ).await {
             Ok(Some(resync_request)) => {
                 // Spawn background task to re-download thread
                 let db = database.clone();
@@ -89,7 +99,7 @@ pub async fn run_ingest_loop(
     tracing::info!("network ingest loop shutting down");
 }
 
-fn handle_message(
+async fn handle_message(
     database: &Database,
     paths: &GraphchanPaths,
     publisher: &Sender<NetworkEvent>,
@@ -97,6 +107,8 @@ fn handle_message(
     payload: EventPayload,
     blobs: &FsStore,
     endpoint: &Arc<Endpoint>,
+    seen_messages: &Arc<Mutex<HashSet<String>>>,
+    local_peer_id: &str,
 ) -> Result<Option<ResyncRequest>> {
     match payload {
         EventPayload::ThreadAnnouncement(announcement) => {
@@ -107,16 +119,28 @@ fn handle_message(
                 announcer = %announcement.announcer_peer_id,
                 "📢 received thread announcement (will download on-demand)"
             );
-            let announcement_clone = announcement.clone();
-            apply_thread_announcement(database, announcement)?;
 
-            // Re-broadcast thread announcements to propagate through the network
-            let publisher_clone = publisher.clone();
-            tokio::spawn(async move {
-                if let Err(err) = publisher_clone.send(NetworkEvent::Broadcast(EventPayload::ThreadAnnouncement(announcement_clone))).await {
-                    tracing::warn!(error = ?err, "failed to re-broadcast ThreadAnnouncement");
-                }
-            });
+            let msg_id = format!("thread:{}:{}", announcement.thread_id, announcement.thread_hash);
+            let should_rebroadcast = {
+                let mut seen = seen_messages.lock().await;
+                seen.insert(msg_id)
+            };
+
+            apply_thread_announcement(database, announcement.clone())?;
+
+            // Re-broadcast only if this is the first time we've seen this version
+            // CRITICAL: Change announcer_peer_id to OUR peer ID so we publish to OUR peer topic
+            // This enables transitive discovery: A→B→C→... without allowing B to write to A's topic
+            if should_rebroadcast {
+                let publisher_clone = publisher.clone();
+                let mut rebroadcast_announcement = announcement.clone();
+                rebroadcast_announcement.announcer_peer_id = local_peer_id.to_string();
+                tokio::spawn(async move {
+                    if let Err(err) = publisher_clone.send(NetworkEvent::Broadcast(EventPayload::ThreadAnnouncement(rebroadcast_announcement))).await {
+                        tracing::warn!(error = ?err, "failed to re-broadcast ThreadAnnouncement");
+                    }
+                });
+            }
 
             Ok(None)
         }
@@ -127,23 +151,36 @@ fn handle_message(
                 author = ?post.author_peer_id,
                 "📝 received PostUpdate"
             );
-            let post_clone = post.clone();
-            let result = apply_post_update(database, post)?;
 
-            // Re-broadcast the post to propagate it through the network
-            // The gossip protocol will deduplicate so we don't get infinite loops
+            let msg_id = format!("post:{}", post.id);
+            let should_rebroadcast = {
+                let mut seen = seen_messages.lock().await;
+                seen.insert(msg_id)
+            };
+
+            let result = apply_post_update(database, post.clone())?;
+
+            // Re-broadcast only if this is the first time we've seen this post
             // This enables transitive post propagation: A → B → C → ...
-            let publisher_clone = publisher.clone();
-            tokio::spawn(async move {
-                if let Err(err) = publisher_clone.send(NetworkEvent::Broadcast(EventPayload::PostUpdate(post_clone))).await {
-                    tracing::warn!(error = ?err, "failed to re-broadcast PostUpdate");
-                }
-            });
+            if should_rebroadcast {
+                let publisher_clone = publisher.clone();
+                let post_clone = post.clone();
+                tokio::spawn(async move {
+                    if let Err(err) = publisher_clone.send(NetworkEvent::Broadcast(EventPayload::PostUpdate(post_clone))).await {
+                        tracing::warn!(error = ?err, "failed to re-broadcast PostUpdate");
+                    }
+                });
+            }
 
             Ok(result)
         }
         EventPayload::FileAvailable(announcement) => {
-            let announcement_clone = announcement.clone();
+            let msg_id = format!("file:{}", announcement.id);
+            let should_rebroadcast = {
+                let mut seen = seen_messages.lock().await;
+                seen.insert(msg_id)
+            };
+
             let fetch_needed = apply_file_announcement(database, paths, &announcement)?;
             if fetch_needed && announcement.ticket.is_some() {
                 tracing::info!(
@@ -169,13 +206,16 @@ fn handle_message(
                 );
             }
 
-            // Re-broadcast file announcements to propagate through the network
-            let publisher_clone = publisher.clone();
-            tokio::spawn(async move {
-                if let Err(err) = publisher_clone.send(NetworkEvent::Broadcast(EventPayload::FileAvailable(announcement_clone))).await {
-                    tracing::warn!(error = ?err, "failed to re-broadcast FileAvailable");
-                }
-            });
+            // Re-broadcast only if first time seeing this file
+            if should_rebroadcast {
+                let publisher_clone = publisher.clone();
+                let announcement_clone = announcement.clone();
+                tokio::spawn(async move {
+                    if let Err(err) = publisher_clone.send(NetworkEvent::Broadcast(EventPayload::FileAvailable(announcement_clone))).await {
+                        tracing::warn!(error = ?err, "failed to re-broadcast FileAvailable");
+                    }
+                });
+            }
 
             Ok(None)
         }
@@ -194,30 +234,52 @@ fn handle_message(
             Ok(None)
         }
         EventPayload::ProfileUpdate(update) => {
-            let update_clone = update.clone();
-            apply_profile_update(database, update)?;
+            let msg_id = format!("profile:{}", update.peer_id);
+            let should_rebroadcast = {
+                let mut seen = seen_messages.lock().await;
+                seen.insert(msg_id)
+            };
 
-            // Re-broadcast profile updates to propagate through the network
-            let publisher_clone = publisher.clone();
-            tokio::spawn(async move {
-                if let Err(err) = publisher_clone.send(NetworkEvent::Broadcast(EventPayload::ProfileUpdate(update_clone))).await {
-                    tracing::warn!(error = ?err, "failed to re-broadcast ProfileUpdate");
-                }
-            });
+            apply_profile_update(database, update.clone())?;
+
+            // Re-broadcast profile updates only if first time seeing this update
+            if should_rebroadcast {
+                let publisher_clone = publisher.clone();
+                let update_clone = update.clone();
+                tokio::spawn(async move {
+                    if let Err(err) = publisher_clone.send(NetworkEvent::Broadcast(EventPayload::ProfileUpdate(update_clone))).await {
+                        tracing::warn!(error = ?err, "failed to re-broadcast ProfileUpdate");
+                    }
+                });
+            }
 
             Ok(None)
         }
         EventPayload::ReactionUpdate(reaction) => {
-            let reaction_clone = reaction.clone();
-            apply_reaction_update(database, reaction)?;
+            let msg_id = format!(
+                "reaction:{}:{}:{}:{}",
+                reaction.post_id,
+                reaction.reactor_peer_id,
+                reaction.emoji,
+                reaction.is_removal
+            );
+            let should_rebroadcast = {
+                let mut seen = seen_messages.lock().await;
+                seen.insert(msg_id)
+            };
 
-            // Re-broadcast reaction updates to propagate through the network
-            let publisher_clone = publisher.clone();
-            tokio::spawn(async move {
-                if let Err(err) = publisher_clone.send(NetworkEvent::Broadcast(EventPayload::ReactionUpdate(reaction_clone))).await {
-                    tracing::warn!(error = ?err, "failed to re-broadcast ReactionUpdate");
-                }
-            });
+            apply_reaction_update(database, reaction.clone())?;
+
+            // Re-broadcast reaction updates only if first time seeing this update
+            if should_rebroadcast {
+                let publisher_clone = publisher.clone();
+                let reaction_clone = reaction.clone();
+                tokio::spawn(async move {
+                    if let Err(err) = publisher_clone.send(NetworkEvent::Broadcast(EventPayload::ReactionUpdate(reaction_clone))).await {
+                        tracing::warn!(error = ?err, "failed to re-broadcast ReactionUpdate");
+                    }
+                });
+            }
 
             Ok(None)
         }
@@ -1160,6 +1222,7 @@ mod tests {
                 inbound_rx,
                 blob_store,
                 ingest_endpoint,
+                "test-peer-id".to_string(),
             )
             .await;
         });

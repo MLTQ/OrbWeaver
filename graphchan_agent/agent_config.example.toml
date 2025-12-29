@@ -63,3 +63,12 @@ steps = 20
 cfg_scale = 7.0
 sampler = "euler"  # e.g., "euler", "euler_a", "dpmpp_2m"
 scheduler = "normal"  # e.g., "normal", "karras"
+
+# Negative prompt for SD/SDXL (ignored for Flux)
+# Specifies what NOT to generate - helps avoid common AI artifacts
+negative_prompt = """ugly, blurry, low quality, distorted, deformed, bad anatomy,
+poorly drawn, bad proportions, gross proportions, malformed limbs,
+missing arms, missing legs, extra arms, extra legs, mutated hands,
+long neck, duplicate, morbid, mutilated, extra fingers, poorly drawn hands,
+poorly drawn face, mutation, bad art, bad hands, text, error, watermark,
+signature, username, worst quality, jpeg artifacts"""
