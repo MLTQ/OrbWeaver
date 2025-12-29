@@ -362,13 +362,14 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
     fn create(&self, record: &PostRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO posts (id, thread_id, author_peer_id, body, created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            INSERT INTO posts (id, thread_id, author_peer_id, author_short_friendcode, body, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             "#,
             params![
                 record.id,
                 record.thread_id,
                 record.author_peer_id,
+                record.author_short_friendcode,
                 record.body,
                 record.created_at,
                 record.updated_at
@@ -380,11 +381,12 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
     fn upsert(&self, record: &PostRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO posts (id, thread_id, author_peer_id, body, created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            INSERT INTO posts (id, thread_id, author_peer_id, author_short_friendcode, body, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             ON CONFLICT(id) DO UPDATE SET
                 thread_id = excluded.thread_id,
                 author_peer_id = excluded.author_peer_id,
+                author_short_friendcode = excluded.author_short_friendcode,
                 body = excluded.body,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at
@@ -393,6 +395,7 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
                 record.id,
                 record.thread_id,
                 record.author_peer_id,
+                record.author_short_friendcode,
                 record.body,
                 record.created_at,
                 record.updated_at
@@ -406,7 +409,7 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
             .conn
             .query_row(
                 r#"
-                SELECT id, thread_id, author_peer_id, body, created_at, updated_at
+                SELECT id, thread_id, author_peer_id, author_short_friendcode, body, created_at, updated_at
                 FROM posts
                 WHERE id = ?1
                 "#,
@@ -416,9 +419,10 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
                         id: row.get(0)?,
                         thread_id: row.get(1)?,
                         author_peer_id: row.get(2)?,
-                        body: row.get(3)?,
-                        created_at: row.get(4)?,
-                        updated_at: row.get(5)?,
+                        author_short_friendcode: row.get(3)?,
+                        body: row.get(4)?,
+                        created_at: row.get(5)?,
+                        updated_at: row.get(6)?,
                     })
                 },
             )
@@ -428,7 +432,7 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
     fn list_for_thread(&self, thread_id: &str) -> Result<Vec<PostRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, thread_id, author_peer_id, body, created_at, updated_at
+            SELECT id, thread_id, author_peer_id, author_short_friendcode, body, created_at, updated_at
             FROM posts
             WHERE thread_id = ?1
             ORDER BY datetime(created_at) ASC
@@ -439,9 +443,10 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
                 id: row.get(0)?,
                 thread_id: row.get(1)?,
                 author_peer_id: row.get(2)?,
-                body: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
+                author_short_friendcode: row.get(3)?,
+                body: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
             })
         })?;
         let mut posts = Vec::new();
@@ -454,7 +459,7 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
     fn list_recent(&self, limit: usize) -> Result<Vec<PostRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT p.id, p.thread_id, p.author_peer_id, p.body, p.created_at, p.updated_at
+            SELECT p.id, p.thread_id, p.author_peer_id, p.author_short_friendcode, p.body, p.created_at, p.updated_at
             FROM posts p
             INNER JOIN threads t ON p.thread_id = t.id
             WHERE t.sync_status = 'downloaded'
@@ -467,9 +472,10 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
                 id: row.get(0)?,
                 thread_id: row.get(1)?,
                 author_peer_id: row.get(2)?,
-                body: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
+                author_short_friendcode: row.get(3)?,
+                body: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
             })
         })?;
         let mut posts = Vec::new();
@@ -1566,7 +1572,7 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
         // Search posts
         let mut stmt = self.conn.prepare(
             r#"SELECT
-                p.id, p.thread_id, p.author_peer_id, p.body, p.created_at, p.updated_at,
+                p.id, p.thread_id, p.author_peer_id, p.author_short_friendcode, p.body, p.created_at, p.updated_at,
                 bm25(posts_fts) as score,
                 t.title,
                 snippet(posts_fts, -1, '<mark>', '</mark>', '...', 30) as snippet
@@ -1585,14 +1591,15 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
                     id: row.get(0)?,
                     thread_id: row.get(1)?,
                     author_peer_id: row.get(2)?,
-                    body: row.get(3)?,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
+                    author_short_friendcode: row.get(3)?,
+                    body: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
                 },
                 file: None,
-                bm25_score: row.get(6)?,
-                thread_title: row.get(7)?,
-                snippet: row.get(8)?,
+                bm25_score: row.get(7)?,
+                thread_title: row.get(8)?,
+                snippet: row.get(9)?,
             })
         })?;
 
@@ -1603,7 +1610,7 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
         // Search files
         let mut stmt = self.conn.prepare(
             r#"SELECT
-                p.id, p.thread_id, p.author_peer_id, p.body, p.created_at, p.updated_at,
+                p.id, p.thread_id, p.author_peer_id, p.author_short_friendcode, p.body, p.created_at, p.updated_at,
                 f.id, f.post_id, f.path, f.original_name, f.mime, f.size_bytes, f.blob_id, f.checksum, f.ticket,
                 bm25(files_fts) as score,
                 t.title,
@@ -1624,24 +1631,25 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
                     id: row.get(0)?,
                     thread_id: row.get(1)?,
                     author_peer_id: row.get(2)?,
-                    body: row.get(3)?,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
+                    author_short_friendcode: row.get(3)?,
+                    body: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
                 },
                 file: Some(FileRecord {
-                    id: row.get(6)?,
-                    post_id: row.get(7)?,
-                    path: row.get(8)?,
-                    original_name: row.get(9)?,
-                    mime: row.get(10)?,
-                    blob_id: row.get(12)?,
-                    size_bytes: row.get(11)?,
-                    checksum: row.get(13)?,
-                    ticket: row.get(14)?,
+                    id: row.get(7)?,
+                    post_id: row.get(8)?,
+                    path: row.get(9)?,
+                    original_name: row.get(10)?,
+                    mime: row.get(11)?,
+                    blob_id: row.get(13)?,
+                    size_bytes: row.get(12)?,
+                    checksum: row.get(14)?,
+                    ticket: row.get(15)?,
                 }),
-                bm25_score: row.get(15)?,
-                thread_title: row.get(16)?,
-                snippet: row.get(17)?,
+                bm25_score: row.get(16)?,
+                thread_title: row.get(17)?,
+                snippet: row.get(18)?,
             })
         })?;
 

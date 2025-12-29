@@ -52,6 +52,7 @@ pub(crate) const MIGRATIONS: &str = r#"
         id TEXT PRIMARY KEY,
         thread_id TEXT NOT NULL,
         author_peer_id TEXT,
+        author_short_friendcode TEXT,
         body TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT,
@@ -107,6 +108,10 @@ pub(crate) const MIGRATIONS: &str = r#"
     -- ALTER TABLE peers ADD COLUMN avatar_file_id TEXT;
     -- ALTER TABLE peers ADD COLUMN username TEXT;
     -- ALTER TABLE peers ADD COLUMN bio TEXT;
+
+    -- Migration: Add author_short_friendcode to posts table
+    -- This allows friend code to propagate with posts, enabling seamless following
+    ALTER TABLE posts ADD COLUMN author_short_friendcode TEXT;
 "#;
 
 #[derive(Clone)]

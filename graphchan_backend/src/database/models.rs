@@ -33,6 +33,7 @@ pub struct PostRecord {
     pub id: String,
     pub thread_id: String,
     pub author_peer_id: Option<String>,
+    pub author_short_friendcode: Option<String>,
     pub body: String,
     pub created_at: String,
     pub updated_at: Option<String>,

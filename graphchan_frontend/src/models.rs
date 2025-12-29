@@ -33,6 +33,8 @@ pub struct PostView {
     pub thread_id: String,
     #[serde(default)]
     pub author_peer_id: Option<String>,
+    #[serde(default)]
+    pub author_short_friendcode: Option<String>,
     pub body: String,
     pub created_at: String,
     #[serde(default)]

@@ -424,6 +424,7 @@ fn apply_thread_announcement(
             id: format!("{}-preview", announcement.thread_id),
             thread_id: announcement.thread_id.clone(),
             author_peer_id: Some(announcement.creator_peer_id.clone()),
+            author_short_friendcode: None,
             body: format!("{}...", announcement.preview),
             created_at: announcement.created_at.clone(),
             updated_at: None,
@@ -637,6 +638,7 @@ fn apply_post_update(database: &Database, post: PostView) -> Result<Option<Resyn
                     id: p.id.clone(),
                     thread_id: p.thread_id.clone(),
                     author_peer_id: p.author_peer_id.clone(),
+                    author_short_friendcode: p.author_short_friendcode.clone(),
                     body: p.body.clone(),
                     created_at: p.created_at.clone(),
                     updated_at: p.updated_at.clone(),
@@ -697,19 +699,48 @@ fn apply_post_update(database: &Database, post: PostView) -> Result<Option<Resyn
             }
         }
 
-        // Ensure the author peer exists - create stub if unknown
+        // Ensure the author peer exists - create/update peer with friend code from post
         if let Some(author_id) = &post.author_peer_id {
             let peers_repo = repos.peers();
-            if peers_repo.get(author_id)?.is_none() {
-                tracing::info!(peer_id = %author_id, "creating stub peer for unknown post author");
+            let existing_peer = peers_repo.get(author_id)?;
+
+            // Extract friend code info from post if available
+            let (friend_iroh_peer_id, friend_gpg_fingerprint) =
+                if let Some(short_code) = &post.author_short_friendcode {
+                    match crate::identity::decode_short_friendcode(short_code) {
+                        Ok((peer_id, gpg_fp)) => (Some(peer_id), Some(gpg_fp)),
+                        Err(err) => {
+                            tracing::warn!(error = ?err, "failed to decode author_short_friendcode from post");
+                            (None, None)
+                        }
+                    }
+                } else {
+                    (None, None)
+                };
+
+            if let Some(mut peer) = existing_peer {
+                // Update existing peer with friend code info if we have it and peer doesn't
+                let mut needs_update = false;
+                if friend_iroh_peer_id.is_some() && peer.iroh_peer_id.is_none() {
+                    peer.iroh_peer_id = friend_iroh_peer_id.clone();
+                    peer.friendcode = post.author_short_friendcode.clone();
+                    needs_update = true;
+                }
+                if needs_update {
+                    tracing::info!(peer_id = %author_id, "updating peer with friend code from post");
+                    peers_repo.upsert(&peer)?;
+                }
+            } else {
+                // Create new peer record
+                tracing::info!(peer_id = %author_id, "creating peer for unknown post author");
                 let stub_peer = crate::database::models::PeerRecord {
                     id: author_id.clone(),
                     alias: None,
                     username: Some(format!("Unknown ({})", &author_id[..8])),
                     bio: None,
-                    friendcode: None,
-                    iroh_peer_id: None,
-                    gpg_fingerprint: Some(author_id.clone()),
+                    friendcode: post.author_short_friendcode.clone(),
+                    iroh_peer_id: friend_iroh_peer_id,
+                    gpg_fingerprint: friend_gpg_fingerprint.or_else(|| Some(author_id.clone())),
                     x25519_pubkey: None,
                     last_seen: None,
                     avatar_file_id: None,
@@ -740,6 +771,7 @@ where
         id: post.id.clone(),
         thread_id: post.thread_id.clone(),
         author_peer_id: post.author_peer_id.clone(),
+        author_short_friendcode: post.author_short_friendcode.clone(),
         body: post.body.clone(),
         created_at: post.created_at.clone(),
         updated_at: post.updated_at.clone(),

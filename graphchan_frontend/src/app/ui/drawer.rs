@@ -75,6 +75,11 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                                     next_action = Some(Action::AddPeer(friendcode.clone()));
                                 }
                             }
+                        } else {
+                            // No friend code available
+                            ui.colored_label(egui::Color32::GRAY, "⚠ No friend code available");
+                            ui.label(egui::RichText::new("You're seeing this peer's posts via gossip, but they haven't shared their friend code yet.").small().italics());
+                            ui.label(egui::RichText::new("Ask them to share their friend code to follow them directly.").small().italics());
                         }
 
                         ui.add_space(10.0);
