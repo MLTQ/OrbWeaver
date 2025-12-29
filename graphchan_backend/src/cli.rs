@@ -2,7 +2,7 @@ use crate::api;
 use crate::config::GraphchanConfig;
 use crate::database::Database;
 use crate::files::FileService;
-use crate::identity::{decode_friendcode, IdentitySummary};
+use crate::identity::{decode_friendcode_auto, IdentitySummary};
 use crate::network::NetworkHandle;
 use crate::peers::PeerService;
 use crate::threading::{CreatePostInput, CreateThreadInput, ThreadService};
@@ -253,7 +253,7 @@ impl CliSession {
             .register_friendcode(friendcode)
             .with_context(|| "failed to register friendcode")?;
         println!("Registered peer {}", peer.id);
-        if let Ok(payload) = decode_friendcode(friendcode) {
+        if let Ok(payload) = decode_friendcode_auto(friendcode) {
             self.network
                 .connect_friendcode(&payload)
                 .await

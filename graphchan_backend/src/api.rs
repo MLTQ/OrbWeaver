@@ -6,7 +6,7 @@ use crate::database::Database;
 use crate::database::repositories::{ThreadRepository, PeerRepository, PostRepository};
 use crate::dms::{ConversationView, DirectMessageView, DmService};
 use crate::files::{FileService, FileView, SaveFileInput};
-use crate::identity::decode_friendcode;
+use crate::identity::decode_friendcode_auto;
 use crate::identity::IdentitySummary;
 use crate::network::FileAnnouncement;
 use crate::network::NetworkHandle;
@@ -749,7 +749,7 @@ async fn add_peer(
     match service.register_friendcode(friendcode) {
         Ok(peer) => {
             // Connect to the peer and get their iroh peer ID
-            let iroh_peer_id = if let Ok(payload) = decode_friendcode(friendcode) {
+            let iroh_peer_id = if let Ok(payload) = decode_friendcode_auto(friendcode) {
                 match state.network.connect_friendcode(&payload).await {
                     Ok(peer_id) => Some(peer_id),
                     Err(err) => {
