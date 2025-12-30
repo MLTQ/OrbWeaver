@@ -1,214 +1,71 @@
 mod agent;
-mod character_card;
-mod comfyui_client;
+mod api_client;
 mod config;
-mod database;
-mod graphchan_client;
-mod llm_client;
+mod models;
+mod ui;
 
-use anyhow::{Context, Result};
-use chrono::Utc;
-use clap::{Parser, Subcommand};
+use std::sync::Arc;
+use tracing_subscriber::EnvFilter;
+
+use agent::Agent;
+use api_client::GraphchanClient;
 use config::AgentConfig;
-use log::info;
-use std::path::PathBuf;
+use ui::app::AgentApp;
 
-#[derive(Parser)]
-#[command(name = "graphchan_agent")]
-#[command(about = "AI agent for Graphchan decentralized forum", long_about = None)]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
+fn main() {
+    // Initialize logging
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info,graphchan_agent=debug"))
+        )
+        .init();
 
-#[derive(Subcommand)]
-enum Commands {
-    /// Run the agent (default)
-    Run,
+    tracing::info!("🤖 Graphchan Agent starting...");
 
-    /// Import a character card from a file
-    ImportCharacter {
-        /// Path to the character card file (JSON, W++, or Boostyle format)
-        #[arg(short, long)]
-        file: PathBuf,
-    },
+    // Load configuration from file (falls back to env vars if no file exists)
+    let config = AgentConfig::load();
 
-    /// Reset to the original character (removes imported character card)
-    ResetCharacter,
+    tracing::info!("📡 Connecting to Graphchan at {}", config.graphchan_api_url);
+    tracing::info!("🧠 LLM: {} at {}", config.llm_model, config.llm_api_url);
 
-    /// Show current character information
-    ShowCharacter,
-}
+    // Check if LLM is reachable (non-fatal)
+    tracing::info!("💡 Tip: Make sure your LLM is running (e.g., `ollama serve` for Ollama)");
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    env_logger::init();
+    // Create API client
+    let client = GraphchanClient::new(config.graphchan_api_url.clone());
 
-    let cli = Cli::parse();
+    // Create event channel
+    let (event_tx, event_rx) = flume::unbounded();
 
-    // Load config from file or environment
-    let config = load_config()?;
+    // Create agent
+    let agent = Arc::new(Agent::new(client, config.clone(), event_tx));
 
-    match cli.command {
-        Some(Commands::ImportCharacter { file }) => {
-            import_character(&config, file)?;
-        }
-        Some(Commands::ResetCharacter) => {
-            reset_character(&config)?;
-        }
-        Some(Commands::ShowCharacter) => {
-            show_character(&config)?;
-        }
-        Some(Commands::Run) | None => {
-            // Default: run the agent
-            info!("Starting Graphchan Agent...");
-            info!("Configuration loaded:");
-            info!("  Graphchan API: {}", config.graphchan_api_url);
-            info!("  LLM API: {}", config.llm_api_url);
-            info!("  Model: {}", config.llm_model);
-            info!("  Username: {}", config.username);
+    // Spawn agent loop in background
+    let agent_clone = agent.clone();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            if let Err(e) = agent_clone.run_loop().await {
+                tracing::error!("Agent loop error: {}", e);
+            }
+        });
+    });
 
-            let mut agent = agent::Agent::new(config)?;
-            agent.run().await?;
-        }
-    }
-
-    Ok(())
-}
-
-fn load_config() -> Result<AgentConfig> {
-    // Check for config in multiple locations
-    let config_paths = if let Ok(custom_path) = std::env::var("GRAPHCHAN_AGENT_CONFIG") {
-        vec![PathBuf::from(custom_path)]
-    } else {
-        vec![
-            PathBuf::from("agent_config.toml"),  // Current directory
-            PathBuf::from("graphchan_agent/agent_config.toml"),  // If run from workspace root
-            std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|p| p.join("agent_config.toml")))
-                .unwrap_or_else(|| PathBuf::from("agent_config.toml")),  // Next to binary
-        ]
+    // Launch UI
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([600.0, 800.0])
+            .with_title("Graphchan Agent"),
+        ..Default::default()
     };
 
-    // Try each path
-    for path in &config_paths {
-        if path.exists() {
-            info!("Loading config from: {}", path.display());
-            let contents = std::fs::read_to_string(&path)
-                .with_context(|| format!("Failed to read config file: {}", path.display()))?;
-
-            let config: AgentConfig = toml::from_str(&contents)
-                .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
-
-            return Ok(config);
-        }
+    if let Err(e) = eframe::run_native(
+        "Graphchan Agent",
+        native_options,
+        Box::new(|_cc| Ok(Box::new(AgentApp::new(event_rx, agent, config)))),
+    ) {
+        tracing::error!("UI error: {}", e);
+        std::process::exit(1);
     }
-
-    // No config found
-    let searched_paths = config_paths
-        .iter()
-        .map(|p| format!("  - {}", p.display()))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    anyhow::bail!(
-        "Config file not found!\n\n\
-         Searched in:\n{}\n\n\
-         Create an agent_config.toml file with the following format:\n\n\
-         graphchan_api_url = \"http://127.0.0.1:8080\"\n\
-         llm_api_url = \"http://localhost:11434/v1\"  # For Ollama\n\
-         llm_api_key = \"\"  # Empty for local models\n\
-         llm_model = \"llama3.2\"\n\
-         username = \"ClaudeBot\"  # Users will mention this name to summon the agent\n\
-         system_prompt = \"You are a helpful AI assistant participating in Graphchan discussions.\"\n\
-         poll_interval_secs = 10\n\n\
-         [respond_to]\n\
-         type = \"mentions\"  # or \"all\", \"random\", \"threads\"\n\
-         # For random: probability = 0.3\n\
-         # For threads: thread_ids = [\"thread-id-1\", \"thread-id-2\"]\n\
-         ",
-        searched_paths
-    )
-}
-
-fn import_character(config: &AgentConfig, file_path: PathBuf) -> Result<()> {
-    info!("Importing character from: {}", file_path.display());
-
-    // Parse the character card
-    let (parsed_character, format, original_data) = character_card::parse_character_card(&file_path)
-        .context("Failed to parse character card")?;
-
-    info!("Successfully parsed {} format", format);
-    info!("Character name: {}", parsed_character.name);
-
-    // Convert to system prompt
-    let derived_prompt = character_card::character_to_system_prompt(&parsed_character);
-
-    info!("Generated system prompt:\n{}\n", derived_prompt);
-
-    // Save to database
-    let db = database::AgentDatabase::new(&config.database_path)?;
-
-    let character_card = database::CharacterCard {
-        id: uuid::Uuid::new_v4().to_string(),
-        imported_at: Utc::now(),
-        format,
-        original_data,
-        derived_prompt: derived_prompt.clone(),
-        name: Some(parsed_character.name.clone()),
-        description: Some(parsed_character.description.clone()),
-    };
-
-    db.save_character_card(&character_card)?;
-
-    // Set as current system prompt
-    db.set_current_system_prompt(&derived_prompt)?;
-
-    info!("✓ Character card imported successfully!");
-    info!("✓ System prompt updated");
-    info!("\nThe agent will now use this character when it restarts.");
-
-    Ok(())
-}
-
-fn reset_character(config: &AgentConfig) -> Result<()> {
-    info!("Resetting to default character...");
-
-    let db = database::AgentDatabase::new(&config.database_path)?;
-
-    // Delete character card
-    db.delete_character_card()?;
-
-    // Reset to default system prompt from config
-    db.set_current_system_prompt(&config.system_prompt)?;
-
-    info!("✓ Character card removed");
-    info!("✓ Reset to default system prompt");
-    info!("\nThe agent will use the default prompt from config when it restarts.");
-
-    Ok(())
-}
-
-fn show_character(config: &AgentConfig) -> Result<()> {
-    let db = database::AgentDatabase::new(&config.database_path)?;
-
-    if let Some(card) = db.get_character_card()? {
-        info!("Current Character Card:");
-        info!("  Name: {}", card.name.as_deref().unwrap_or("(none)"));
-        info!("  Format: {}", card.format);
-        info!("  Imported: {}", card.imported_at.format("%Y-%m-%d %H:%M:%S"));
-        info!("\nCurrent System Prompt:");
-        info!("{}", card.derived_prompt);
-    } else {
-        info!("No character card imported.");
-        info!("\nUsing default system prompt from config:");
-        if let Some(current_prompt) = db.get_current_system_prompt()? {
-            info!("{}", current_prompt);
-        } else {
-            info!("{}", config.system_prompt);
-        }
-    }
-
-    Ok(())
 }

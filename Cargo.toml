@@ -2,6 +2,8 @@
 members = [
     "graphchan_backend",
     "graphchan_frontend",
-    "graphchan_desktop"
-, "graphchan_mcp", "graphchan_agent"]
+    "graphchan_desktop",
+    "graphchan_mcp",
+    "graphchan_agent",
+]
 resolver = "2"
