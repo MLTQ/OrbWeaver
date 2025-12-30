@@ -32,10 +32,51 @@ impl ThreadService {
     pub fn list_threads(&self, limit: usize) -> Result<Vec<ThreadSummary>> {
         self.database.with_repositories(|repos| {
             let threads = repos.threads().list_recent(limit)?;
-            Ok(threads
-                .into_iter()
-                .map(ThreadSummary::from_record)
-                .collect())
+            let mut summaries = Vec::with_capacity(threads.len());
+
+            for thread in threads {
+                // Get first image from the thread's first post
+                let first_image = repos.posts()
+                    .list_for_thread(&thread.id)?
+                    .into_iter()
+                    .next() // Get first post (OP)
+                    .and_then(|post| {
+                        // Get files for the OP post
+                        repos.files().list_for_post(&post.id).ok()
+                    })
+                    .and_then(|files| {
+                        // Find first image file
+                        files.into_iter()
+                            .find(|f| {
+                                f.mime.as_ref()
+                                    .map(|m| m.starts_with("image/"))
+                                    .unwrap_or(false)
+                            })
+                            .map(|record| {
+                                let mut view = crate::files::FileView::from_record(record.clone());
+                                // Set present flag if file_paths is available
+                                if let Some(ref base) = self.file_paths {
+                                    let absolute = base.base.join(&record.path);
+                                    view.present = Some(absolute.exists());
+                                }
+                                view
+                            })
+                    });
+
+                summaries.push(ThreadSummary {
+                    id: thread.id,
+                    title: thread.title,
+                    creator_peer_id: thread.creator_peer_id,
+                    created_at: thread.created_at,
+                    pinned: thread.pinned,
+                    visibility: thread.visibility,
+                    topic_secret: thread.topic_secret,
+                    sync_status: thread.sync_status,
+                    first_image_file: first_image,
+                });
+            }
+
+            Ok(summaries)
         })
     }
 
@@ -257,6 +298,8 @@ pub struct ThreadSummary {
     pub visibility: String,
     pub topic_secret: Option<String>,
     pub sync_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_image_file: Option<crate::files::FileView>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -325,6 +368,7 @@ impl ThreadSummary {
             visibility: record.visibility,
             topic_secret: record.topic_secret,
             sync_status: record.sync_status,
+            first_image_file: None, // Not populated in from_record
         }
     }
 }

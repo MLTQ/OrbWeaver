@@ -12,6 +12,8 @@ pub struct ThreadSummary {
     pub pinned: bool,
     #[serde(default = "default_sync_status")]
     pub sync_status: String,
+    #[serde(default)]
+    pub first_image_file: Option<FileResponse>,
 }
 
 fn default_sync_status() -> String {

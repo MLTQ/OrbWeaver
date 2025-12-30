@@ -154,14 +154,43 @@ impl GraphchanApp {
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
-                            let title = if thread.title.is_empty() {
-                                "(untitled thread)"
-                            } else {
-                                &thread.title
-                            };
-                            if ui.button(RichText::new(title).strong()).clicked() {
-                                thread_to_open = Some(thread.clone());
+                            // Show thumbnail if first image exists
+                            if let Some(file) = &thread.first_image_file {
+                                if let Some(texture) = self.image_textures.get(&file.id) {
+                                    ui.image((texture.id(), egui::vec2(48.0, 48.0)));
+                                } else if !self.image_loading.contains(&file.id) {
+                                    // Queue image for loading
+                                    if let Some(url) = &file.download_url {
+                                        let file_id = file.id.clone();
+                                        let url = url.clone();
+                                        self.image_loading.insert(file_id.clone());
+                                        super::super::tasks::download_image(
+                                            self.tx.clone(),
+                                            file_id,
+                                            url,
+                                        );
+                                    }
+                                }
                             }
+
+                            ui.vertical(|ui| {
+                                let title = if thread.title.is_empty() {
+                                    "(untitled thread)"
+                                } else {
+                                    &thread.title
+                                };
+                                if ui.button(RichText::new(title).strong()).clicked() {
+                                    thread_to_open = Some(thread.clone());
+                                }
+                                // Show creator with username lookup
+                                if let Some(peer_id) = &thread.creator_peer_id {
+                                    let display_name = self.peers.get(peer_id)
+                                        .and_then(|p| p.username.as_deref())
+                                        .unwrap_or("Anonymous");
+                                    ui.label(RichText::new(format!("Created by {}", display_name)).size(11.0).weak());
+                                }
+                            });
+
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
@@ -174,13 +203,9 @@ impl GraphchanApp {
                                         thread_to_ignore = Some(thread.id.clone());
                                     }
                                     ui.label(format_timestamp(&thread.created_at));
-                                    ui.label(RichText::new(&thread.id).monospace().size(10.0));
                                 },
                             );
                         });
-                        if let Some(peer) = &thread.creator_peer_id {
-                            ui.label(format!("Created by {peer}"));
-                        }
                     });
                 ui.add_space(8.0);
             }
