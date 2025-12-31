@@ -1,5 +1,6 @@
 mod agent;
 mod api_client;
+mod character_card;
 mod config;
 mod models;
 mod ui;

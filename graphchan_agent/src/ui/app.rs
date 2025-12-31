@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::agent::{Agent, AgentEvent, AgentVisualState};
 use crate::config::AgentConfig;
 use super::settings::SettingsPanel;
+use super::character::CharacterPanel;
 
 pub struct AgentApp {
     events: Vec<AgentEvent>,
@@ -14,6 +15,7 @@ pub struct AgentApp {
     user_input: String,
     runtime: tokio::runtime::Runtime,
     settings_panel: SettingsPanel,
+    character_panel: CharacterPanel,
 }
 
 impl AgentApp {
@@ -29,7 +31,8 @@ impl AgentApp {
             current_state: AgentVisualState::Idle,
             user_input: String::new(),
             runtime: tokio::runtime::Runtime::new().unwrap(),
-            settings_panel: SettingsPanel::new(config),
+            settings_panel: SettingsPanel::new(config.clone()),
+            character_panel: CharacterPanel::new(config),
         }
     }
 }
@@ -68,6 +71,10 @@ impl eframe::App for AgentApp {
                     if ui.button("⚙ Settings").clicked() {
                         self.settings_panel.show = true;
                     }
+
+                    if ui.button("🎭 Character").clicked() {
+                        self.character_panel.show = true;
+                    }
                 });
             });
             
@@ -100,6 +107,19 @@ impl eframe::App for AgentApp {
                 tracing::info!("Config saved successfully");
                 // TODO: Reload agent with new config
                 // For now, user needs to restart the application
+            }
+        }
+
+        // Render character panel
+        if let Some(new_config) = self.character_panel.render(ctx) {
+            // User saved new character - persist it to disk
+            if let Err(e) = new_config.save() {
+                tracing::error!("Failed to save config: {}", e);
+            } else {
+                tracing::info!("Character saved successfully");
+                // Update the settings panel with the new config too
+                self.settings_panel.config = new_config;
+                // TODO: Reload agent with new config
             }
         }
 

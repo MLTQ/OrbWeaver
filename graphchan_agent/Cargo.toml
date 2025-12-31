@@ -18,6 +18,7 @@ toml = "0.8"
 # UI
 eframe = "0.29"
 egui = "0.29"
+rfd = "0.15"
 
 # Error handling
 anyhow = "1.0"
@@ -34,6 +35,10 @@ flume = "0.11"
 
 # Directories
 dirs = "5.0"
+
+# Image processing for character cards
+image = "0.25"
+base64 = "0.22"
 
 [[bin]]
 name = "graphchan_agent"

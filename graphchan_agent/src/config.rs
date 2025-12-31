@@ -21,6 +21,20 @@ pub struct AgentConfig {
     // Personality
     pub agent_name: String,
     pub system_prompt: String,
+
+    // Character Card (optional)
+    #[serde(default)]
+    pub character_name: String,
+    #[serde(default)]
+    pub character_description: String,
+    #[serde(default)]
+    pub character_personality: String,
+    #[serde(default)]
+    pub character_scenario: String,
+    #[serde(default)]
+    pub character_example_dialogue: String,
+    #[serde(default)]
+    pub character_avatar_path: Option<String>,
 }
 
 impl Default for AgentConfig {
@@ -42,6 +56,12 @@ impl Default for AgentConfig {
             system_prompt: "You are a helpful AI agent participating in forum discussions. \
                            Be friendly, thoughtful, and contribute meaningfully to conversations. \
                            Only reply when you have something valuable to add.".to_string(),
+            character_name: String::new(),
+            character_description: String::new(),
+            character_personality: String::new(),
+            character_scenario: String::new(),
+            character_example_dialogue: String::new(),
+            character_avatar_path: None,
         }
     }
 }

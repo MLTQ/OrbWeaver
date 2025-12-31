@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use base64::Engine;
 
 /// TavernAI Character Card V2 format
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,8 +50,21 @@ pub struct ParsedCharacter {
     pub system_prompt: String,
 }
 
-/// Parse a character card from a file
+/// Parse a character card from a file (supports PNG with embedded data and text formats)
 pub fn parse_character_card<P: AsRef<Path>>(path: P) -> Result<(ParsedCharacter, String, String)> {
+    let path_ref = path.as_ref();
+
+    // Check if it's a PNG file
+    if let Some(ext) = path_ref.extension() {
+        if ext.eq_ignore_ascii_case("png") {
+            // Try to extract character card from PNG metadata
+            if let Ok((parsed, content)) = parse_png_character_card(path_ref) {
+                return Ok((parsed, "tavernai_v2_png".to_string(), content));
+            }
+        }
+    }
+
+    // Try text-based formats
     let content = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read character card from {:?}", path.as_ref()))?;
 
@@ -68,6 +82,73 @@ pub fn parse_character_card<P: AsRef<Path>>(path: P) -> Result<(ParsedCharacter,
     }
 
     anyhow::bail!("Unable to parse character card - unknown or unsupported format")
+}
+
+/// Extract character card from PNG tEXt chunk (TavernAI format)
+pub fn parse_png_character_card<P: AsRef<Path>>(path: P) -> Result<(ParsedCharacter, String)> {
+    let bytes = fs::read(&path)
+        .with_context(|| format!("Failed to read PNG file from {:?}", path.as_ref()))?;
+
+    // Parse PNG chunks manually to find tEXt chunk with "chara" keyword
+    let json_data = extract_png_text_chunk(&bytes, "chara")
+        .context("Failed to find 'chara' tEXt chunk in PNG")?;
+
+    // Decode base64
+    let decoded = base64::engine::general_purpose::STANDARD.decode(&json_data)
+        .context("Failed to decode base64 character data")?;
+
+    let json_str = String::from_utf8(decoded)
+        .context("Character data is not valid UTF-8")?;
+
+    // Parse as TavernAI V2
+    let parsed = parse_tavernai_v2(&json_str)?;
+
+    Ok((parsed, json_str))
+}
+
+/// Extract text chunk from PNG file by keyword
+fn extract_png_text_chunk(png_bytes: &[u8], keyword: &str) -> Result<String> {
+    // PNG signature: 137 80 78 71 13 10 26 10
+    if png_bytes.len() < 8 || &png_bytes[0..8] != b"\x89PNG\r\n\x1a\n" {
+        anyhow::bail!("Not a valid PNG file");
+    }
+
+    let mut pos = 8;
+
+    while pos + 12 <= png_bytes.len() {
+        // Read chunk length (4 bytes, big-endian)
+        let length = u32::from_be_bytes([
+            png_bytes[pos],
+            png_bytes[pos + 1],
+            png_bytes[pos + 2],
+            png_bytes[pos + 3],
+        ]) as usize;
+
+        // Read chunk type (4 bytes)
+        let chunk_type = &png_bytes[pos + 4..pos + 8];
+
+        // Check if it's a tEXt chunk
+        if chunk_type == b"tEXt" {
+            let chunk_data = &png_bytes[pos + 8..pos + 8 + length];
+
+            // tEXt chunk format: keyword\0text
+            if let Some(null_pos) = chunk_data.iter().position(|&b| b == 0) {
+                let chunk_keyword = std::str::from_utf8(&chunk_data[0..null_pos])
+                    .unwrap_or("");
+
+                if chunk_keyword == keyword {
+                    let text_data = &chunk_data[null_pos + 1..];
+                    return String::from_utf8(text_data.to_vec())
+                        .context("tEXt chunk data is not valid UTF-8");
+                }
+            }
+        }
+
+        // Move to next chunk (length + type + data + CRC)
+        pos += 12 + length;
+    }
+
+    anyhow::bail!("PNG tEXt chunk with keyword '{}' not found", keyword)
 }
 
 /// Parse TavernAI V2 format
