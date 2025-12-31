@@ -1,5 +1,6 @@
 pub mod reasoning;
 pub mod actions;
+pub mod image_gen;
 
 use anyhow::Result;
 use flume::Sender;
@@ -54,6 +55,7 @@ pub struct Agent {
     state: Arc<RwLock<AgentState>>,
     event_tx: Sender<AgentEvent>,
     reasoning: reasoning::ReasoningEngine,
+    image_gen: Option<image_gen::ImageGenerator>,
 }
 
 impl Agent {
@@ -69,12 +71,37 @@ impl Agent {
             config.system_prompt.clone(),
         );
 
+        // Initialize image generator if workflow is configured
+        let image_gen = if config.enable_image_generation {
+            if let Some(ref workflow_json) = config.workflow_settings {
+                match serde_json::from_str::<crate::comfy_workflow::ComfyWorkflow>(workflow_json) {
+                    Ok(workflow) => {
+                        tracing::info!("Image generation enabled with workflow: {}", workflow.name);
+                        Some(image_gen::ImageGenerator::new(
+                            config.comfyui.api_url.clone(),
+                            Some(workflow),
+                        ))
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to load workflow: {}", e);
+                        None
+                    }
+                }
+            } else {
+                tracing::warn!("Image generation enabled but no workflow configured");
+                None
+            }
+        } else {
+            None
+        };
+
         Self {
             client,
             config,
             state: Arc::new(RwLock::new(AgentState::default())),
             event_tx,
             reasoning,
+            image_gen,
         }
     }
 

@@ -154,6 +154,12 @@ pub struct AgentConfig {
     #[serde(default)]
     pub comfyui: ComfyUIConfig,
 
+    // Workflow settings
+    #[serde(default)]
+    pub workflow_path: Option<String>,
+    #[serde(default)]
+    pub workflow_settings: Option<String>, // JSON string of workflow settings
+
     // Character Card (optional)
     #[serde(default)]
     pub character_name: String,
@@ -238,6 +244,8 @@ impl Default for AgentConfig {
             max_important_posts: default_max_important_posts(),
             enable_image_generation: false,
             comfyui: ComfyUIConfig::default(),
+            workflow_path: None,
+            workflow_settings: None,
             character_name: String::new(),
             character_description: String::new(),
             character_personality: String::new(),

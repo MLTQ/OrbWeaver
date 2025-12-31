@@ -6,6 +6,7 @@ use crate::agent::{Agent, AgentEvent, AgentVisualState};
 use crate::config::AgentConfig;
 use super::settings::SettingsPanel;
 use super::character::CharacterPanel;
+use super::comfy_settings::ComfySettingsPanel;
 
 pub struct AgentApp {
     events: Vec<AgentEvent>,
@@ -16,6 +17,7 @@ pub struct AgentApp {
     runtime: tokio::runtime::Runtime,
     settings_panel: SettingsPanel,
     character_panel: CharacterPanel,
+    comfy_settings_panel: ComfySettingsPanel,
 }
 
 impl AgentApp {
@@ -24,6 +26,9 @@ impl AgentApp {
         agent: Arc<Agent>,
         config: AgentConfig,
     ) -> Self {
+        let mut comfy_settings_panel = ComfySettingsPanel::new();
+        comfy_settings_panel.load_workflow_from_config(&config);
+
         Self {
             events: Vec::new(),
             event_rx,
@@ -33,6 +38,7 @@ impl AgentApp {
             runtime: tokio::runtime::Runtime::new().unwrap(),
             settings_panel: SettingsPanel::new(config.clone()),
             character_panel: CharacterPanel::new(config),
+            comfy_settings_panel,
         }
     }
 }
@@ -74,6 +80,10 @@ impl eframe::App for AgentApp {
 
                     if ui.button("🎭 Character").clicked() {
                         self.character_panel.show = true;
+                    }
+
+                    if ui.button("🎨 Workflow").clicked() {
+                        self.comfy_settings_panel.show = true;
                     }
                 });
             });
@@ -120,6 +130,16 @@ impl eframe::App for AgentApp {
                 // Update the settings panel with the new config too
                 self.settings_panel.config = new_config;
                 // TODO: Reload agent with new config
+            }
+        }
+
+        // Render ComfyUI workflow panel
+        if self.comfy_settings_panel.render(ctx, &mut self.settings_panel.config) {
+            // User saved workflow settings
+            if let Err(e) = self.settings_panel.config.save() {
+                tracing::error!("Failed to save config: {}", e);
+            } else {
+                tracing::info!("Workflow settings saved successfully");
             }
         }
 

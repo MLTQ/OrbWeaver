@@ -1,6 +1,8 @@
 mod agent;
 mod api_client;
 mod character_card;
+mod comfy_client;
+mod comfy_workflow;
 mod config;
 mod models;
 mod ui;
