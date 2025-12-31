@@ -109,8 +109,11 @@ impl ReasoningEngine {
     }
 
     fn parse_decision(&self, llm_response: &str) -> Result<Decision> {
+        // Extract and clean JSON from LLM response
+        let cleaned_json = extract_json(llm_response)?;
+
         // Try to parse as JSON
-        let json_response: serde_json::Value = serde_json::from_str(llm_response)
+        let json_response: serde_json::Value = serde_json::from_str(&cleaned_json)
             .context("Failed to parse LLM decision as JSON")?;
 
         let action = json_response["action"]
@@ -147,6 +150,192 @@ impl ReasoningEngine {
             _ => Ok(Decision::NoAction { reasoning }),
         }
     }
+}
+
+/// Extract JSON from LLM response, handling common formatting issues
+fn extract_json(response: &str) -> Result<String> {
+    let trimmed = response.trim();
+
+    // Case 1: Check for markdown code blocks (```json ... ``` or ``` ... ```)
+    if let Some(json) = extract_from_markdown_code_block(trimmed) {
+        return Ok(json);
+    }
+
+    // Case 2: Try to find JSON object/array by braces/brackets
+    if let Some(json) = extract_by_delimiters(trimmed) {
+        return Ok(json);
+    }
+
+    // Case 3: Try parsing as-is (maybe it's already clean JSON)
+    if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
+        return Ok(trimmed.to_string());
+    }
+
+    // Case 4: Last resort - try to clean common issues
+    let cleaned = clean_json_string(trimmed);
+    if serde_json::from_str::<serde_json::Value>(&cleaned).is_ok() {
+        return Ok(cleaned);
+    }
+
+    anyhow::bail!("Could not extract valid JSON from LLM response: {}", response)
+}
+
+/// Extract JSON from markdown code blocks like ```json ... ``` or ``` ... ```
+fn extract_from_markdown_code_block(text: &str) -> Option<String> {
+    // Try ```json ... ```
+    if let Some(start) = text.find("```json") {
+        if let Some(end) = text[start + 7..].find("```") {
+            let json = text[start + 7..start + 7 + end].trim();
+            return Some(json.to_string());
+        }
+    }
+
+    // Try ``` ... ``` (generic code block)
+    if let Some(start) = text.find("```") {
+        if let Some(end) = text[start + 3..].find("```") {
+            let json = text[start + 3..start + 3 + end].trim();
+            // Verify it looks like JSON
+            if json.starts_with('{') || json.starts_with('[') {
+                return Some(json.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+/// Extract JSON by finding matching braces/brackets
+fn extract_by_delimiters(text: &str) -> Option<String> {
+    // Try to find JSON object {...}
+    if let Some(start) = text.find('{') {
+        if let Some(json) = extract_balanced_braces(&text[start..], '{', '}') {
+            return Some(json);
+        }
+    }
+
+    // Try to find JSON array [...]
+    if let Some(start) = text.find('[') {
+        if let Some(json) = extract_balanced_braces(&text[start..], '[', ']') {
+            return Some(json);
+        }
+    }
+
+    None
+}
+
+/// Extract text between balanced delimiters
+fn extract_balanced_braces(text: &str, open: char, close: char) -> Option<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut depth = 0;
+    let mut start = None;
+    let mut end = None;
+
+    for (i, &ch) in chars.iter().enumerate() {
+        if ch == open {
+            if depth == 0 {
+                start = Some(i);
+            }
+            depth += 1;
+        } else if ch == close {
+            depth -= 1;
+            if depth == 0 && start.is_some() {
+                end = Some(i);
+                break;
+            }
+        }
+    }
+
+    if let (Some(s), Some(e)) = (start, end) {
+        let result: String = chars[s..=e].iter().collect();
+        // Verify it's valid JSON before returning
+        if serde_json::from_str::<serde_json::Value>(&result).is_ok() {
+            return Some(result);
+        }
+    }
+
+    None
+}
+
+/// Clean common JSON formatting issues
+fn clean_json_string(text: &str) -> String {
+    // Remove common markdown/formatting around JSON
+    let mut cleaned = text
+        .trim_start_matches("json")
+        .trim_start_matches("JSON")
+        .trim()
+        .to_string();
+
+    // Remove trailing commas before closing braces/brackets (common LLM mistake)
+    cleaned = cleaned.replace(",}", "}");
+    cleaned = cleaned.replace(",]", "]");
+
+    // Remove comments (// and /* */ style - not valid in JSON but LLMs sometimes add them)
+    cleaned = remove_comments(&cleaned);
+
+    // Fix common quote issues - replace smart quotes with regular quotes
+    cleaned = cleaned.replace('\u{201C}', "\"").replace('\u{201D}', "\""); // " and "
+    cleaned = cleaned.replace('\u{2018}', "'").replace('\u{2019}', "'"); // ' and '
+
+    cleaned
+}
+
+/// Remove C-style comments from JSON string
+fn remove_comments(text: &str) -> String {
+    let mut result = String::new();
+    let mut chars = text.chars().peekable();
+    let mut in_string = false;
+    let mut escape_next = false;
+
+    while let Some(ch) = chars.next() {
+        if escape_next {
+            result.push(ch);
+            escape_next = false;
+            continue;
+        }
+
+        if ch == '\\' && in_string {
+            result.push(ch);
+            escape_next = true;
+            continue;
+        }
+
+        if ch == '"' {
+            in_string = !in_string;
+            result.push(ch);
+            continue;
+        }
+
+        if !in_string && ch == '/' {
+            if let Some(&next_ch) = chars.peek() {
+                if next_ch == '/' {
+                    // Single-line comment - skip until newline
+                    chars.next(); // consume second /
+                    while let Some(c) = chars.next() {
+                        if c == '\n' {
+                            result.push(c);
+                            break;
+                        }
+                    }
+                    continue;
+                } else if next_ch == '*' {
+                    // Multi-line comment - skip until */
+                    chars.next(); // consume *
+                    let mut prev = ' ';
+                    while let Some(c) = chars.next() {
+                        if prev == '*' && c == '/' {
+                            break;
+                        }
+                        prev = c;
+                    }
+                    continue;
+                }
+            }
+        }
+
+        result.push(ch);
+    }
+
+    result
 }
 
 #[derive(Debug, Clone)]
@@ -186,4 +375,87 @@ struct ChatResponse {
 #[derive(Debug, Deserialize)]
 struct Choice {
     message: Message,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_json_from_markdown() {
+        let input = r#"Sure! Here's the JSON:
+```json
+{"action": "reply", "post_id": "123", "content": "test", "reasoning": ["step1"]}
+```
+That should work!"#;
+
+        let result = extract_json(input).unwrap();
+        assert!(serde_json::from_str::<serde_json::Value>(&result).is_ok());
+    }
+
+    #[test]
+    fn test_extract_json_from_generic_code_block() {
+        let input = r#"Here you go:
+```
+{"action": "none", "reasoning": ["no interesting posts"]}
+```"#;
+
+        let result = extract_json(input).unwrap();
+        assert!(serde_json::from_str::<serde_json::Value>(&result).is_ok());
+    }
+
+    #[test]
+    fn test_extract_json_with_text_before_and_after() {
+        let input = r#"I think the best response is: {"action": "reply", "post_id": "abc", "content": "Great point!", "reasoning": ["relevant"]} and that's my decision."#;
+
+        let result = extract_json(input).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["action"], "reply");
+    }
+
+    #[test]
+    fn test_extract_json_with_trailing_commas() {
+        let input = r#"{"action": "none", "reasoning": ["step1", "step2",],}"#;
+
+        let result = extract_json(input).unwrap();
+        assert!(serde_json::from_str::<serde_json::Value>(&result).is_ok());
+    }
+
+    #[test]
+    fn test_extract_json_with_comments() {
+        let input = r#"{
+            "action": "reply", // This is the action
+            "post_id": "123",
+            /* This is the content */
+            "content": "test",
+            "reasoning": ["step1"]
+        }"#;
+
+        let result = extract_json(input).unwrap();
+        assert!(serde_json::from_str::<serde_json::Value>(&result).is_ok());
+    }
+
+    #[test]
+    fn test_extract_json_with_smart_quotes() {
+        let input = r#"{"action": "reply", "content": "Here's a test", "post_id": "123", "reasoning": []}"#;
+
+        let result = extract_json(input).unwrap();
+        assert!(serde_json::from_str::<serde_json::Value>(&result).is_ok());
+    }
+
+    #[test]
+    fn test_clean_json() {
+        let input = "Here is my response: {\"action\": \"none\", \"reasoning\": []}";
+        let result = extract_json(input).unwrap();
+        assert!(serde_json::from_str::<serde_json::Value>(&result).is_ok());
+    }
+
+    #[test]
+    fn test_nested_braces() {
+        let input = r#"{"action": "reply", "metadata": {"nested": "value"}, "reasoning": ["test"]}"#;
+
+        let result = extract_json(input).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["metadata"]["nested"], "value");
+    }
 }
