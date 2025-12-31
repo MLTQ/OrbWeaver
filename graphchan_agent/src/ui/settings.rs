@@ -69,12 +69,23 @@ impl SettingsPanel {
                     ui.add_space(16.0);
 
                     ui.separator();
+                    ui.heading("Agent Identity");
+                    ui.add_space(8.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Username:");
+                        ui.text_edit_singleline(&mut self.config.username);
+                    });
+                    ui.label("Name displayed in posts");
+                    ui.add_space(16.0);
+
+                    ui.separator();
                     ui.heading("Behavior");
                     ui.add_space(8.0);
 
                     ui.horizontal(|ui| {
-                        ui.label("Check interval (seconds):");
-                        ui.add(egui::DragValue::new(&mut self.config.check_interval_seconds).range(10..=600));
+                        ui.label("Poll interval (seconds):");
+                        ui.add(egui::DragValue::new(&mut self.config.poll_interval_secs).range(10..=600));
                     });
                     ui.add_space(8.0);
 
@@ -85,9 +96,89 @@ impl SettingsPanel {
                     ui.add_space(8.0);
 
                     ui.horizontal(|ui| {
-                        ui.label("Agent name:");
-                        ui.text_edit_singleline(&mut self.config.agent_name);
+                        ui.label("Response strategy:");
+                        egui::ComboBox::from_id_salt("response_type")
+                            .selected_text(&self.config.respond_to.response_type)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.config.respond_to.response_type, "selective".to_string(), "Selective (LLM decides)");
+                                ui.selectable_value(&mut self.config.respond_to.response_type, "all".to_string(), "All posts");
+                                ui.selectable_value(&mut self.config.respond_to.response_type, "mentions".to_string(), "Only mentions");
+                            });
                     });
+                    ui.add_space(16.0);
+
+                    ui.separator();
+                    ui.heading("Self-Reflection & Evolution");
+                    ui.add_space(8.0);
+
+                    ui.checkbox(&mut self.config.enable_self_reflection, "Enable self-reflection");
+                    ui.add_space(4.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Reflection interval (hours):");
+                        ui.add(egui::DragValue::new(&mut self.config.reflection_interval_hours).range(1..=168));
+                    });
+                    ui.add_space(8.0);
+
+                    ui.label("Guiding principles (one per line):");
+                    let mut principles_text = self.config.guiding_principles.join("\n");
+                    if ui.text_edit_multiline(&mut principles_text).changed() {
+                        self.config.guiding_principles = principles_text
+                            .lines()
+                            .filter(|l| !l.trim().is_empty())
+                            .map(|l| l.trim().to_string())
+                            .collect();
+                    }
+                    ui.add_space(16.0);
+
+                    ui.separator();
+                    ui.heading("Memory & Database");
+                    ui.add_space(8.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Database path:");
+                        ui.text_edit_singleline(&mut self.config.database_path);
+                    });
+                    ui.add_space(8.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Max important posts:");
+                        ui.add(egui::DragValue::new(&mut self.config.max_important_posts).range(10..=1000));
+                    });
+                    ui.add_space(16.0);
+
+                    ui.separator();
+                    ui.heading("Image Generation (ComfyUI)");
+                    ui.add_space(8.0);
+
+                    ui.checkbox(&mut self.config.enable_image_generation, "Enable image generation");
+                    ui.add_space(8.0);
+
+                    if self.config.enable_image_generation {
+                        ui.horizontal(|ui| {
+                            ui.label("ComfyUI URL:");
+                            ui.text_edit_singleline(&mut self.config.comfyui.api_url);
+                        });
+                        ui.add_space(4.0);
+
+                        ui.horizontal(|ui| {
+                            ui.label("Workflow type:");
+                            egui::ComboBox::from_id_salt("workflow_type")
+                                .selected_text(&self.config.comfyui.workflow_type)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut self.config.comfyui.workflow_type, "sd".to_string(), "Stable Diffusion 1.5");
+                                    ui.selectable_value(&mut self.config.comfyui.workflow_type, "sdxl".to_string(), "SDXL");
+                                    ui.selectable_value(&mut self.config.comfyui.workflow_type, "flux".to_string(), "Flux");
+                                });
+                        });
+                        ui.add_space(4.0);
+
+                        ui.horizontal(|ui| {
+                            ui.label("Model name:");
+                            ui.text_edit_singleline(&mut self.config.comfyui.model_name);
+                        });
+                        ui.add_space(8.0);
+                    }
                     ui.add_space(16.0);
 
                     ui.separator();
@@ -107,7 +198,7 @@ impl SettingsPanel {
                         }
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(format!("Config: {:?}", AgentConfig::config_path()));
+                            ui.label("Config: agent_config.toml");
                         });
                     });
                 });

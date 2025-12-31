@@ -29,6 +29,13 @@ fn main() {
 
     tracing::info!("📡 Connecting to Graphchan at {}", config.graphchan_api_url);
     tracing::info!("🧠 LLM: {} at {}", config.llm_model, config.llm_api_url);
+    tracing::info!("👤 Username: {}", config.username);
+    if config.enable_self_reflection {
+        tracing::info!("🧠 Self-reflection enabled (interval: {}h)", config.reflection_interval_hours);
+    }
+    if config.enable_image_generation {
+        tracing::info!("🎨 Image generation enabled (ComfyUI: {})", config.comfyui.api_url);
+    }
 
     // Check if LLM is reachable (non-fatal)
     tracing::info!("💡 Tip: Make sure your LLM is running (e.g., `ollama serve` for Ollama)");

@@ -126,7 +126,7 @@ impl Agent {
             }
             
             self.set_state(AgentVisualState::Idle).await;
-            sleep(Duration::from_secs(self.config.check_interval_seconds)).await;
+            sleep(Duration::from_secs(self.config.poll_interval_secs)).await;
             
             // Check for rate limiting
             {
