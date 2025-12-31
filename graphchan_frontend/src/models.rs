@@ -258,3 +258,37 @@ pub struct RecentPostView {
 pub struct RecentPostsResponse {
     pub posts: Vec<RecentPostView>,
 }
+
+// IP Blocking models
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IpBlockView {
+    pub id: i64,
+    pub ip_or_range: String,
+    pub block_type: String,
+    pub blocked_at: i64,
+    pub reason: Option<String>,
+    pub active: bool,
+    pub hit_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IpBlockStatsResponse {
+    pub total_blocks: usize,
+    pub active_blocks: usize,
+    pub total_hits: i64,
+    pub exact_ip_blocks: usize,
+    pub range_blocks: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerIpResponse {
+    pub peer_id: String,
+    pub ips: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddIpBlockRequest {
+    pub ip_or_range: String,
+    pub reason: Option<String>,
+}

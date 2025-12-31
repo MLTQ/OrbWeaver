@@ -2,6 +2,7 @@ use super::models::{
     FileRecord, PeerRecord, PostRecord, ReactionRecord, ThreadRecord, ThreadMemberKey,
     DirectMessageRecord, ConversationRecord, BlockedPeerRecord, BlocklistSubscriptionRecord,
     BlocklistEntryRecord, RedactedPostRecord, SearchResultRecord, SearchResultType,
+    PeerIpRecord, IpBlockRecord,
 };
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -103,6 +104,24 @@ pub trait SearchRepository {
     fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResultRecord>>;
 }
 
+pub trait PeerIpRepository {
+    fn update(&self, peer_id: &str, ip_address: &str, last_seen: i64) -> Result<()>;
+    fn get(&self, peer_id: &str) -> Result<Option<PeerIpRecord>>;
+    fn get_by_ip(&self, ip_address: &str) -> Result<Vec<PeerIpRecord>>;
+    fn get_ips(&self, peer_id: &str) -> Result<Vec<String>>;
+    fn list_all(&self) -> Result<Vec<PeerIpRecord>>;
+}
+
+pub trait IpBlockRepository {
+    fn add(&self, record: &IpBlockRecord) -> Result<i64>;
+    fn remove(&self, id: i64) -> Result<()>;
+    fn set_active(&self, id: i64, active: bool) -> Result<()>;
+    fn increment_hit_count(&self, id: i64) -> Result<()>;
+    fn list_active(&self) -> Result<Vec<IpBlockRecord>>;
+    fn list_all(&self) -> Result<Vec<IpBlockRecord>>;
+    fn get(&self, id: i64) -> Result<Option<IpBlockRecord>>;
+}
+
 /// Thin wrapper that will eventually host rusqlite-backed implementations.
 pub struct SqliteRepositories<'conn> {
     conn: &'conn Connection,
@@ -159,6 +178,14 @@ impl<'conn> SqliteRepositories<'conn> {
 
     pub fn search(&self) -> impl SearchRepository + '_ {
         SqliteSearchRepository { conn: self.conn }
+    }
+
+    pub fn peer_ips(&self) -> impl PeerIpRepository + '_ {
+        SqlitePeerIpRepository { conn: self.conn }
+    }
+
+    pub fn ip_blocks(&self) -> impl IpBlockRepository + '_ {
+        SqliteIpBlockRepository { conn: self.conn }
     }
 
     pub fn conn(&self) -> &'conn Connection {
@@ -362,14 +389,14 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
     fn create(&self, record: &PostRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO posts (id, thread_id, author_peer_id, author_short_friendcode, body, created_at, updated_at)
+            INSERT INTO posts (id, thread_id, author_peer_id, author_friendcode, body, created_at, updated_at)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             "#,
             params![
                 record.id,
                 record.thread_id,
                 record.author_peer_id,
-                record.author_short_friendcode,
+                record.author_friendcode,
                 record.body,
                 record.created_at,
                 record.updated_at
@@ -381,12 +408,12 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
     fn upsert(&self, record: &PostRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO posts (id, thread_id, author_peer_id, author_short_friendcode, body, created_at, updated_at)
+            INSERT INTO posts (id, thread_id, author_peer_id, author_friendcode, body, created_at, updated_at)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             ON CONFLICT(id) DO UPDATE SET
                 thread_id = excluded.thread_id,
                 author_peer_id = excluded.author_peer_id,
-                author_short_friendcode = excluded.author_short_friendcode,
+                author_friendcode = excluded.author_friendcode,
                 body = excluded.body,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at
@@ -395,7 +422,7 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
                 record.id,
                 record.thread_id,
                 record.author_peer_id,
-                record.author_short_friendcode,
+                record.author_friendcode,
                 record.body,
                 record.created_at,
                 record.updated_at
@@ -409,7 +436,7 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
             .conn
             .query_row(
                 r#"
-                SELECT id, thread_id, author_peer_id, author_short_friendcode, body, created_at, updated_at
+                SELECT id, thread_id, author_peer_id, author_friendcode, body, created_at, updated_at
                 FROM posts
                 WHERE id = ?1
                 "#,
@@ -419,7 +446,7 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
                         id: row.get(0)?,
                         thread_id: row.get(1)?,
                         author_peer_id: row.get(2)?,
-                        author_short_friendcode: row.get(3)?,
+                        author_friendcode: row.get(3)?,
                         body: row.get(4)?,
                         created_at: row.get(5)?,
                         updated_at: row.get(6)?,
@@ -432,7 +459,7 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
     fn list_for_thread(&self, thread_id: &str) -> Result<Vec<PostRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, thread_id, author_peer_id, author_short_friendcode, body, created_at, updated_at
+            SELECT id, thread_id, author_peer_id, author_friendcode, body, created_at, updated_at
             FROM posts
             WHERE thread_id = ?1
             ORDER BY datetime(created_at) ASC
@@ -443,7 +470,7 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
                 id: row.get(0)?,
                 thread_id: row.get(1)?,
                 author_peer_id: row.get(2)?,
-                author_short_friendcode: row.get(3)?,
+                author_friendcode: row.get(3)?,
                 body: row.get(4)?,
                 created_at: row.get(5)?,
                 updated_at: row.get(6)?,
@@ -459,7 +486,7 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
     fn list_recent(&self, limit: usize) -> Result<Vec<PostRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT p.id, p.thread_id, p.author_peer_id, p.author_short_friendcode, p.body, p.created_at, p.updated_at
+            SELECT p.id, p.thread_id, p.author_peer_id, p.author_friendcode, p.body, p.created_at, p.updated_at
             FROM posts p
             INNER JOIN threads t ON p.thread_id = t.id
             WHERE t.sync_status = 'downloaded'
@@ -472,7 +499,7 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
                 id: row.get(0)?,
                 thread_id: row.get(1)?,
                 author_peer_id: row.get(2)?,
-                author_short_friendcode: row.get(3)?,
+                author_friendcode: row.get(3)?,
                 body: row.get(4)?,
                 created_at: row.get(5)?,
                 updated_at: row.get(6)?,
@@ -1572,7 +1599,7 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
         // Search posts
         let mut stmt = self.conn.prepare(
             r#"SELECT
-                p.id, p.thread_id, p.author_peer_id, p.author_short_friendcode, p.body, p.created_at, p.updated_at,
+                p.id, p.thread_id, p.author_peer_id, p.author_friendcode, p.body, p.created_at, p.updated_at,
                 bm25(posts_fts) as score,
                 t.title,
                 snippet(posts_fts, -1, '<mark>', '</mark>', '...', 30) as snippet
@@ -1591,7 +1618,7 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
                     id: row.get(0)?,
                     thread_id: row.get(1)?,
                     author_peer_id: row.get(2)?,
-                    author_short_friendcode: row.get(3)?,
+                    author_friendcode: row.get(3)?,
                     body: row.get(4)?,
                     created_at: row.get(5)?,
                     updated_at: row.get(6)?,
@@ -1610,7 +1637,7 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
         // Search files
         let mut stmt = self.conn.prepare(
             r#"SELECT
-                p.id, p.thread_id, p.author_peer_id, p.author_short_friendcode, p.body, p.created_at, p.updated_at,
+                p.id, p.thread_id, p.author_peer_id, p.author_friendcode, p.body, p.created_at, p.updated_at,
                 f.id, f.post_id, f.path, f.original_name, f.mime, f.size_bytes, f.blob_id, f.checksum, f.ticket,
                 bm25(files_fts) as score,
                 t.title,
@@ -1631,7 +1658,7 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
                     id: row.get(0)?,
                     thread_id: row.get(1)?,
                     author_peer_id: row.get(2)?,
-                    author_short_friendcode: row.get(3)?,
+                    author_friendcode: row.get(3)?,
                     body: row.get(4)?,
                     created_at: row.get(5)?,
                     updated_at: row.get(6)?,
@@ -1666,5 +1693,254 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
 
         results.truncate(limit);
         Ok(results)
+    }
+}
+
+struct SqlitePeerIpRepository<'conn> {
+    conn: &'conn Connection,
+}
+
+impl<'conn> PeerIpRepository for SqlitePeerIpRepository<'conn> {
+    fn update(&self, peer_id: &str, ip_address: &str, last_seen: i64) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO peer_ips (peer_id, ip_address, last_seen)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(peer_id, ip_address) DO UPDATE SET
+                last_seen = excluded.last_seen
+            "#,
+            params![peer_id, ip_address, last_seen],
+        )?;
+        Ok(())
+    }
+
+    fn get(&self, peer_id: &str) -> Result<Option<PeerIpRecord>> {
+        let result = self.conn.query_row(
+            r#"
+            SELECT peer_id, ip_address, last_seen
+            FROM peer_ips
+            WHERE peer_id = ?1
+            ORDER BY last_seen DESC
+            LIMIT 1
+            "#,
+            params![peer_id],
+            |row| {
+                Ok(PeerIpRecord {
+                    peer_id: row.get(0)?,
+                    ip_address: row.get(1)?,
+                    last_seen: row.get(2)?,
+                })
+            },
+        ).optional()?;
+        Ok(result)
+    }
+
+    fn get_by_ip(&self, ip_address: &str) -> Result<Vec<PeerIpRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT peer_id, ip_address, last_seen
+            FROM peer_ips
+            WHERE ip_address = ?1
+            ORDER BY last_seen DESC
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![ip_address], |row| {
+            Ok(PeerIpRecord {
+                peer_id: row.get(0)?,
+                ip_address: row.get(1)?,
+                last_seen: row.get(2)?,
+            })
+        })?;
+
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
+    fn get_ips(&self, peer_id: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT ip_address
+            FROM peer_ips
+            WHERE peer_id = ?1
+            ORDER BY last_seen DESC
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![peer_id], |row| {
+            row.get::<_, String>(0)
+        })?;
+
+        let mut ips = Vec::new();
+        for row in rows {
+            ips.push(row?);
+        }
+        Ok(ips)
+    }
+
+    fn list_all(&self) -> Result<Vec<PeerIpRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT peer_id, ip_address, last_seen
+            FROM peer_ips
+            ORDER BY last_seen DESC
+            "#,
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(PeerIpRecord {
+                peer_id: row.get(0)?,
+                ip_address: row.get(1)?,
+                last_seen: row.get(2)?,
+            })
+        })?;
+
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+}
+
+struct SqliteIpBlockRepository<'conn> {
+    conn: &'conn Connection,
+}
+
+impl<'conn> IpBlockRepository for SqliteIpBlockRepository<'conn> {
+    fn add(&self, record: &IpBlockRecord) -> Result<i64> {
+        self.conn.execute(
+            r#"
+            INSERT INTO ip_blocks (ip_or_range, block_type, blocked_at, reason, active, hit_count)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "#,
+            params![
+                record.ip_or_range,
+                record.block_type,
+                record.blocked_at,
+                record.reason,
+                if record.active { 1 } else { 0 },
+                record.hit_count
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    fn remove(&self, id: i64) -> Result<()> {
+        self.conn.execute(
+            r#"
+            DELETE FROM ip_blocks
+            WHERE id = ?1
+            "#,
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    fn set_active(&self, id: i64, active: bool) -> Result<()> {
+        self.conn.execute(
+            r#"
+            UPDATE ip_blocks
+            SET active = ?1
+            WHERE id = ?2
+            "#,
+            params![if active { 1 } else { 0 }, id],
+        )?;
+        Ok(())
+    }
+
+    fn increment_hit_count(&self, id: i64) -> Result<()> {
+        self.conn.execute(
+            r#"
+            UPDATE ip_blocks
+            SET hit_count = hit_count + 1
+            WHERE id = ?1
+            "#,
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    fn list_active(&self) -> Result<Vec<IpBlockRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, ip_or_range, block_type, blocked_at, reason, active, hit_count
+            FROM ip_blocks
+            WHERE active = 1
+            ORDER BY blocked_at DESC
+            "#,
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(IpBlockRecord {
+                id: row.get(0)?,
+                ip_or_range: row.get(1)?,
+                block_type: row.get(2)?,
+                blocked_at: row.get(3)?,
+                reason: row.get(4)?,
+                active: row.get::<_, i64>(5)? != 0,
+                hit_count: row.get(6)?,
+            })
+        })?;
+
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
+    fn list_all(&self) -> Result<Vec<IpBlockRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, ip_or_range, block_type, blocked_at, reason, active, hit_count
+            FROM ip_blocks
+            ORDER BY blocked_at DESC
+            "#,
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(IpBlockRecord {
+                id: row.get(0)?,
+                ip_or_range: row.get(1)?,
+                block_type: row.get(2)?,
+                blocked_at: row.get(3)?,
+                reason: row.get(4)?,
+                active: row.get::<_, i64>(5)? != 0,
+                hit_count: row.get(6)?,
+            })
+        })?;
+
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
+    fn get(&self, id: i64) -> Result<Option<IpBlockRecord>> {
+        let result = self.conn.query_row(
+            r#"
+            SELECT id, ip_or_range, block_type, blocked_at, reason, active, hit_count
+            FROM ip_blocks
+            WHERE id = ?1
+            "#,
+            params![id],
+            |row| {
+                Ok(IpBlockRecord {
+                    id: row.get(0)?,
+                    ip_or_range: row.get(1)?,
+                    block_type: row.get(2)?,
+                    blocked_at: row.get(3)?,
+                    reason: row.get(4)?,
+                    active: row.get::<_, i64>(5)? != 0,
+                    hit_count: row.get(6)?,
+                })
+            },
+        ).optional()?;
+        Ok(result)
     }
 }

@@ -33,7 +33,8 @@ pub struct PostRecord {
     pub id: String,
     pub thread_id: String,
     pub author_peer_id: Option<String>,
-    pub author_short_friendcode: Option<String>,
+    /// Full legacy friendcode (v2 format with multiaddrs) for IP extraction
+    pub author_friendcode: Option<String>,
     pub body: String,
     pub created_at: String,
     pub updated_at: Option<String>,
@@ -146,4 +147,22 @@ pub struct SearchResultRecord {
     pub bm25_score: f64,
     pub thread_title: String,
     pub snippet: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerIpRecord {
+    pub peer_id: String,
+    pub ip_address: String,
+    pub last_seen: i64,  // Unix timestamp
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IpBlockRecord {
+    pub id: i64,
+    pub ip_or_range: String,
+    pub block_type: String,  // "exact" or "range"
+    pub blocked_at: i64,     // Unix timestamp
+    pub reason: Option<String>,
+    pub active: bool,
+    pub hit_count: i64,
 }

@@ -1,10 +1,11 @@
 use crate::database::models::PeerRecord;
-use crate::database::repositories::PeerRepository;
+use crate::database::repositories::{PeerIpRepository, PeerRepository};
 use crate::database::Database;
 use crate::identity::{decode_friendcode_auto, encode_short_friendcode, FriendCodePayload};
 use crate::utils::now_utc_iso;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
 
 #[derive(Clone)]
 pub struct PeerService {
@@ -54,8 +55,21 @@ impl PeerService {
         let payload = decode_friendcode_auto(friendcode)
             .with_context(|| "failed to decode friendcode".to_string())?;
         let record = payload_to_peer_record(friendcode, &payload);
+
+        // Extract and store IP addresses from multiaddrs
+        let ips = extract_ips_from_multiaddrs(&payload.addresses);
+
         self.database.with_repositories(|repos| {
             repos.peers().upsert(&record)?;
+
+            // Store IP addresses for this peer
+            let timestamp = chrono::Utc::now().timestamp();
+            for ip in ips {
+                if let Err(err) = repos.peer_ips().update(&record.id, &ip.to_string(), timestamp) {
+                    tracing::warn!(peer_id = %record.id, ip = %ip, error = ?err, "failed to store peer IP");
+                }
+            }
+
             Ok(PeerView::from_record(record))
         })
     }
@@ -140,6 +154,36 @@ fn payload_to_peer_record(friendcode: &str, payload: &FriendCodePayload) -> Peer
     }
 }
 
+/// Extract IP addresses from multiaddr strings
+///
+/// Multiaddr format examples:
+/// - /ip4/192.168.1.1/udp/8080
+/// - /ip6/2001:db8::1/tcp/443
+/// - /ip4/10.0.0.1/tcp/9090/p2p/12D3KooW...
+pub fn extract_ips_from_multiaddrs(addrs: &[String]) -> Vec<IpAddr> {
+    let mut ips = Vec::new();
+
+    for addr in addrs {
+        // Split by '/' and find ip4/ip6 components
+        let parts: Vec<&str> = addr.split('/').collect();
+
+        for i in 0..parts.len() {
+            if i + 1 < parts.len() {
+                match parts[i] {
+                    "ip4" | "ip6" => {
+                        if let Ok(ip) = parts[i + 1].parse::<IpAddr>() {
+                            ips.push(ip);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    ips
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,5 +204,22 @@ mod tests {
         let friendcode = encode_friendcode("peer-xyz", "FPRINTXYZ", None).unwrap();
         let view = service.register_friendcode(&friendcode).unwrap();
         assert_eq!(view.gpg_fingerprint.as_deref(), Some("FPRINTXYZ"));
+    }
+
+    #[test]
+    fn extract_ips_from_multiaddrs_works() {
+        let addrs = vec![
+            "/ip4/192.168.1.1/udp/8080".to_string(),
+            "/ip6/2001:db8::1/tcp/443".to_string(),
+            "/ip4/10.0.0.5/tcp/9090/p2p/12D3KooW".to_string(),
+            "/invalid/address".to_string(),
+        ];
+
+        let ips = extract_ips_from_multiaddrs(&addrs);
+
+        assert_eq!(ips.len(), 3);
+        assert!(ips.contains(&"192.168.1.1".parse::<IpAddr>().unwrap()));
+        assert!(ips.contains(&"2001:db8::1".parse::<IpAddr>().unwrap()));
+        assert!(ips.contains(&"10.0.0.5".parse::<IpAddr>().unwrap()));
     }
 }

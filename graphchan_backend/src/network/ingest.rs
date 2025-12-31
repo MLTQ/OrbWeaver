@@ -1,6 +1,7 @@
+use crate::blocking::IpBlockChecker;
 use crate::config::GraphchanPaths;
 use crate::database::models::{FileRecord, PostRecord, ReactionRecord, ThreadRecord};
-use crate::database::repositories::{FileRepository, PeerRepository, PostRepository, ReactionRepository, ThreadRepository};
+use crate::database::repositories::{FileRepository, PeerIpRepository, PeerRepository, PostRepository, ReactionRepository, ThreadRepository};
 use crate::database::Database;
 use crate::network::events::{
     EventPayload, FileAnnouncement, FileChunk, FileRequest, InboundGossip, NetworkEvent,
@@ -34,6 +35,7 @@ pub async fn run_ingest_loop(
     blobs: FsStore,
     endpoint: Arc<Endpoint>,
     local_peer_id: String,
+    ip_blocker: IpBlockChecker,
 ) {
     tracing::info!("network ingest loop started");
 
@@ -53,6 +55,7 @@ pub async fn run_ingest_loop(
             &endpoint,
             &seen_messages,
             &local_peer_id,
+            &ip_blocker,
         ).await {
             Ok(Some(resync_request)) => {
                 // Spawn background task to re-download thread
@@ -99,6 +102,33 @@ pub async fn run_ingest_loop(
     tracing::info!("network ingest loop shutting down");
 }
 
+/// Capture and store the IP address of a peer from the endpoint connection
+///
+/// TODO: Iroh 0.94's Endpoint API doesn't directly expose per-peer connection information.
+/// Possible solutions:
+/// 1. Use endpoint.magic_endpoint() to access underlying connection tracking
+/// 2. Monitor connection events via endpoint event streams
+/// 3. Track connections at a lower level (QUIC connection events)
+/// 4. Wait for Iroh API updates that expose this information
+///
+/// For now, this is a stub. We'll need to implement proper IP tracking based on
+/// the actual Iroh API capabilities.
+async fn capture_peer_ip(
+    _database: &Database,
+    _endpoint: &Endpoint,
+    peer_id_str: &str,
+) -> Result<()> {
+    tracing::trace!(
+        peer_id = %peer_id_str,
+        "IP capture not yet implemented for Iroh 0.94 endpoint API"
+    );
+
+    // TODO: Implement actual IP extraction once we determine the correct Iroh API
+    // The infrastructure (database tables, repositories) is ready.
+
+    Ok(())
+}
+
 async fn handle_message(
     database: &Database,
     paths: &GraphchanPaths,
@@ -109,7 +139,15 @@ async fn handle_message(
     endpoint: &Arc<Endpoint>,
     seen_messages: &Arc<Mutex<HashSet<String>>>,
     local_peer_id: &str,
+    ip_blocker: &IpBlockChecker,
 ) -> Result<Option<ResyncRequest>> {
+    // Capture peer IP address if available
+    if let Some(ref peer_id_str) = peer_id {
+        if let Err(err) = capture_peer_ip(database, endpoint, peer_id_str).await {
+            tracing::debug!(error = ?err, "failed to capture peer IP");
+        }
+    }
+
     match payload {
         EventPayload::ThreadAnnouncement(announcement) => {
             tracing::info!(
@@ -158,7 +196,7 @@ async fn handle_message(
                 seen.insert(msg_id)
             };
 
-            let result = apply_post_update(database, post.clone())?;
+            let result = apply_post_update(database, ip_blocker, post.clone()).await?;
 
             // Re-broadcast only if this is the first time we've seen this post
             // This enables transitive post propagation: A → B → C → ...
@@ -424,7 +462,7 @@ fn apply_thread_announcement(
             id: format!("{}-preview", announcement.thread_id),
             thread_id: announcement.thread_id.clone(),
             author_peer_id: Some(announcement.creator_peer_id.clone()),
-            author_short_friendcode: None,
+            author_friendcode: None,
             body: format!("{}...", announcement.preview),
             created_at: announcement.created_at.clone(),
             updated_at: None,
@@ -612,7 +650,95 @@ fn apply_thread_snapshot(
     Ok(())
 }
 
-fn apply_post_update(database: &Database, post: PostView) -> Result<Option<ResyncRequest>> {
+/// Create a stub post for IP-blocked content to preserve graph structure
+fn create_stub_post_for_blocked_ip(
+    database: &Database,
+    post: &PostView,
+    blocked_ip: std::net::IpAddr,
+) -> Result<Option<ResyncRequest>> {
+    database.with_repositories(|repos| {
+        // Create stub post record with placeholder body
+        let stub_body = format!("[Post from IP-blocked peer: {}]", blocked_ip);
+
+        let stub_record = PostRecord {
+            id: post.id.clone(),
+            thread_id: post.thread_id.clone(),
+            author_peer_id: post.author_peer_id.clone(),
+            author_friendcode: None, // Don't propagate friendcode from blocked user
+            body: stub_body,
+            created_at: post.created_at.clone(),
+            updated_at: post.updated_at.clone(),
+        };
+
+        // Store stub post
+        repos.posts().upsert(&stub_record)?;
+
+        // Preserve parent relationships for DAG integrity
+        repos.posts().add_relationships(&post.id, &post.parent_post_ids)?;
+
+        tracing::info!(
+            post_id = %post.id,
+            thread_id = %post.thread_id,
+            "✅ created stub post for IP-blocked content"
+        );
+
+        Ok(None) // No resync needed for stub posts
+    })
+}
+
+async fn apply_post_update(database: &Database, ip_blocker: &IpBlockChecker, post: PostView) -> Result<Option<ResyncRequest>> {
+    // Check if author's IP is blocked (using previously stored IP from peer_ips table)
+    if let Some(author_id) = &post.author_peer_id {
+        match ip_blocker.is_peer_blocked(author_id).await {
+            Ok((true, Some(block_id), Some(ip))) => {
+                // IP is blocked - create stub post instead
+                tracing::info!(
+                    post_id = %post.id,
+                    author_id = %author_id,
+                    ip = %ip,
+                    block_id = block_id,
+                    "🚫 blocking post from IP-blocked peer - creating stub"
+                );
+
+                // Record hit for statistics
+                if let Err(err) = ip_blocker.record_hit(block_id).await {
+                    tracing::warn!(error = ?err, "failed to record IP block hit");
+                }
+
+                // Create stub post that preserves graph structure
+                return create_stub_post_for_blocked_ip(database, &post, ip);
+            }
+            Ok((true, None, Some(ip))) => {
+                // Blocked but no block_id (shouldn't happen but handle gracefully)
+                tracing::warn!(
+                    post_id = %post.id,
+                    author_id = %author_id,
+                    ip = %ip,
+                    "IP blocked but no block_id found - creating stub anyway"
+                );
+                return create_stub_post_for_blocked_ip(database, &post, ip);
+            }
+            Ok((true, _, None)) => {
+                // Blocked but couldn't determine IP (shouldn't happen)
+                tracing::warn!(
+                    post_id = %post.id,
+                    author_id = %author_id,
+                    "peer marked as blocked but IP unknown - allowing post"
+                );
+            }
+            Ok((false, _, _)) => {
+                // Not blocked - proceed normally
+            }
+            Err(err) => {
+                tracing::warn!(
+                    error = ?err,
+                    post_id = %post.id,
+                    "failed to check IP block status - allowing post"
+                );
+            }
+        }
+    }
+
     database.with_repositories(|repos| {
         if repos.threads().get(&post.thread_id)?.is_none() {
             tracing::warn!(
@@ -638,7 +764,7 @@ fn apply_post_update(database: &Database, post: PostView) -> Result<Option<Resyn
                     id: p.id.clone(),
                     thread_id: p.thread_id.clone(),
                     author_peer_id: p.author_peer_id.clone(),
-                    author_short_friendcode: p.author_short_friendcode.clone(),
+                    author_friendcode: p.author_friendcode.clone(),
                     body: p.body.clone(),
                     created_at: p.created_at.clone(),
                     updated_at: p.updated_at.clone(),
@@ -700,22 +826,45 @@ fn apply_post_update(database: &Database, post: PostView) -> Result<Option<Resyn
         }
 
         // Ensure the author peer exists - create/update peer with friend code from post
+        // Extract IPs from embedded friendcode for IP blocking
+        let mut extracted_ips = Vec::new();
+
         if let Some(author_id) = &post.author_peer_id {
             let peers_repo = repos.peers();
             let existing_peer = peers_repo.get(author_id)?;
 
-            // Extract friend code info from post if available
-            let (friend_iroh_peer_id, friend_gpg_fingerprint) =
-                if let Some(short_code) = &post.author_short_friendcode {
-                    match crate::identity::decode_short_friendcode(short_code) {
-                        Ok((peer_id, gpg_fp)) => (Some(peer_id), Some(gpg_fp)),
+            // Extract friend code info and IPs from post if available
+            let (friend_iroh_peer_id, friend_gpg_fingerprint, _friend_x25519, _addresses) =
+                if let Some(friendcode_str) = &post.author_friendcode {
+                    // Try to decode as full legacy friendcode (v1/v2 with multiaddrs)
+                    match crate::identity::decode_friendcode_auto(friendcode_str) {
+                        Ok(payload) => {
+                            // Extract and store IP addresses from multiaddrs
+                            let ips = crate::peers::extract_ips_from_multiaddrs(&payload.addresses);
+                            if !ips.is_empty() {
+                                let timestamp = chrono::Utc::now().timestamp();
+                                for ip in &ips {
+                                    if let Err(err) = repos.peer_ips().update(author_id, &ip.to_string(), timestamp) {
+                                        tracing::debug!(error = ?err, peer_id = %author_id, ip = %ip, "failed to store peer IP from post");
+                                    }
+                                }
+                                tracing::debug!(
+                                    peer_id = %author_id,
+                                    ip_count = ips.len(),
+                                    "extracted IP addresses from post friendcode"
+                                );
+                                // Save IPs for blocking check
+                                extracted_ips = ips;
+                            }
+                            (Some(payload.peer_id), Some(payload.gpg_fingerprint), payload.x25519_pubkey, payload.addresses)
+                        }
                         Err(err) => {
-                            tracing::warn!(error = ?err, "failed to decode author_short_friendcode from post");
-                            (None, None)
+                            tracing::debug!(error = ?err, "failed to decode author_friendcode from post");
+                            (None, None, None, vec![])
                         }
                     }
                 } else {
-                    (None, None)
+                    (None, None, None, vec![])
                 };
 
             if let Some(mut peer) = existing_peer {
@@ -723,7 +872,7 @@ fn apply_post_update(database: &Database, post: PostView) -> Result<Option<Resyn
                 let mut needs_update = false;
                 if friend_iroh_peer_id.is_some() && peer.iroh_peer_id.is_none() {
                     peer.iroh_peer_id = friend_iroh_peer_id.clone();
-                    peer.friendcode = post.author_short_friendcode.clone();
+                    peer.friendcode = post.author_friendcode.clone();
                     needs_update = true;
                 }
                 if needs_update {
@@ -738,7 +887,7 @@ fn apply_post_update(database: &Database, post: PostView) -> Result<Option<Resyn
                     alias: None,
                     username: Some(format!("Unknown ({})", &author_id[..8])),
                     bio: None,
-                    friendcode: post.author_short_friendcode.clone(),
+                    friendcode: post.author_friendcode.clone(),
                     iroh_peer_id: friend_iroh_peer_id,
                     gpg_fingerprint: friend_gpg_fingerprint.or_else(|| Some(author_id.clone())),
                     x25519_pubkey: None,
@@ -771,7 +920,7 @@ where
         id: post.id.clone(),
         thread_id: post.thread_id.clone(),
         author_peer_id: post.author_peer_id.clone(),
-        author_short_friendcode: post.author_short_friendcode.clone(),
+        author_friendcode: post.author_friendcode.clone(),
         body: post.body.clone(),
         created_at: post.created_at.clone(),
         updated_at: post.updated_at.clone(),

@@ -52,7 +52,7 @@ pub(crate) const MIGRATIONS: &str = r#"
         id TEXT PRIMARY KEY,
         thread_id TEXT NOT NULL,
         author_peer_id TEXT,
-        author_short_friendcode TEXT,
+        author_friendcode TEXT,
         body TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT,
@@ -109,9 +109,9 @@ pub(crate) const MIGRATIONS: &str = r#"
     -- ALTER TABLE peers ADD COLUMN username TEXT;
     -- ALTER TABLE peers ADD COLUMN bio TEXT;
 
-    -- Migration: Add author_short_friendcode to posts table
+    -- Migration: Add author_friendcode to posts table
     -- This allows friend code to propagate with posts, enabling seamless following
-    ALTER TABLE posts ADD COLUMN author_short_friendcode TEXT;
+    ALTER TABLE posts ADD COLUMN author_friendcode TEXT;
 "#;
 
 #[derive(Clone)]
@@ -149,6 +149,7 @@ impl Database {
             self.ensure_thread_member_keys_table(conn)?;
             self.ensure_dm_tables(conn)?;
             self.ensure_blocking_tables(conn)?;
+            self.ensure_ip_blocking_tables(conn)?;
             self.ensure_fts5_search_tables(conn)?;
             Ok(())
         })?;
@@ -271,7 +272,7 @@ impl Database {
         })
     }
 
-    fn with_conn<T, F>(&self, f: F) -> Result<T>
+    pub fn with_conn<T, F>(&self, f: F) -> Result<T>
     where
         F: FnOnce(&Connection) -> Result<T>,
     {
@@ -682,6 +683,50 @@ impl Database {
              AFTER DELETE ON files BEGIN
                  DELETE FROM files_fts WHERE rowid = old.rowid;
              END",
+            [],
+        )?;
+
+        Ok(())
+    }
+
+    fn ensure_ip_blocking_tables(&self, conn: &Connection) -> Result<()> {
+        // Create peer_ips table for tracking peer IP addresses
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS peer_ips (
+                peer_id TEXT NOT NULL,
+                ip_address TEXT NOT NULL,
+                last_seen INTEGER NOT NULL,
+                PRIMARY KEY (peer_id, ip_address),
+                FOREIGN KEY (peer_id) REFERENCES peers(id)
+            )
+            "#,
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_peer_ips_ip ON peer_ips(ip_address)",
+            [],
+        )?;
+
+        // Create ip_blocks table for user's IP blocking preferences
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS ip_blocks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip_or_range TEXT NOT NULL,
+                block_type TEXT NOT NULL,
+                blocked_at INTEGER NOT NULL,
+                reason TEXT,
+                active INTEGER NOT NULL DEFAULT 1,
+                hit_count INTEGER DEFAULT 0
+            )
+            "#,
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ip_blocks_active ON ip_blocks(active)",
             [],
         )?;
 

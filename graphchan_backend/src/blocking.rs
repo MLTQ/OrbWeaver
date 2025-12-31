@@ -1,13 +1,20 @@
 use crate::database::models::{
     BlockedPeerRecord, BlocklistEntryRecord, BlocklistSubscriptionRecord, RedactedPostRecord,
+    IpBlockRecord,
 };
 use crate::database::repositories::{
     BlockedPeerRepository, BlocklistRepository, PeerRepository, RedactedPostRepository,
+    IpBlockRepository, PeerIpRepository,
 };
 use crate::database::Database;
 use crate::utils::now_utc_iso;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
+use ipnetwork::IpNetwork;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[derive(Clone)]
 pub struct BlockChecker {
@@ -324,4 +331,235 @@ pub struct RedactedPostView {
     pub known_child_ids: Option<Vec<String>>,
     pub redaction_reason: String,
     pub discovered_at: String,
+}
+
+/// Fast IP blocking checker with in-memory caching
+///
+/// Performance characteristics:
+/// - Exact IP blocks: O(1) lookup via HashSet
+/// - CIDR range blocks: O(n) where n = number of CIDR rules (typically small)
+/// - Cache refresh: Only when blocks are added/removed
+#[derive(Clone)]
+pub struct IpBlockChecker {
+    database: Database,
+    cache: Arc<RwLock<IpBlockCache>>,
+}
+
+struct IpBlockCache {
+    /// Fast O(1) lookup for exact IP matches
+    exact_blocks: HashSet<IpAddr>,
+
+    /// CIDR range blocks (small list, fast to check)
+    range_blocks: Vec<CidrBlock>,
+
+    /// Map block ID to metadata for hit count updates
+    block_metadata: HashMap<i64, IpBlockRecord>,
+}
+
+struct CidrBlock {
+    id: i64,
+    network: IpNetwork,
+}
+
+impl IpBlockChecker {
+    pub fn new(database: Database) -> Self {
+        Self {
+            database,
+            cache: Arc::new(RwLock::new(IpBlockCache {
+                exact_blocks: HashSet::new(),
+                range_blocks: Vec::new(),
+                block_metadata: HashMap::new(),
+            })),
+        }
+    }
+
+    /// Initialize the cache by loading all active blocks from database
+    pub async fn load_cache(&self) -> Result<()> {
+        let blocks = self.database.with_repositories(|repos| {
+            repos.ip_blocks().list_active()
+        })?;
+
+        let mut cache = self.cache.write().await;
+        cache.exact_blocks.clear();
+        cache.range_blocks.clear();
+        cache.block_metadata.clear();
+
+        for block in blocks {
+            cache.block_metadata.insert(block.id, block.clone());
+
+            match block.block_type.as_str() {
+                "exact" => {
+                    if let Ok(ip) = block.ip_or_range.parse::<IpAddr>() {
+                        cache.exact_blocks.insert(ip);
+                    } else {
+                        tracing::warn!(
+                            block_id = block.id,
+                            ip = %block.ip_or_range,
+                            "invalid IP address in exact block"
+                        );
+                    }
+                }
+                "range" => {
+                    match block.ip_or_range.parse::<IpNetwork>() {
+                        Ok(network) => {
+                            cache.range_blocks.push(CidrBlock {
+                                id: block.id,
+                                network,
+                            });
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                error = ?err,
+                                block_id = block.id,
+                                range = %block.ip_or_range,
+                                "invalid CIDR range in range block"
+                            );
+                        }
+                    }
+                }
+                _ => {
+                    tracing::warn!(
+                        block_id = block.id,
+                        block_type = %block.block_type,
+                        "unknown block type"
+                    );
+                }
+            }
+        }
+
+        tracing::info!(
+            exact_count = cache.exact_blocks.len(),
+            range_count = cache.range_blocks.len(),
+            "loaded IP blocks into cache"
+        );
+
+        Ok(())
+    }
+
+    /// Check if an IP address is blocked
+    ///
+    /// Returns (is_blocked, block_id) where block_id is Some if blocked
+    pub async fn is_blocked(&self, ip: &IpAddr) -> Result<(bool, Option<i64>)> {
+        let cache = self.cache.read().await;
+
+        // Fast path: check exact IP match (O(1))
+        if cache.exact_blocks.contains(ip) {
+            // Find the block ID for hit count tracking
+            if let Some((id, _)) = cache.block_metadata.iter()
+                .find(|(_, block)| block.block_type == "exact" && block.ip_or_range == ip.to_string())
+            {
+                return Ok((true, Some(*id)));
+            }
+            return Ok((true, None));
+        }
+
+        // Slower path: check CIDR ranges (O(n) but n is small)
+        for cidr_block in &cache.range_blocks {
+            if cidr_block.network.contains(*ip) {
+                return Ok((true, Some(cidr_block.id)));
+            }
+        }
+
+        Ok((false, None))
+    }
+
+    /// Check if a peer is blocked based on their known IP addresses
+    ///
+    /// Returns (is_blocked, block_id, ip) where ip is the blocked IP if any
+    pub async fn is_peer_blocked(&self, peer_id: &str) -> Result<(bool, Option<i64>, Option<IpAddr>)> {
+        // Look up peer's known IP addresses
+        let peer_ip_record = self.database.with_repositories(|repos| {
+            repos.peer_ips().get(peer_id)
+        })?;
+
+        if let Some(record) = peer_ip_record {
+            if let Ok(ip) = record.ip_address.parse::<IpAddr>() {
+                let (is_blocked, block_id) = self.is_blocked(&ip).await?;
+                if is_blocked {
+                    return Ok((true, block_id, Some(ip)));
+                }
+            }
+        }
+
+        Ok((false, None, None))
+    }
+
+    /// Add a new IP block (exact IP or CIDR range)
+    pub async fn add_block(&self, ip_or_range: &str, reason: Option<String>) -> Result<i64> {
+        // Determine block type
+        let block_type = if ip_or_range.contains('/') {
+            // Validate CIDR
+            ip_or_range.parse::<IpNetwork>()
+                .context("Invalid CIDR range")?;
+            "range"
+        } else {
+            // Validate IP
+            ip_or_range.parse::<IpAddr>()
+                .context("Invalid IP address")?;
+            "exact"
+        };
+
+        let record = IpBlockRecord {
+            id: 0, // Will be assigned by database
+            ip_or_range: ip_or_range.to_string(),
+            block_type: block_type.to_string(),
+            blocked_at: chrono::Utc::now().timestamp(),
+            reason,
+            active: true,
+            hit_count: 0,
+        };
+
+        let block_id = self.database.with_repositories(|repos| {
+            repos.ip_blocks().add(&record)
+        })?;
+
+        // Refresh cache
+        self.load_cache().await?;
+
+        tracing::info!(
+            block_id = block_id,
+            ip_or_range = %ip_or_range,
+            block_type = %block_type,
+            "added IP block"
+        );
+
+        Ok(block_id)
+    }
+
+    /// Remove an IP block
+    pub async fn remove_block(&self, block_id: i64) -> Result<()> {
+        self.database.with_repositories(|repos| {
+            repos.ip_blocks().remove(block_id)
+        })?;
+
+        // Refresh cache
+        self.load_cache().await?;
+
+        tracing::info!(block_id = block_id, "removed IP block");
+
+        Ok(())
+    }
+
+    /// Increment hit count for a block (called when a block triggers)
+    pub async fn record_hit(&self, block_id: i64) -> Result<()> {
+        self.database.with_repositories(|repos| {
+            repos.ip_blocks().increment_hit_count(block_id)
+        })?;
+
+        Ok(())
+    }
+
+    /// List all IP blocks (active and inactive)
+    pub fn list_all(&self) -> Result<Vec<IpBlockRecord>> {
+        self.database.with_repositories(|repos| {
+            repos.ip_blocks().list_all()
+        })
+    }
+
+    /// List only active IP blocks
+    pub fn list_active(&self) -> Result<Vec<IpBlockRecord>> {
+        self.database.with_repositories(|repos| {
+            repos.ip_blocks().list_active()
+        })
+    }
 }

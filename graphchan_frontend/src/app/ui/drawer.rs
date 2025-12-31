@@ -19,6 +19,7 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                 UploadAvatar(String),
                 PickAvatar,
                 AddPeer(String),
+                BlockPeerIp(String), // peer_id
             }
 
             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -80,6 +81,13 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                             ui.colored_label(egui::Color32::GRAY, "⚠ No friend code available");
                             ui.label(egui::RichText::new("You're seeing this peer's posts via gossip, but they haven't shared their friend code yet.").small().italics());
                             ui.label(egui::RichText::new("Ask them to share their friend code to follow them directly.").small().italics());
+                        }
+
+                        ui.add_space(10.0);
+
+                        // Block IP button
+                        if ui.button("🚫 Block IP").clicked() {
+                            next_action = Some(Action::BlockPeerIp(peer.id.clone()));
                         }
 
                         ui.add_space(10.0);
@@ -243,6 +251,13 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                         app.api.clone(),
                         app.tx.clone(),
                         friendcode,
+                    );
+                }
+                Some(Action::BlockPeerIp(peer_id)) => {
+                    crate::app::tasks::block_peer_ip(
+                        app.api.clone(),
+                        app.tx.clone(),
+                        peer_id,
                     );
                 }
                 Some(Action::PickAvatar) => {

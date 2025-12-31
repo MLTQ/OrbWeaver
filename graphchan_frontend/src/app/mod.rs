@@ -295,6 +295,8 @@ impl GraphchanApp {
         app.spawn_load_conversations();
         app.spawn_load_blocked_peers();
         app.spawn_load_blocklists();
+        app.spawn_load_ip_blocks();
+        app.spawn_load_ip_block_stats();
         app
     }
 
@@ -492,6 +494,65 @@ impl GraphchanApp {
         self.blocking_state.blocklist_entries_loading = true;
         self.blocking_state.blocklist_entries_error = None;
         tasks::load_blocklist_entries(self.api.clone(), self.tx.clone(), blocklist_id);
+    }
+
+    // IP Blocking spawn methods
+
+    fn spawn_load_ip_blocks(&mut self) {
+        if self.blocking_state.ip_blocks_loading {
+            return;
+        }
+        self.blocking_state.ip_blocks_loading = true;
+        self.blocking_state.ip_blocks_error = None;
+        tasks::load_ip_blocks(self.api.clone(), self.tx.clone());
+    }
+
+    fn spawn_load_ip_block_stats(&mut self) {
+        if self.blocking_state.ip_block_stats_loading {
+            return;
+        }
+        self.blocking_state.ip_block_stats_loading = true;
+        tasks::load_ip_block_stats(self.api.clone(), self.tx.clone());
+    }
+
+    fn spawn_add_ip_block(&mut self, state: &mut state::BlockingState) {
+        let ip_or_range = state.new_ip_block.trim().to_string();
+        if ip_or_range.is_empty() {
+            state.add_ip_block_error = Some("IP/Range cannot be empty".into());
+            return;
+        }
+        let reason = if state.new_ip_block_reason.trim().is_empty() {
+            None
+        } else {
+            Some(state.new_ip_block_reason.trim().to_string())
+        };
+
+        state.adding_ip_block = true;
+        state.add_ip_block_error = None;
+        tasks::add_ip_block(self.api.clone(), self.tx.clone(), ip_or_range, reason);
+    }
+
+    fn spawn_remove_ip_block(&mut self, block_id: i64) {
+        tasks::remove_ip_block(self.api.clone(), self.tx.clone(), block_id);
+    }
+
+    fn spawn_import_ip_blocks(&mut self, state: &mut state::BlockingState) {
+        if state.import_text.trim().is_empty() {
+            state.import_error = Some("Import text cannot be empty".into());
+            return;
+        }
+
+        state.importing_ips = true;
+        state.import_error = None;
+        tasks::import_ip_blocks(self.api.clone(), self.tx.clone(), state.import_text.clone());
+    }
+
+    fn spawn_export_ip_blocks(&mut self) {
+        tasks::export_ip_blocks(self.api.clone(), self.tx.clone());
+    }
+
+    fn spawn_clear_all_ip_blocks(&mut self) {
+        tasks::clear_all_ip_blocks(self.api.clone(), self.tx.clone());
     }
 
     fn spawn_delete_thread(&mut self, thread_id: String) {
@@ -1232,6 +1293,11 @@ impl eframe::App for GraphchanApp {
             // Render blocklist entries dialog if viewing one (before restoring state)
             if temp_state.viewing_blocklist_id.is_some() {
                 ui::blocking::render_blocklist_entries_dialog(self, ctx, &mut temp_state);
+            }
+
+            // Render clear all IP blocks confirmation dialog
+            if temp_state.showing_clear_all_confirmation {
+                ui::blocking::render_clear_all_ip_blocks_dialog(self, ctx, &mut temp_state);
             }
 
             self.blocking_state = temp_state;

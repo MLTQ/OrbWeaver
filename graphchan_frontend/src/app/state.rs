@@ -215,6 +215,32 @@ pub struct BlockingState {
     pub blocklist_entries: Vec<crate::models::BlocklistEntryView>,
     pub blocklist_entries_loading: bool,
     pub blocklist_entries_error: Option<String>,
+
+    // IP Blocking
+    pub ip_blocks: Vec<crate::models::IpBlockView>,
+    pub ip_blocks_loading: bool,
+    pub ip_blocks_error: Option<String>,
+
+    // Add new IP block form
+    pub new_ip_block: String,
+    pub new_ip_block_reason: String,
+    pub adding_ip_block: bool,
+    pub add_ip_block_error: Option<String>,
+
+    // IP block stats
+    pub ip_block_stats: Option<crate::models::IpBlockStatsResponse>,
+    pub ip_block_stats_loading: bool,
+
+    // Import/Export
+    pub import_text: String,
+    pub importing_ips: bool,
+    pub import_error: Option<String>,
+
+    // Clear all confirmation
+    pub showing_clear_all_confirmation: bool,
+
+    // Current tab (0 = peers, 1 = blocklists, 2 = IP blocks)
+    pub current_tab: usize,
 }
 
 // Search State

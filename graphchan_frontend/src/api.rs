@@ -329,6 +329,60 @@ impl ApiClient {
         Ok(response.json()?)
     }
 
+    // IP Blocking methods
+
+    pub fn list_ip_blocks(&self) -> Result<Vec<crate::models::IpBlockView>> {
+        let url = self.url("/blocking/ips")?;
+        let response = self.client.get(url).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
+    pub fn get_ip_block_stats(&self) -> Result<crate::models::IpBlockStatsResponse> {
+        let url = self.url("/blocking/ips/stats")?;
+        let response = self.client.get(url).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
+    pub fn add_ip_block(&self, ip_or_range: &str, reason: Option<String>) -> Result<()> {
+        let url = self.url("/blocking/ips")?;
+        let request = crate::models::AddIpBlockRequest {
+            ip_or_range: ip_or_range.to_string(),
+            reason,
+        };
+        self.client.post(url).json(&request).send()?.error_for_status()?;
+        Ok(())
+    }
+
+    pub fn remove_ip_block(&self, block_id: i64) -> Result<()> {
+        let url = format!("{}/blocking/ips/{}", self.base_url(), block_id);
+        self.client.delete(&url).send()?.error_for_status()?;
+        Ok(())
+    }
+
+    pub fn import_ip_blocks(&self, import_text: &str) -> Result<()> {
+        let url = self.url("/blocking/ips/import")?;
+        self.client.post(url).body(import_text.to_string()).send()?.error_for_status()?;
+        Ok(())
+    }
+
+    pub fn export_ip_blocks(&self) -> Result<String> {
+        let url = self.url("/blocking/ips/export")?;
+        let response = self.client.get(url).send()?.error_for_status()?;
+        Ok(response.text()?)
+    }
+
+    pub fn clear_all_ip_blocks(&self) -> Result<()> {
+        let url = self.url("/blocking/ips/clear")?;
+        self.client.post(url).send()?.error_for_status()?;
+        Ok(())
+    }
+
+    pub fn get_peer_ips(&self, peer_id: &str) -> Result<crate::models::PeerIpResponse> {
+        let url = format!("{}/peers/{}/ip", self.base_url(), peer_id);
+        let response = self.client.get(&url).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
     pub fn search(&self, query: &str, limit: Option<usize>) -> Result<SearchResponse> {
         let limit_param = limit.unwrap_or(50);
         let url = format!("{}/search", self.base_url());

@@ -127,6 +127,13 @@ impl NetworkHandle {
         let ingest_store = blob_store.clone();
         let ingest_endpoint = endpoint.clone();
         let ingest_local_peer_id = local_peer_id.clone();
+
+        // Create IP blocker and load cache
+        let ip_blocker = crate::blocking::IpBlockChecker::new(database.clone());
+        if let Err(err) = ip_blocker.load_cache().await {
+            tracing::warn!(error = ?err, "failed to load IP block cache");
+        }
+
         let ingest_worker = tokio::spawn(async move {
             ingest::run_ingest_loop(
                 ingest_database,
@@ -136,6 +143,7 @@ impl NetworkHandle {
                 ingest_store,
                 ingest_endpoint,
                 ingest_local_peer_id,
+                ip_blocker,
             )
             .await;
         });

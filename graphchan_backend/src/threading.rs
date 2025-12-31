@@ -183,7 +183,7 @@ impl ThreadService {
             if let Some(body) = initial_post_body {
                 if !body.trim().is_empty() {
                     // Look up author's short friend code if we have an author_peer_id
-                    let author_short_friendcode = if let Some(ref author_id) = author_peer_id {
+                    let author_friendcode = if let Some(ref author_id) = author_peer_id {
                         if let Some(peer) = repos.peers().get(author_id)? {
                             // Reconstruct short friend code from peer record
                             if let (Some(iroh_peer_id), Some(gpg_fingerprint)) =
@@ -206,7 +206,7 @@ impl ThreadService {
                         id: Uuid::new_v4().to_string(),
                         thread_id: thread_id.clone(),
                         author_peer_id,
-                        author_short_friendcode,
+                        author_friendcode,
                         body,
                         created_at: created_at.clone(),
                         updated_at: None,
@@ -226,19 +226,29 @@ impl ThreadService {
             anyhow::bail!("post body may not be empty");
         }
 
-        // Look up author's short friend code if we have an author_peer_id
-        let author_short_friendcode = if let Some(author_id) = &input.author_peer_id {
+        // Look up author's full friend code (v2 legacy format with multiaddrs for IP extraction)
+        let author_friendcode = if let Some(author_id) = &input.author_peer_id {
             self.database.with_repositories(|repos| {
                 if let Some(peer) = repos.peers().get(author_id)? {
-                    // Reconstruct short friend code from peer record
-                    if let (Some(iroh_peer_id), Some(gpg_fingerprint)) =
-                        (&peer.iroh_peer_id, &peer.gpg_fingerprint) {
-                        Ok(Some(crate::identity::encode_short_friendcode(
-                            iroh_peer_id,
-                            gpg_fingerprint
-                        )))
+                    // Use the stored friendcode if available (contains multiaddrs with IPs)
+                    if let Some(fc) = peer.friendcode {
+                        Ok(Some(fc))
                     } else {
-                        Ok(None)
+                        // Fallback: generate v2 friendcode if we have the required fields
+                        if let (Some(iroh_peer_id), Some(gpg_fingerprint)) =
+                            (&peer.iroh_peer_id, &peer.gpg_fingerprint) {
+                            // Generate v2 friendcode with multiaddrs
+                            let x25519_pubkey = peer.x25519_pubkey.as_deref();
+                            match crate::identity::encode_friendcode(iroh_peer_id, gpg_fingerprint, x25519_pubkey) {
+                                Ok(fc) => Ok(Some(fc)),
+                                Err(err) => {
+                                    tracing::warn!(error = ?err, "failed to generate friendcode for post");
+                                    Ok(None)
+                                }
+                            }
+                        } else {
+                            Ok(None)
+                        }
                     }
                 } else {
                     Ok(None)
@@ -252,7 +262,7 @@ impl ThreadService {
             id: Uuid::new_v4().to_string(),
             thread_id: input.thread_id.clone(),
             author_peer_id: input.author_peer_id.clone(),
-            author_short_friendcode,
+            author_friendcode,
             body: input.body,
             created_at: input.created_at.unwrap_or_else(now_utc_iso),
             updated_at: None,
@@ -277,7 +287,7 @@ impl ThreadService {
             id: stored_post.id,
             thread_id: stored_post.thread_id,
             author_peer_id: stored_post.author_peer_id,
-            author_short_friendcode: stored_post.author_short_friendcode,
+            author_friendcode: stored_post.author_friendcode,
             body: stored_post.body,
             created_at: stored_post.created_at,
             updated_at: stored_post.updated_at,
@@ -308,7 +318,7 @@ pub struct PostView {
     pub thread_id: String,
     pub author_peer_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub author_short_friendcode: Option<String>,
+    pub author_friendcode: Option<String>,
     pub body: String,
     pub created_at: String,
     pub updated_at: Option<String>,
@@ -379,7 +389,7 @@ impl PostView {
             id: record.id,
             thread_id: record.thread_id,
             author_peer_id: record.author_peer_id,
-            author_short_friendcode: record.author_short_friendcode,
+            author_friendcode: record.author_friendcode,
             body: record.body,
             created_at: record.created_at,
             updated_at: record.updated_at,
