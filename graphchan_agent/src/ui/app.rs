@@ -115,8 +115,12 @@ impl eframe::App for AgentApp {
                 tracing::error!("Failed to save config: {}", e);
             } else {
                 tracing::info!("Config saved successfully");
-                // TODO: Reload agent with new config
-                // For now, user needs to restart the application
+                // Reload agent with new config immediately
+                let agent = self.agent.clone();
+                let config_clone = new_config.clone();
+                self.runtime.spawn(async move {
+                    agent.reload_config(config_clone).await;
+                });
             }
         }
 
@@ -128,8 +132,13 @@ impl eframe::App for AgentApp {
             } else {
                 tracing::info!("Character saved successfully");
                 // Update the settings panel with the new config too
-                self.settings_panel.config = new_config;
-                // TODO: Reload agent with new config
+                self.settings_panel.config = new_config.clone();
+                // Reload agent with new config immediately
+                let agent = self.agent.clone();
+                let config_clone = new_config;
+                self.runtime.spawn(async move {
+                    agent.reload_config(config_clone).await;
+                });
             }
         }
 
@@ -140,6 +149,12 @@ impl eframe::App for AgentApp {
                 tracing::error!("Failed to save config: {}", e);
             } else {
                 tracing::info!("Workflow settings saved successfully");
+                // Reload agent with new config immediately
+                let agent = self.agent.clone();
+                let config_clone = self.settings_panel.config.clone();
+                self.runtime.spawn(async move {
+                    agent.reload_config(config_clone).await;
+                });
             }
         }
 

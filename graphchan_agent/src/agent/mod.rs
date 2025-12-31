@@ -51,11 +51,11 @@ impl Default for AgentState {
 
 pub struct Agent {
     client: GraphchanClient,
-    config: AgentConfig,
+    config: Arc<RwLock<AgentConfig>>,
     state: Arc<RwLock<AgentState>>,
     event_tx: Sender<AgentEvent>,
-    reasoning: reasoning::ReasoningEngine,
-    image_gen: Option<image_gen::ImageGenerator>,
+    reasoning: Arc<RwLock<reasoning::ReasoningEngine>>,
+    image_gen: Arc<RwLock<Option<image_gen::ImageGenerator>>>,
 }
 
 impl Agent {
@@ -97,12 +97,57 @@ impl Agent {
 
         Self {
             client,
-            config,
+            config: Arc::new(RwLock::new(config)),
             state: Arc::new(RwLock::new(AgentState::default())),
             event_tx,
-            reasoning,
-            image_gen,
+            reasoning: Arc::new(RwLock::new(reasoning)),
+            image_gen: Arc::new(RwLock::new(image_gen)),
         }
+    }
+
+    /// Reload config and recreate reasoning engine and image generator
+    pub async fn reload_config(&self, new_config: AgentConfig) {
+        tracing::info!("Reloading agent configuration...");
+
+        // Create new reasoning engine with updated config
+        let new_reasoning = reasoning::ReasoningEngine::new(
+            new_config.llm_api_url.clone(),
+            new_config.llm_model.clone(),
+            new_config.llm_api_key.clone(),
+            new_config.system_prompt.clone(),
+        );
+
+        // Recreate image generator if needed
+        let new_image_gen = if new_config.enable_image_generation {
+            if let Some(ref workflow_json) = new_config.workflow_settings {
+                match serde_json::from_str::<crate::comfy_workflow::ComfyWorkflow>(workflow_json) {
+                    Ok(workflow) => {
+                        tracing::info!("Image generation enabled with workflow: {}", workflow.name);
+                        Some(image_gen::ImageGenerator::new(
+                            new_config.comfyui.api_url.clone(),
+                            Some(workflow),
+                        ))
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to load workflow: {}", e);
+                        None
+                    }
+                }
+            } else {
+                tracing::warn!("Image generation enabled but no workflow configured");
+                None
+            }
+        } else {
+            None
+        };
+
+        // Update all components atomically
+        *self.config.write().await = new_config;
+        *self.reasoning.write().await = new_reasoning;
+        *self.image_gen.write().await = new_image_gen;
+
+        self.emit(AgentEvent::Observation("✓ Configuration reloaded".to_string())).await;
+        tracing::info!("Configuration reloaded successfully");
     }
 
     pub async fn toggle_pause(&self) {
@@ -133,7 +178,7 @@ impl Agent {
 
     pub async fn run_loop(self: Arc<Self>) -> Result<()> {
         tracing::info!("Agent loop starting...");
-        
+
         // Check API connection
         self.emit(AgentEvent::Observation("Connecting to Graphchan API...".to_string())).await;
         if let Err(e) = self.client.health_check().await {
@@ -141,7 +186,7 @@ impl Agent {
             return Err(e);
         }
         self.emit(AgentEvent::Observation("✓ Connected to Graphchan".to_string())).await;
-        
+
         loop {
             // Check if paused
             {
@@ -151,23 +196,30 @@ impl Agent {
                     continue;
                 }
             }
-            
+
             self.set_state(AgentVisualState::Idle).await;
-            sleep(Duration::from_secs(self.config.poll_interval_secs)).await;
-            
+
+            // Get poll interval from config
+            let poll_interval = {
+                let config = self.config.read().await;
+                config.poll_interval_secs
+            };
+            sleep(Duration::from_secs(poll_interval)).await;
+
             // Check for rate limiting
             {
                 let state = self.state.read().await;
-                if state.posts_this_hour >= self.config.max_posts_per_hour {
+                let config = self.config.read().await;
+                if state.posts_this_hour >= config.max_posts_per_hour {
                     self.emit(AgentEvent::Observation(
-                        format!("⏸ Rate limit reached ({}/{}), waiting...", 
-                                state.posts_this_hour, 
-                                self.config.max_posts_per_hour)
+                        format!("⏸ Rate limit reached ({}/{}), waiting...",
+                                state.posts_this_hour,
+                                config.max_posts_per_hour)
                     )).await;
                     continue;
                 }
             }
-            
+
             // Main agent logic
             if let Err(e) = self.run_cycle().await {
                 tracing::error!("Agent cycle error: {}", e);
@@ -198,7 +250,10 @@ impl Agent {
         self.set_state(AgentVisualState::Thinking).await;
         self.emit(AgentEvent::Observation("💭 Asking LLM to analyze posts...".to_string())).await;
 
-        let decision = self.reasoning.analyze_posts(&recent_posts.posts).await?;
+        let decision = {
+            let reasoning = self.reasoning.read().await;
+            reasoning.analyze_posts(&recent_posts.posts).await?
+        };
 
         match decision {
             reasoning::Decision::Reply { post_id, content, reasoning } => {
