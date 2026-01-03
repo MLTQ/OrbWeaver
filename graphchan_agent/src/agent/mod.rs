@@ -4,6 +4,7 @@ pub mod image_gen;
 
 use anyhow::Result;
 use flume::Sender;
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
@@ -36,6 +37,7 @@ pub struct AgentState {
     pub paused: bool,
     pub posts_this_hour: u32,
     pub last_post_time: Option<chrono::DateTime<chrono::Utc>>,
+    pub processed_posts: HashSet<String>, // Post IDs we've already analyzed
 }
 
 impl Default for AgentState {
@@ -45,6 +47,7 @@ impl Default for AgentState {
             paused: false,
             posts_this_hour: 0,
             last_post_time: None,
+            processed_posts: HashSet::new(),
         }
     }
 }
@@ -242,8 +245,46 @@ impl Agent {
             return Ok(());
         }
 
+        // Get processed posts set and username
+        let (processed_posts, username) = {
+            let state = self.state.read().await;
+            let config = self.config.read().await;
+            (state.processed_posts.clone(), config.username.clone())
+        };
+        let agent_prefix = format!("[{}]:", username);
+
+        // Filter out:
+        // 1. Agent's own posts (with prefix)
+        // 2. Posts we've already processed
+        let filtered_posts: Vec<_> = recent_posts.posts.iter()
+            .filter(|post_view| {
+                let is_agent_post = post_view.post.body.trim().starts_with(&agent_prefix);
+                let already_processed = processed_posts.contains(&post_view.post.id);
+                !is_agent_post && !already_processed
+            })
+            .cloned()
+            .collect();
+
+        let num_already_processed = recent_posts.posts.iter()
+            .filter(|p| processed_posts.contains(&p.post.id))
+            .count();
+
+        if filtered_posts.is_empty() {
+            if num_already_processed > 0 {
+                self.emit(AgentEvent::Observation(
+                    format!("No new posts (already processed {} posts)", num_already_processed)
+                )).await;
+            } else {
+                self.emit(AgentEvent::Observation("No new posts to analyze (all are from agent).".to_string())).await;
+            }
+            return Ok(());
+        }
+
         self.emit(AgentEvent::Observation(
-            format!("Found {} recent posts", recent_posts.posts.len())
+            format!("Found {} new posts to analyze (filtered {} agent posts, {} already processed)",
+                    filtered_posts.len(),
+                    recent_posts.posts.len() - filtered_posts.len() - num_already_processed,
+                    num_already_processed)
         )).await;
 
         // Reason about posts using LLM
@@ -252,7 +293,7 @@ impl Agent {
 
         let decision = {
             let reasoning = self.reasoning.read().await;
-            reasoning.analyze_posts(&recent_posts.posts).await?
+            reasoning.analyze_posts(&filtered_posts).await?
         };
 
         match decision {
@@ -267,16 +308,23 @@ impl Agent {
                 )).await;
 
                 // Find the thread_id for this post
-                let thread_id = recent_posts.posts.iter()
+                let thread_id = filtered_posts.iter()
                     .find(|p| p.post.id == post_id)
                     .map(|p| p.post.thread_id.clone())
                     .ok_or_else(|| anyhow::anyhow!("Could not find thread for post"))?;
+
+                // Get username from config and prefix the body
+                let username = {
+                    let config = self.config.read().await;
+                    config.username.clone()
+                };
+                let prefixed_body = format!("[{}]: {}", username, content);
 
                 // Create the post
                 let input = crate::models::CreatePostInput {
                     thread_id: thread_id.clone(),
                     author_peer_id: None, // Use default from backend
-                    body: content.clone(),
+                    body: prefixed_body,
                     parent_post_ids: vec![post_id.clone()],
                 };
 
@@ -287,10 +335,11 @@ impl Agent {
                             result: format!("Post ID: {}", posted.id),
                         }).await;
 
-                        // Update post count
+                        // Mark this post as processed and update stats
                         let mut state = self.state.write().await;
                         state.posts_this_hour += 1;
                         state.last_post_time = Some(chrono::Utc::now());
+                        state.processed_posts.insert(post_id.clone());
                         drop(state);
 
                         self.set_state(AgentVisualState::Happy).await;
@@ -299,12 +348,25 @@ impl Agent {
                     Err(e) => {
                         self.emit(AgentEvent::Error(format!("Failed to post: {}", e))).await;
                         self.set_state(AgentVisualState::Confused).await;
+                        // Still mark as processed to avoid retrying repeatedly
+                        let mut state = self.state.write().await;
+                        state.processed_posts.insert(post_id.clone());
                     }
                 }
             }
             reasoning::Decision::NoAction { reasoning } => {
                 self.emit(AgentEvent::ReasoningTrace(reasoning)).await;
                 self.emit(AgentEvent::Observation("No action needed at this time.".to_string())).await;
+
+                // Mark all analyzed posts as processed so we don't re-analyze them
+                let mut state = self.state.write().await;
+                for post_view in &filtered_posts {
+                    state.processed_posts.insert(post_view.post.id.clone());
+                }
+                let num_marked = filtered_posts.len();
+                drop(state);
+
+                tracing::debug!("Marked {} posts as processed (no action needed)", num_marked);
             }
         }
 

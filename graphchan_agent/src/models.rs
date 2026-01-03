@@ -64,3 +64,8 @@ pub struct RecentPostView {
 pub struct RecentPostsResponse {
     pub posts: Vec<RecentPostView>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostResponse {
+    pub post: PostView,
+}

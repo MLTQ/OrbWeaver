@@ -47,9 +47,12 @@ impl ReasoningEngine {
         }
 
         let user_message = format!(
-            "{}\n\nShould you reply to any of these posts? Respond in JSON format:\n\
-            {{\"action\": \"reply\" or \"none\", \"post_id\": \"...\", \"content\": \"...\", \"reasoning\": [\"step1\", \"step2\"]}}\n\
-            Only reply if you have something genuinely valuable to contribute.",
+            "{}\n\nShould you reply to any of these posts?\n\n\
+            IMPORTANT: Respond with ONLY a JSON object in this exact format:\n\
+            {{\"action\": \"reply\" or \"none\", \"post_id\": \"post-id-here\", \"content\": \"your reply text\", \"reasoning\": [\"explain why you're replying\", \"what value you're adding\"]}}\n\n\
+            For the reasoning field, provide 1-3 brief explanations of your thought process.\n\
+            Only reply if you have something genuinely valuable to contribute.\n\
+            Keep your thinking brief and focus on outputting the JSON.",
             context
         );
 
@@ -75,7 +78,7 @@ impl ReasoningEngine {
                 },
             ],
             temperature: Some(0.7),
-            max_tokens: Some(1000),
+            max_tokens: Some(2048),
         };
 
         let mut req_builder = self.client.post(&url).json(&request);
@@ -109,12 +112,28 @@ impl ReasoningEngine {
     }
 
     fn parse_decision(&self, llm_response: &str) -> Result<Decision> {
+        tracing::debug!("Raw LLM response:\n{}", llm_response);
+
         // Extract and clean JSON from LLM response
-        let cleaned_json = extract_json(llm_response)?;
+        let cleaned_json = match extract_json(llm_response) {
+            Ok(json) => {
+                tracing::debug!("Extracted JSON:\n{}", json);
+                json
+            }
+            Err(e) => {
+                tracing::error!("Failed to extract JSON from LLM response");
+                tracing::error!("Raw response was:\n{}", llm_response);
+                return Err(e);
+            }
+        };
 
         // Try to parse as JSON
         let json_response: serde_json::Value = serde_json::from_str(&cleaned_json)
-            .context("Failed to parse LLM decision as JSON")?;
+            .with_context(|| {
+                tracing::error!("Failed to parse extracted JSON");
+                tracing::error!("Extracted JSON was:\n{}", cleaned_json);
+                format!("Failed to parse LLM decision as JSON: {}", cleaned_json)
+            })?;
 
         let action = json_response["action"]
             .as_str()
@@ -129,17 +148,30 @@ impl ReasoningEngine {
             })
             .unwrap_or_default();
 
+        tracing::debug!("Parsed action: {}", action);
+        tracing::debug!("Reasoning steps: {:?}", reasoning);
+
         match action {
             "reply" => {
                 let post_id = json_response["post_id"]
                     .as_str()
-                    .context("Missing post_id in reply decision")?
+                    .with_context(|| {
+                        tracing::error!("Missing 'post_id' field in reply decision");
+                        tracing::error!("Available fields: {:?}", json_response.as_object().map(|o| o.keys().collect::<Vec<_>>()));
+                        "Missing post_id in reply decision"
+                    })?
                     .to_string();
 
                 let content = json_response["content"]
                     .as_str()
-                    .context("Missing content in reply decision")?
+                    .with_context(|| {
+                        tracing::error!("Missing 'content' field in reply decision");
+                        tracing::error!("Available fields: {:?}", json_response.as_object().map(|o| o.keys().collect::<Vec<_>>()));
+                        "Missing content in reply decision"
+                    })?
                     .to_string();
+
+                tracing::info!("Decision: Reply to post {} with content: {}", &post_id[..8.min(post_id.len())], &content[..50.min(content.len())]);
 
                 Ok(Decision::Reply {
                     post_id,
@@ -147,7 +179,10 @@ impl ReasoningEngine {
                     reasoning,
                 })
             }
-            _ => Ok(Decision::NoAction { reasoning }),
+            _ => {
+                tracing::info!("Decision: No action");
+                Ok(Decision::NoAction { reasoning })
+            }
         }
     }
 }
@@ -156,28 +191,75 @@ impl ReasoningEngine {
 fn extract_json(response: &str) -> Result<String> {
     let trimmed = response.trim();
 
+    // Case 0: Strip thinking tags (<think>...</think>) if present
+    let without_thinking = strip_thinking_tags(trimmed);
+    let text = if without_thinking != trimmed {
+        tracing::debug!("Stripped <think> tags from response");
+        &without_thinking
+    } else {
+        trimmed
+    };
+
     // Case 1: Check for markdown code blocks (```json ... ``` or ``` ... ```)
-    if let Some(json) = extract_from_markdown_code_block(trimmed) {
+    if let Some(json) = extract_from_markdown_code_block(text) {
+        tracing::debug!("Extracted JSON from markdown code block");
         return Ok(json);
     }
 
     // Case 2: Try to find JSON object/array by braces/brackets
-    if let Some(json) = extract_by_delimiters(trimmed) {
+    if let Some(json) = extract_by_delimiters(text) {
+        tracing::debug!("Extracted JSON using delimiter matching");
         return Ok(json);
     }
 
     // Case 3: Try parsing as-is (maybe it's already clean JSON)
-    if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
-        return Ok(trimmed.to_string());
+    if serde_json::from_str::<serde_json::Value>(text).is_ok() {
+        tracing::debug!("Response is already valid JSON");
+        return Ok(text.to_string());
     }
 
     // Case 4: Last resort - try to clean common issues
-    let cleaned = clean_json_string(trimmed);
+    let cleaned = clean_json_string(text);
     if serde_json::from_str::<serde_json::Value>(&cleaned).is_ok() {
+        tracing::debug!("Extracted JSON after cleaning (removed trailing commas, comments, etc.)");
         return Ok(cleaned);
     }
 
-    anyhow::bail!("Could not extract valid JSON from LLM response: {}", response)
+    // All strategies failed - log detailed error
+    tracing::error!("All JSON extraction strategies failed");
+    tracing::error!("Tried:");
+    tracing::error!("  0. Stripping thinking tags");
+    tracing::error!("  1. Markdown code block extraction");
+    tracing::error!("  2. Delimiter-based extraction");
+    tracing::error!("  3. Direct parsing");
+    tracing::error!("  4. Cleaning and parsing");
+
+    // Check if response looks truncated (no JSON delimiters at all)
+    if !text.contains('{') && !text.contains('[') {
+        tracing::error!("Response appears to contain no JSON at all - may be truncated");
+        tracing::error!("Consider increasing max_tokens or using a model with better instruction following");
+    }
+
+    anyhow::bail!("Could not extract valid JSON from LLM response")
+}
+
+/// Strip thinking tags like <think>...</think> from response
+fn strip_thinking_tags(text: &str) -> String {
+    let mut result = text.to_string();
+
+    // Strip <think>...</think> tags (DeepSeek, R1, etc.)
+    while let Some(start) = result.find("<think>") {
+        if let Some(end) = result[start..].find("</think>") {
+            let end_pos = start + end + "</think>".len();
+            result.replace_range(start..end_pos, "");
+        } else {
+            // No closing tag found - just remove the opening tag and continue
+            // This allows JSON that comes after an unclosed tag to still be extracted
+            result.replace_range(start..start + "<think>".len(), "");
+        }
+    }
+
+    result.trim().to_string()
 }
 
 /// Extract JSON from markdown code blocks like ```json ... ``` or ``` ... ```
@@ -457,5 +539,42 @@ That should work!"#;
         let result = extract_json(input).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["metadata"]["nested"], "value");
+    }
+
+    #[test]
+    fn test_strip_thinking_tags() {
+        let input = r#"<think>
+Let me think about this...
+The user wants to know something.
+</think>
+{"action": "reply", "post_id": "123", "content": "test", "reasoning": ["step1"]}"#;
+
+        let result = extract_json(input).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["action"], "reply");
+        assert_eq!(parsed["post_id"], "123");
+    }
+
+    #[test]
+    fn test_strip_multiple_thinking_tags() {
+        let input = r#"<think>First thought</think>
+{"action": "none", "reasoning": ["step1"]}
+<think>Another thought</think>"#;
+
+        let result = extract_json(input).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["action"], "none");
+    }
+
+    #[test]
+    fn test_strip_unclosed_thinking_tag() {
+        let input = r#"<think>
+This is a long thinking process that never closes...
+The JSON is: {"action": "reply", "post_id": "456", "content": "test", "reasoning": []}"#;
+
+        let result = extract_json(input).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["action"], "reply");
+        assert_eq!(parsed["post_id"], "456");
     }
 }

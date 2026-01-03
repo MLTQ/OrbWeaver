@@ -39,17 +39,17 @@ impl GraphchanClient {
     }
 
     pub async fn create_post(&self, input: CreatePostInput) -> Result<PostView> {
-        let url = format!("{}/posts", self.base_url);
+        let url = format!("{}/threads/{}/posts", self.base_url, input.thread_id);
         let response = self.client.post(&url).json(&input).send().await?;
-        
+
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             anyhow::bail!("Failed to create post: {} - {}", status, body);
         }
-        
-        let post = response.json().await?;
-        Ok(post)
+
+        let response_wrapper: PostResponse = response.json().await?;
+        Ok(response_wrapper.post)
     }
 
     pub async fn health_check(&self) -> Result<()> {
@@ -57,5 +57,19 @@ impl GraphchanClient {
         self.client.get(&url).send().await
             .context("Failed to connect to graphchan API")?;
         Ok(())
+    }
+
+    pub async fn get_self_peer(&self) -> Result<PeerView> {
+        let url = format!("{}/peers/self", self.base_url);
+        let response = self.client.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to get self peer: {} - {}", status, body);
+        }
+
+        let peer = response.json().await?;
+        Ok(peer)
     }
 }

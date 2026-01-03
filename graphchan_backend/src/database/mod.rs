@@ -109,9 +109,8 @@ pub(crate) const MIGRATIONS: &str = r#"
     -- ALTER TABLE peers ADD COLUMN username TEXT;
     -- ALTER TABLE peers ADD COLUMN bio TEXT;
 
-    -- Migration: Add author_friendcode to posts table
-    -- This allows friend code to propagate with posts, enabling seamless following
-    ALTER TABLE posts ADD COLUMN author_friendcode TEXT;
+    -- Migration: Add author_friendcode to posts table (now in base schema)
+    -- ALTER TABLE posts ADD COLUMN author_friendcode TEXT;
 "#;
 
 #[derive(Clone)]
