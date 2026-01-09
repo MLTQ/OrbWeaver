@@ -613,7 +613,16 @@ fn apply_thread_snapshot(
 
         for file in files {
             let needs_fetch = file_needs_download(paths, &file)?;
-            if needs_fetch && file.ticket.is_some() {
+
+            // Don't auto-download large files - let user manually trigger download
+            const AUTO_DOWNLOAD_SIZE_LIMIT: i64 = 50 * 1024 * 1024; // 50MB
+            let should_auto_download = if let Some(size) = file.size_bytes {
+                size <= AUTO_DOWNLOAD_SIZE_LIMIT
+            } else {
+                true // If no size info, allow auto-download
+            };
+
+            if needs_fetch && file.ticket.is_some() && should_auto_download {
                 tracing::info!(
                     file_id = %file.id,
                     post_id = %post_id,
@@ -644,6 +653,12 @@ fn apply_thread_snapshot(
                         tracing::warn!(error = ?err, file_id = %announcement.id, "failed to download pending blob");
                     }
                 });
+            } else if needs_fetch && !should_auto_download {
+                tracing::info!(
+                    file_id = %file.id,
+                    size_mb = file.size_bytes.unwrap_or(0) / (1024 * 1024),
+                    "⏸️ file exceeds auto-download limit, marked as pending for manual download"
+                );
             }
         }
     }
@@ -999,7 +1014,22 @@ fn apply_file_announcement(
 
     let needs_fetch = file_needs_download(paths, &record)?;
     tracing::debug!(file_id = %announcement.id, needs_fetch = %needs_fetch, "checked if download needed");
+
+    // Don't auto-download large files - let user manually trigger download
+    const AUTO_DOWNLOAD_SIZE_LIMIT: i64 = 50 * 1024 * 1024; // 50MB
     if needs_fetch {
+        if let Some(size) = record.size_bytes {
+            if size > AUTO_DOWNLOAD_SIZE_LIMIT {
+                tracing::info!(
+                    file_id = %announcement.id,
+                    size_mb = size / (1024 * 1024),
+                    "⏸️ file exceeds auto-download limit ({}MB), marked as pending for manual download",
+                    AUTO_DOWNLOAD_SIZE_LIMIT / (1024 * 1024)
+                );
+                ensure_download_directory(paths)?;
+                return Ok(false); // Don't auto-download, user must trigger manually
+            }
+        }
         ensure_download_directory(paths)?;
     }
     Ok(needs_fetch)

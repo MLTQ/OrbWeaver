@@ -101,7 +101,9 @@ pub async fn serve_http(
         http_client,
     };
 
-    // Increase body limit to 50MB for file uploads (4chan images can be large)
+    // Configure body limit for file uploads (default 10GB if not specified)
+    // Media files (images/video/audio) are limited to 50MB at the handler level
+    let max_upload_bytes = config.file.max_upload_bytes.unwrap_or(10 * 1024 * 1024 * 1024);
     let router = Router::new()
         .route("/health", get(health_handler))
         .route("/threads", get(list_threads).post(create_thread))
@@ -147,7 +149,7 @@ pub async fn serve_http(
         .route("/blocking/ips/stats", get(ip_block_stats_handler))
         .route("/peers/:peer_id/ip", get(get_peer_ip_handler))
         .route("/search", get(search_handler))
-        .layer(DefaultBodyLimit::max(50 * 1024 * 1024)) // 50MB limit
+        .layer(DefaultBodyLimit::max(max_upload_bytes as usize))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
@@ -155,6 +157,11 @@ pub async fn serve_http(
                 .allow_headers(Any),
         )
         .with_state(state.clone());
+
+    tracing::info!(
+        max_body_limit_mb = max_upload_bytes / (1024 * 1024),
+        "Configured upload body limit (files >50MB won't auto-download on recipient)"
+    );
 
     // Try to bind to the configured port, or find the next available port
     let (listener, actual_port) = find_available_port(config.api_port).await?;
@@ -544,6 +551,7 @@ async fn upload_post_file(
     }
 
     let data = file_bytes.ok_or_else(|| ApiError::BadRequest("missing file field".into()))?;
+
     match service
         .save_post_file(SaveFileInput {
             post_id: post_id.clone(),
