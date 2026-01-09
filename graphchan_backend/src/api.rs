@@ -569,7 +569,7 @@ async fn upload_post_file(
             let announcement = FileAnnouncement {
                 id: file_view.id.clone(),
                 post_id: file_view.post_id.clone(),
-                thread_id,
+                thread_id: thread_id.clone(),
                 original_name: file_view.original_name.clone(),
                 mime: file_view.mime.clone(),
                 size_bytes: file_view.size_bytes,
@@ -593,6 +593,7 @@ async fn upload_post_file(
                     "failed to publish file availability over network"
                 );
             }
+
             Ok((StatusCode::CREATED, Json(map_file_view(file_view))))
         }
         Err(err) if err.to_string().contains("post not found") => {
