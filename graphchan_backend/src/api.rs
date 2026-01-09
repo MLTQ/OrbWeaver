@@ -999,6 +999,7 @@ struct FileResponse {
     path: String,
     download_url: String,
     present: bool,
+    download_status: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1226,6 +1227,7 @@ fn map_file_view(file: FileView) -> FileResponse {
         path: file.path.clone(),
         download_url: format!("/files/{}", file.id),
         present: file.present.unwrap_or(true),
+        download_status: file.download_status.clone(),
     }
 }
 
@@ -1736,10 +1738,11 @@ async fn search_handler(
                     size_bytes: f.size_bytes,
                     checksum: f.checksum,
                     blob_id: f.blob_id,
-                    ticket: f.ticket,
+                    ticket: f.ticket.clone(),
                     path: f.path,
                     download_url,
                     present: true,
+                    download_status: f.download_status,
                 }
             }),
             thread_id: r.post.thread_id,
