@@ -101,6 +101,8 @@ pub struct FileResponse {
     pub download_url: Option<String>,
     #[serde(default)]
     pub present: bool,
+    #[serde(default)]
+    pub download_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

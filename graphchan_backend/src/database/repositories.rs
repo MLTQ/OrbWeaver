@@ -679,8 +679,8 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
     fn attach(&self, record: &FileRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO files (id, post_id, path, original_name, mime, blob_id, size_bytes, checksum, ticket)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            INSERT INTO files (id, post_id, path, original_name, mime, blob_id, size_bytes, checksum, ticket, download_status)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             "#,
             params![
                 record.id,
@@ -691,7 +691,8 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
                 record.blob_id,
                 record.size_bytes,
                 record.checksum,
-                record.ticket
+                record.ticket,
+                record.download_status
             ],
         )?;
         Ok(())
@@ -700,8 +701,8 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
     fn upsert(&self, record: &FileRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO files (id, post_id, path, original_name, mime, blob_id, size_bytes, checksum, ticket)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            INSERT INTO files (id, post_id, path, original_name, mime, blob_id, size_bytes, checksum, ticket, download_status)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             ON CONFLICT(id) DO UPDATE SET
                 post_id = excluded.post_id,
                 path = excluded.path,
@@ -710,7 +711,8 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
                 blob_id = excluded.blob_id,
                 size_bytes = excluded.size_bytes,
                 checksum = excluded.checksum,
-                ticket = excluded.ticket
+                ticket = excluded.ticket,
+                download_status = excluded.download_status
             "#,
             params![
                 record.id,
@@ -721,7 +723,8 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
                 record.blob_id,
                 record.size_bytes,
                 record.checksum,
-                record.ticket
+                record.ticket,
+                record.download_status
             ],
         )?;
         Ok(())
@@ -730,7 +733,7 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
     fn list_for_post(&self, post_id: &str) -> Result<Vec<FileRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, post_id, path, original_name, mime, blob_id, size_bytes, checksum, ticket
+            SELECT id, post_id, path, original_name, mime, blob_id, size_bytes, checksum, ticket, download_status
             FROM files
             WHERE post_id = ?1
             ORDER BY id ASC
@@ -747,6 +750,7 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
                 size_bytes: row.get(6)?,
                 checksum: row.get(7)?,
                 ticket: row.get(8)?,
+                download_status: row.get(9)?,
             })
         })?;
         let mut files = Vec::new();
@@ -759,7 +763,7 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
     fn list_for_thread(&self, thread_id: &str) -> Result<Vec<FileRecord>> {
         tracing::info!("FileRepository::list_for_thread called for thread_id: {}", thread_id);
         let query = r#"
-            SELECT f.id, f.post_id, f.path, f.original_name, f.mime, f.blob_id, f.size_bytes, f.checksum, f.ticket
+            SELECT f.id, f.post_id, f.path, f.original_name, f.mime, f.blob_id, f.size_bytes, f.checksum, f.ticket, f.download_status
             FROM files f
             INNER JOIN posts p ON f.post_id = p.id
             WHERE p.thread_id = ?1
@@ -783,6 +787,7 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
                 size_bytes: row.get(6)?,
                 checksum: row.get(7)?,
                 ticket: row.get(8)?,
+                download_status: row.get(9)?,
             })
         })?;
         let mut files = Vec::new();
@@ -797,7 +802,7 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
             .conn
             .query_row(
                 r#"
-                SELECT id, post_id, path, original_name, mime, blob_id, size_bytes, checksum, ticket
+                SELECT id, post_id, path, original_name, mime, blob_id, size_bytes, checksum, ticket, download_status
                 FROM files
                 WHERE id = ?1
                 "#,
@@ -809,10 +814,11 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
                         path: row.get(2)?,
                         original_name: row.get(3)?,
                         mime: row.get(4)?,
-                        blob_id: row.get(5)?,
+                blob_id: row.get(5)?,
                         size_bytes: row.get(6)?,
                         checksum: row.get(7)?,
                         ticket: row.get(8)?,
+                        download_status: row.get(9)?,
                     })
                 },
             )
@@ -1638,7 +1644,7 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
         let mut stmt = self.conn.prepare(
             r#"SELECT
                 p.id, p.thread_id, p.author_peer_id, p.author_friendcode, p.body, p.created_at, p.updated_at,
-                f.id, f.post_id, f.path, f.original_name, f.mime, f.size_bytes, f.blob_id, f.checksum, f.ticket,
+                f.id, f.post_id, f.path, f.original_name, f.mime, f.size_bytes, f.blob_id, f.checksum, f.ticket, f.download_status,
                 bm25(files_fts) as score,
                 t.title,
                 snippet(files_fts, -1, '<mark>', '</mark>', '...', 30) as snippet
@@ -1673,10 +1679,11 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
                     size_bytes: row.get(12)?,
                     checksum: row.get(14)?,
                     ticket: row.get(15)?,
+                    download_status: row.get(16)?,
                 }),
-                bm25_score: row.get(16)?,
-                thread_title: row.get(17)?,
-                snippet: row.get(18)?,
+                bm25_score: row.get(17)?,
+                thread_title: row.get(18)?,
+                snippet: row.get(19)?,
             })
         })?;
 

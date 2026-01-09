@@ -595,6 +595,7 @@ fn apply_thread_snapshot(
                     size_bytes: file.size_bytes,
                     checksum: file.checksum.clone(),
                     ticket: file.ticket.clone(),
+                    download_status: file.download_status.clone().or(Some("pending".to_string())),
                 };
                 files_repo.upsert(&file_record)?;
             }
@@ -976,6 +977,7 @@ fn apply_file_announcement(
         size_bytes: announcement.size_bytes,
         checksum: announcement.checksum.clone(),
         ticket: announcement.ticket.as_ref().map(|t| t.to_string()),
+        download_status: Some("pending".to_string()),
     };
 
     // Always persist the file record, even if post doesn't exist yet
@@ -1228,6 +1230,19 @@ async fn download_blob(
             "blob not in local store - downloading from peer"
         );
 
+        // Set status to 'downloading'
+        let db_clone = database.clone();
+        let file_id = announcement.id.clone();
+        let _ = tokio::task::spawn_blocking(move || -> Result<()> {
+            db_clone.with_repositories(|repos| {
+                if let Ok(Some(mut record)) = repos.files().get(&file_id) {
+                    record.download_status = Some("downloading".to_string());
+                    let _ = repos.files().upsert(&record);
+                }
+                Ok(())
+            })
+        }).await;
+
         // Download the blob from the peer specified in the ticket
         let downloader = blob_store.downloader(&endpoint);
         let download_result = downloader
@@ -1249,6 +1264,20 @@ async fn download_blob(
                     error = ?err,
                     "⚠️  failed to download blob from peer"
                 );
+
+                // Set status to 'failed'
+                let db_clone = database.clone();
+                let file_id = announcement.id.clone();
+                let _ = tokio::task::spawn_blocking(move || -> Result<()> {
+                    db_clone.with_repositories(|repos| {
+                        if let Ok(Some(mut record)) = repos.files().get(&file_id) {
+                            record.download_status = Some("failed".to_string());
+                            let _ = repos.files().upsert(&record);
+                        }
+                        Ok(())
+                    })
+                }).await;
+
                 return Err(err.into());
             }
         }
@@ -1289,6 +1318,7 @@ async fn download_blob(
             record.path = relative_path;
             record.size_bytes = Some(size);
             record.checksum = Some(checksum);
+            record.download_status = Some("available".to_string());
             repos.files().upsert(&record)?;
             tracing::info!(file_id = %announcement.id, "✅ blob downloaded and saved successfully");
         }

@@ -117,6 +117,7 @@ pub async fn serve_http(
         .route("/posts/:id/react", post(add_reaction))
         .route("/posts/:id/unreact", post(remove_reaction))
         .route("/files/:id", get(download_file))
+        .route("/files/:id/download", post(trigger_file_download))
         .route("/peers", get(list_peers))
         .route("/peers", post(add_peer))
         .route("/peers/:id/unfollow", post(unfollow_peer))
@@ -669,6 +670,133 @@ async fn download_file(
     }
 
     Ok(response)
+}
+
+#[derive(Serialize)]
+struct TriggerDownloadResponse {
+    status: String,
+    message: String,
+}
+
+async fn trigger_file_download(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<TriggerDownloadResponse>, ApiError> {
+    use crate::database::repositories::FileRepository;
+
+    // Get the file record with ticket information
+    let file_record = state.database.with_repositories(|repos| {
+        FileRepository::get(&repos.files(), &id)
+    }).map_err(ApiError::Internal)?;
+
+    let Some(record) = file_record else {
+        return Err(ApiError::NotFound(format!("file {id} not found")));
+    };
+
+    // Check if file has a ticket for download
+    let ticket_str = record.ticket.clone()
+        .ok_or_else(|| ApiError::BadRequest("File has no download ticket available".to_string()))?;
+
+    // Parse the ticket
+    let ticket = BlobTicket::from_str(&ticket_str)
+        .map_err(|e| ApiError::BadRequest(format!("Invalid ticket: {}", e)))?;
+
+    // Set status to 'downloading' immediately
+    state.database.with_repositories(|repos| {
+        let mut updated_record = record.clone();
+        updated_record.download_status = Some("downloading".to_string());
+        FileRepository::upsert(&repos.files(), &updated_record)
+    }).map_err(ApiError::Internal)?;
+
+    // Spawn background task to download the file
+    let db = state.database.clone();
+    let paths = state.config.paths.clone();
+    let blobs = state.blobs.clone();
+    let endpoint = state.network.endpoint();
+    let file_id = id.clone();
+
+    tokio::spawn(async move {
+        let hash = ticket.hash();
+
+        tracing::info!(
+            file_id = %file_id,
+            hash = %hash.fmt_short(),
+            "manual download triggered via API"
+        );
+
+        // Download the blob
+        let download_result = async {
+            // Check if blob exists
+            let has_blob = blobs.has(hash).await
+                .context("failed to check blob existence")?;
+
+            if !has_blob {
+                // Download from peer
+                let downloader = blobs.downloader(&endpoint);
+                downloader
+                    .download(hash, Some(ticket.addr().id))
+                    .await
+                    .context("failed to download blob")?;
+            }
+
+            // Export to file
+            let relative_path = format!("files/downloads/{}", file_id);
+            let absolute_path = paths.base.join(&relative_path);
+
+            // Ensure directory exists
+            if let Some(parent) = absolute_path.parent() {
+                tokio::fs::create_dir_all(parent).await
+                    .context("failed to create download directory")?;
+            }
+
+            blobs.export(hash, absolute_path.clone()).await
+                .context("failed to export blob")?;
+
+            // Read and verify
+            let data = tokio::fs::read(&absolute_path).await
+                .context("failed to read exported file")?;
+
+            let size = data.len() as i64;
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(&data);
+            let digest = hasher.finalize();
+            let checksum = format!("blake3:{}", digest.to_hex());
+
+            // Update database
+            db.with_repositories(|repos| {
+                use crate::database::repositories::FileRepository;
+                if let Ok(Some(mut rec)) = FileRepository::get(&repos.files(), &file_id) {
+                    rec.path = relative_path;
+                    rec.size_bytes = Some(size);
+                    rec.checksum = Some(checksum);
+                    rec.download_status = Some("available".to_string());
+                    let _ = FileRepository::upsert(&repos.files(), &rec);
+                }
+                Ok(())
+            })?;
+
+            tracing::info!(file_id = %file_id, "✅ manual download completed successfully");
+            Ok::<(), anyhow::Error>(())
+        }.await;
+
+        // Update status to failed if download failed
+        if let Err(e) = download_result {
+            tracing::warn!(file_id = %file_id, error = ?e, "manual download failed");
+            let _ = db.with_repositories(|repos| {
+                use crate::database::repositories::FileRepository;
+                if let Ok(Some(mut rec)) = FileRepository::get(&repos.files(), &file_id) {
+                    rec.download_status = Some("failed".to_string());
+                    let _ = FileRepository::upsert(&repos.files(), &rec);
+                }
+                Ok(())
+            });
+        }
+    });
+
+    Ok(Json(TriggerDownloadResponse {
+        status: "downloading".to_string(),
+        message: format!("Download started for file {}", id),
+    }))
 }
 
 async fn list_recent_posts(

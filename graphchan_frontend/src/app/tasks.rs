@@ -621,6 +621,24 @@ pub fn clear_all_ip_blocks(client: ApiClient, tx: Sender<AppMessage>) {
     });
 }
 
+pub fn trigger_file_download(client: ApiClient, tx: Sender<AppMessage>, file_id: String, thread_id: String) {
+    thread::spawn(move || {
+        let result = client.trigger_file_download(&file_id);
+        if result.is_ok() {
+            // Reload thread to get updated download status
+            let thread_result = client.get_thread(&thread_id);
+            if thread_result.is_ok() {
+                let message = AppMessage::ThreadLoaded { thread_id: thread_id.clone(), result: thread_result };
+                if tx.send(message).is_err() {
+                    error!("failed to send ThreadLoaded message after file download trigger");
+                }
+            }
+        } else if let Err(e) = result {
+            error!("Failed to trigger file download: {}", e);
+        }
+    });
+}
+
 pub fn block_peer_ip(client: ApiClient, tx: Sender<AppMessage>, peer_id: String) {
     thread::spawn(move || {
         // First, fetch the peer's IP addresses

@@ -178,6 +178,12 @@ impl ApiClient {
         format!("{}/files/{}", self.base_url, file_id)
     }
 
+    pub fn trigger_file_download(&self, file_id: &str) -> Result<()> {
+        let url = self.url(&format!("/files/{}/download", file_id))?;
+        self.client.post(url).send()?.error_for_status()?;
+        Ok(())
+    }
+
     pub fn import_thread(&self, url: &str) -> Result<String> {
         let api_url = self.url("/import")?;
         #[derive(serde::Serialize)]

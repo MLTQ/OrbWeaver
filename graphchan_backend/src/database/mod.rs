@@ -150,6 +150,7 @@ impl Database {
             self.ensure_blocking_tables(conn)?;
             self.ensure_ip_blocking_tables(conn)?;
             self.ensure_fts5_search_tables(conn)?;
+            self.ensure_file_download_status_column(conn)?;
             Ok(())
         })?;
         Ok(self.newly_created)
@@ -430,6 +431,28 @@ impl Database {
             // Default to 'downloaded' for existing threads (they're already in DB)
             // Values: 'announced', 'downloading', 'downloaded', 'failed'
             conn.execute("ALTER TABLE threads ADD COLUMN sync_status TEXT DEFAULT 'downloaded'", [])?;
+        }
+        Ok(())
+    }
+
+    fn ensure_file_download_status_column(&self, conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare("PRAGMA table_info(files)")?;
+        let mut has_download_status = false;
+        let rows = stmt.query_map([], |row| {
+            let name: String = row.get(1)?;
+            Ok(name)
+        })?;
+        for row in rows {
+            let name = row?;
+            if name.eq_ignore_ascii_case("download_status") {
+                has_download_status = true;
+                break;
+            }
+        }
+        if !has_download_status {
+            // Default to 'available' for existing files (they're already in DB and physically present)
+            // Values: 'pending', 'downloading', 'available', 'failed'
+            conn.execute("ALTER TABLE files ADD COLUMN download_status TEXT DEFAULT 'available'", [])?;
         }
         Ok(())
     }

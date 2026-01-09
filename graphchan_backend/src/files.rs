@@ -105,6 +105,7 @@ impl FileService {
             size_bytes: Some(size_bytes),
             checksum: checksum.clone(),
             ticket: None,
+            download_status: Some("available".to_string()),
         };
 
         self.database.with_repositories(|repos| {
@@ -214,6 +215,7 @@ pub struct FileView {
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub present: Option<bool>,
+    pub download_status: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -235,6 +237,7 @@ impl FileView {
             ticket: record.ticket,
             path: record.path,
             present: None,
+            download_status: record.download_status,
         }
     }
 }

@@ -57,6 +57,7 @@ pub struct FileRecord {
     pub size_bytes: Option<i64>,
     pub checksum: Option<String>,
     pub ticket: Option<String>,
+    pub download_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
