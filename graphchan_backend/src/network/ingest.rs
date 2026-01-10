@@ -213,6 +213,12 @@ async fn handle_message(
             Ok(result)
         }
         EventPayload::FileAvailable(announcement) => {
+            tracing::debug!(
+                file_id = %announcement.id,
+                size_bytes = ?announcement.size_bytes,
+                size_mb = announcement.size_bytes.map(|s| s / (1024 * 1024)),
+                "received FileAnnouncement"
+            );
             let msg_id = format!("file:{}", announcement.id);
             let should_rebroadcast = {
                 let mut seen = seen_messages.lock().await;
@@ -1013,12 +1019,24 @@ fn apply_file_announcement(
     }
 
     let needs_fetch = file_needs_download(paths, &record)?;
-    tracing::debug!(file_id = %announcement.id, needs_fetch = %needs_fetch, "checked if download needed");
+    tracing::debug!(
+        file_id = %announcement.id,
+        needs_fetch = %needs_fetch,
+        size_bytes = ?record.size_bytes,
+        "checked if download needed"
+    );
 
     // Don't auto-download large files - let user manually trigger download
     const AUTO_DOWNLOAD_SIZE_LIMIT: i64 = 50 * 1024 * 1024; // 50MB
     if needs_fetch {
         if let Some(size) = record.size_bytes {
+            tracing::debug!(
+                file_id = %announcement.id,
+                size_bytes = size,
+                size_mb = size / (1024 * 1024),
+                limit_mb = AUTO_DOWNLOAD_SIZE_LIMIT / (1024 * 1024),
+                "checking if file exceeds auto-download limit"
+            );
             if size > AUTO_DOWNLOAD_SIZE_LIMIT {
                 tracing::info!(
                     file_id = %announcement.id,
@@ -1028,7 +1046,18 @@ fn apply_file_announcement(
                 );
                 ensure_download_directory(paths)?;
                 return Ok(false); // Don't auto-download, user must trigger manually
+            } else {
+                tracing::debug!(
+                    file_id = %announcement.id,
+                    size_mb = size / (1024 * 1024),
+                    "file is small enough for auto-download"
+                );
             }
+        } else {
+            tracing::warn!(
+                file_id = %announcement.id,
+                "no size information available, allowing auto-download"
+            );
         }
         ensure_download_directory(paths)?;
     }

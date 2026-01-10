@@ -591,6 +591,8 @@ async fn upload_post_file(
             tracing::info!(
                 file_id = %file_view.id,
                 post_id = %post_id,
+                size_bytes = ?announcement.size_bytes,
+                size_mb = announcement.size_bytes.map(|s| s / (1024 * 1024)),
                 "📢 broadcasting FileAnnouncement"
             );
             if let Err(err) = state.network.publish_file_available(announcement).await {
