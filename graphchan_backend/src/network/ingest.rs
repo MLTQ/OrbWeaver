@@ -505,6 +505,21 @@ fn apply_thread_snapshot(
     let posts = snapshot.posts;
     let post_ids: Vec<String> = posts.iter().map(|p| p.id.clone()).collect();
 
+    // Log all files in the thread snapshot
+    for post in &posts {
+        for file in &post.files {
+            tracing::debug!(
+                thread_id = %thread.id,
+                post_id = %post.id,
+                file_id = %file.id,
+                size_bytes = ?file.size_bytes,
+                size_mb = file.size_bytes.map(|s| s / (1024 * 1024)),
+                has_ticket = file.ticket.is_some(),
+                "file in thread snapshot"
+            );
+        }
+    }
+
     database.with_repositories(|repos| {
         // First, ingest all peers from the snapshot
         let peers_repo = repos.peers();
@@ -618,15 +633,40 @@ fn apply_thread_snapshot(
         })?;
 
         for file in files {
+            tracing::debug!(
+                file_id = %file.id,
+                size_bytes = ?file.size_bytes,
+                size_mb = file.size_bytes.map(|s| s / (1024 * 1024)),
+                has_ticket = file.ticket.is_some(),
+                "checking file from thread snapshot"
+            );
+
             let needs_fetch = file_needs_download(paths, &file)?;
 
             // Don't auto-download large files - let user manually trigger download
             const AUTO_DOWNLOAD_SIZE_LIMIT: i64 = 50 * 1024 * 1024; // 50MB
             let should_auto_download = if let Some(size) = file.size_bytes {
-                size <= AUTO_DOWNLOAD_SIZE_LIMIT
+                let auto_dl = size <= AUTO_DOWNLOAD_SIZE_LIMIT;
+                tracing::debug!(
+                    file_id = %file.id,
+                    size_mb = size / (1024 * 1024),
+                    limit_mb = AUTO_DOWNLOAD_SIZE_LIMIT / (1024 * 1024),
+                    should_auto_download = auto_dl,
+                    "file size check result"
+                );
+                auto_dl
             } else {
+                tracing::warn!(file_id = %file.id, "no size info, allowing auto-download");
                 true // If no size info, allow auto-download
             };
+
+            tracing::debug!(
+                file_id = %file.id,
+                needs_fetch,
+                has_ticket = file.ticket.is_some(),
+                should_auto_download,
+                "download decision factors"
+            );
 
             if needs_fetch && file.ticket.is_some() && should_auto_download {
                 tracing::info!(
