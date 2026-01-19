@@ -44,6 +44,47 @@ impl GraphchanApp {
                     tasks::pick_files(self.tx.clone());
                 }
 
+                ui.add_space(8.0);
+
+                // Topic selector
+                ui.group(|ui| {
+                    ui.label("📡 Announce to Topics");
+                    ui.label("Select which topics to announce this thread on:");
+                    ui.add_space(4.0);
+
+                    if self.subscribed_topics.is_empty() {
+                        ui.colored_label(Color32::GRAY, "No topics subscribed.");
+                        ui.horizontal(|ui| {
+                            ui.label("Subscribe to topics in the");
+                            if ui.button("Topic Manager").clicked() {
+                                self.show_topic_manager = true;
+                            }
+                        });
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .max_height(120.0)
+                            .show(ui, |ui| {
+                                for topic_id in &self.subscribed_topics.clone() {
+                                    let mut is_selected = self.selected_topics.contains(topic_id);
+                                    if ui.checkbox(&mut is_selected, topic_id).clicked() {
+                                        if is_selected {
+                                            self.selected_topics.insert(topic_id.clone());
+                                        } else {
+                                            self.selected_topics.remove(topic_id);
+                                        }
+                                    }
+                                }
+                            });
+                    }
+
+                    ui.add_space(4.0);
+                    if self.selected_topics.is_empty() {
+                        ui.colored_label(Color32::YELLOW, "⚠ No topics selected - thread will be friends-only");
+                    } else {
+                        ui.label(format!("✓ Will announce to {} topic(s)", self.selected_topics.len()));
+                    }
+                });
+
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     if self.create_thread.submitting {
@@ -63,6 +104,7 @@ impl GraphchanApp {
         if should_close {
             self.show_create_thread = false;
             self.create_thread = CreateThreadState::default();
+            self.selected_topics.clear();
         }
     }
 

@@ -13,6 +13,7 @@ use crate::models::{
 };
 
 static SHARED_CLIENT: OnceLock<Client> = OnceLock::new();
+static UPLOAD_CLIENT: OnceLock<Client> = OnceLock::new();
 
 pub fn get_shared_client() -> Result<&'static Client> {
     if let Some(client) = SHARED_CLIENT.get() {
@@ -29,19 +30,38 @@ pub fn get_shared_client() -> Result<&'static Client> {
     Ok(SHARED_CLIENT.get().unwrap())
 }
 
+pub fn get_upload_client() -> Result<&'static Client> {
+    if let Some(client) = UPLOAD_CLIENT.get() {
+        return Ok(client);
+    }
+
+    // File uploads can take a very long time for large files, so use a much longer timeout
+    let client = Client::builder()
+        .timeout(Duration::from_secs(3600)) // 1 hour for large file uploads
+        .user_agent("GraphchanFrontend/0.1")
+        .build()
+        .context("failed to build upload HTTP client")?;
+
+    let _ = UPLOAD_CLIENT.set(client);
+    Ok(UPLOAD_CLIENT.get().unwrap())
+}
+
 #[derive(Clone)]
 pub struct ApiClient {
     base_url: String,
     client: Client,
+    upload_client: Client,
 }
 
 impl ApiClient {
     pub fn new(base_url: impl Into<String>) -> Result<Self> {
         let base = sanitize_base_url(base_url.into())?;
         let client = get_shared_client()?.clone();
+        let upload_client = get_upload_client()?.clone();
         Ok(Self {
             base_url: base,
             client,
+            upload_client,
         })
     }
 
@@ -52,6 +72,10 @@ impl ApiClient {
     pub fn set_base_url(&mut self, base_url: impl Into<String>) -> Result<()> {
         self.base_url = sanitize_base_url(base_url.into())?;
         Ok(())
+    }
+
+    fn upload_client(&self) -> &Client {
+        &self.upload_client
     }
 
     pub fn list_threads(&self) -> Result<Vec<ThreadSummary>> {
@@ -93,7 +117,7 @@ impl ApiClient {
         }
 
         let response = self
-            .client
+            .upload_client()
             .post(url)
             .multipart(form)
             .send()?
@@ -126,7 +150,7 @@ impl ApiClient {
         let url = self.url("/identity/avatar")?;
         let form = reqwest::blocking::multipart::Form::new()
             .file("file", path)?;
-        self.client
+        self.upload_client()
             .post(url)
             .multipart(form)
             .send()?
@@ -165,17 +189,23 @@ impl ApiClient {
         let url = self.url(&format!("/posts/{post_id}/files"))?;
         let form = reqwest::blocking::multipart::Form::new()
             .file("file", path)?;
-            
-        let response = self.client.post(url)
+
+        let response = self.upload_client().post(url)
             .multipart(form)
             .send()?
             .error_for_status()?;
-            
+
         Ok(response.json()?)
     }
 
     pub fn download_url(&self, file_id: &str) -> String {
         format!("{}/files/{}", self.base_url, file_id)
+    }
+
+    pub fn trigger_file_download(&self, file_id: &str) -> Result<()> {
+        let url = self.url(&format!("/files/{}/download", file_id))?;
+        self.client.post(url).send()?.error_for_status()?;
+        Ok(())
     }
 
     pub fn import_thread(&self, url: &str) -> Result<String> {
@@ -329,6 +359,60 @@ impl ApiClient {
         Ok(response.json()?)
     }
 
+    // IP Blocking methods
+
+    pub fn list_ip_blocks(&self) -> Result<Vec<crate::models::IpBlockView>> {
+        let url = self.url("/blocking/ips")?;
+        let response = self.client.get(url).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
+    pub fn get_ip_block_stats(&self) -> Result<crate::models::IpBlockStatsResponse> {
+        let url = self.url("/blocking/ips/stats")?;
+        let response = self.client.get(url).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
+    pub fn add_ip_block(&self, ip_or_range: &str, reason: Option<String>) -> Result<()> {
+        let url = self.url("/blocking/ips")?;
+        let request = crate::models::AddIpBlockRequest {
+            ip_or_range: ip_or_range.to_string(),
+            reason,
+        };
+        self.client.post(url).json(&request).send()?.error_for_status()?;
+        Ok(())
+    }
+
+    pub fn remove_ip_block(&self, block_id: i64) -> Result<()> {
+        let url = format!("{}/blocking/ips/{}", self.base_url(), block_id);
+        self.client.delete(&url).send()?.error_for_status()?;
+        Ok(())
+    }
+
+    pub fn import_ip_blocks(&self, import_text: &str) -> Result<()> {
+        let url = self.url("/blocking/ips/import")?;
+        self.client.post(url).body(import_text.to_string()).send()?.error_for_status()?;
+        Ok(())
+    }
+
+    pub fn export_ip_blocks(&self) -> Result<String> {
+        let url = self.url("/blocking/ips/export")?;
+        let response = self.client.get(url).send()?.error_for_status()?;
+        Ok(response.text()?)
+    }
+
+    pub fn clear_all_ip_blocks(&self) -> Result<()> {
+        let url = self.url("/blocking/ips/clear")?;
+        self.client.post(url).send()?.error_for_status()?;
+        Ok(())
+    }
+
+    pub fn get_peer_ips(&self, peer_id: &str) -> Result<crate::models::PeerIpResponse> {
+        let url = format!("{}/peers/{}/ip", self.base_url(), peer_id);
+        let response = self.client.get(&url).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
     pub fn search(&self, query: &str, limit: Option<usize>) -> Result<SearchResponse> {
         let limit_param = limit.unwrap_or(50);
         let url = format!("{}/search", self.base_url());
@@ -338,6 +422,26 @@ impl ApiClient {
             .send()?
             .error_for_status()?;
         Ok(response.json()?)
+    }
+
+    // Topic management
+    pub fn list_topics(&self) -> Result<Vec<String>> {
+        let url = self.url("/topics")?;
+        let response = self.client.get(url).send()?.error_for_status()?;
+        Ok(response.json()?)
+    }
+
+    pub fn subscribe_topic(&self, topic_id: &str) -> Result<()> {
+        let url = self.url("/topics")?;
+        let request = serde_json::json!({ "topic_id": topic_id });
+        self.client.post(url).json(&request).send()?.error_for_status()?;
+        Ok(())
+    }
+
+    pub fn unsubscribe_topic(&self, topic_id: &str) -> Result<()> {
+        let url = self.url(&format!("/topics/{}", topic_id))?;
+        self.client.delete(url).send()?.error_for_status()?;
+        Ok(())
     }
 
     fn url(&self, path: &str) -> Result<Url> {

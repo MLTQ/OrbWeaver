@@ -16,7 +16,8 @@ pub fn render_friends_page(app: &mut GraphchanApp, ui: &mut egui::Ui) {
             ui.heading("Follow a Peer");
             ui.add_space(10.0);
 
-            ui.label("Enter a friendcode to follow a peer:");
+            ui.label("Enter a friend code to follow a peer:");
+            ui.label(egui::RichText::new("(Supports both short and legacy formats)").italics().small());
             ui.horizontal(|ui| {
                 ui.text_edit_singleline(&mut app.identity_state.friendcode_input);
 

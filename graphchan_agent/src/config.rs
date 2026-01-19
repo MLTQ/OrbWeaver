@@ -1,237 +1,350 @@
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::env;
+use std::fs;
+use std::path::PathBuf;
+use anyhow::{Context, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentConfig {
-    /// Graphchan backend API URL
-    #[serde(default = "default_graphchan_url")]
-    pub graphchan_api_url: String,
-
-    /// OpenAI-compatible API endpoint (e.g., http://localhost:11434/v1 for Ollama)
-    pub llm_api_url: String,
-
-    /// API key for LLM provider (can be empty for local models)
+pub struct RespondTo {
+    #[serde(rename = "type")]
+    pub response_type: String,
     #[serde(default)]
-    pub llm_api_key: String,
-
-    /// Model name (e.g., "llama3.2", "gpt-4", "claude-sonnet-4.5")
-    pub llm_model: String,
-
-    /// System prompt to define agent personality
-    #[serde(default = "default_system_prompt")]
-    pub system_prompt: String,
-
-    /// How often to poll for new posts (in seconds)
-    #[serde(default = "default_poll_interval")]
-    pub poll_interval_secs: u64,
-
-    /// Response strategy
-    #[serde(default)]
-    pub respond_to: RespondStrategy,
-
-    /// Agent's username in Graphchan
-    #[serde(default = "default_username")]
-    pub username: String,
-
-    /// Guiding principles/adjectives that define the agent's core values
-    #[serde(default = "default_guiding_principles")]
-    pub guiding_principles: Vec<String>,
-
-    /// How often to run self-reflection (in hours)
-    #[serde(default = "default_reflection_interval")]
-    pub reflection_interval_hours: u64,
-
-    /// Enable self-reflection and prompt evolution
-    #[serde(default = "default_enable_reflection")]
-    pub enable_self_reflection: bool,
-
-    /// Model to use for reflection (can be different/cheaper than main model)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reflection_model: Option<String>,
-
-    /// Path to the agent's database file
-    #[serde(default = "default_database_path")]
-    pub database_path: String,
-
-    /// Maximum number of important posts to retain in memory
-    /// When full, new important posts must compete to replace existing ones
-    #[serde(default = "default_max_important_posts")]
-    pub max_important_posts: usize,
-
-    /// ComfyUI server configuration
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub comfyui: Option<ComfyUIConfig>,
-
-    /// Whether to generate images for posts
-    #[serde(default)]
-    pub enable_image_generation: bool,
+    pub decision_model: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum RespondStrategy {
-    /// Respond to all new posts
-    All,
-
-    /// Respond only when mentioned by username
-    Mentions,
-
-    /// Respond randomly with given probability (0.0 to 1.0)
-    Random { probability: f64 },
-
-    /// Respond to posts in specific threads
-    Threads { thread_ids: Vec<String> },
-
-    /// Use LLM to decide whether to respond based on personality and context
-    Selective {
-        /// Optional: Model to use for decision-making (defaults to main model if not specified)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        decision_model: Option<String>,
-    },
-}
-
-impl Default for RespondStrategy {
+impl Default for RespondTo {
     fn default() -> Self {
-        RespondStrategy::Mentions
-    }
-}
-
-impl AgentConfig {
-    pub fn poll_interval(&self) -> Duration {
-        Duration::from_secs(self.poll_interval_secs)
+        Self {
+            response_type: "selective".to_string(),
+            decision_model: None,
+        }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComfyUIConfig {
-    /// ComfyUI server URL (e.g., "http://192.168.1.100:8188")
+    #[serde(default = "default_comfyui_url")]
     pub api_url: String,
-
-    /// Workflow type to use
     #[serde(default = "default_workflow_type")]
-    pub workflow_type: WorkflowType,
-
-    /// Checkpoint/model name loaded in ComfyUI
+    pub workflow_type: String,
+    #[serde(default = "default_model_name")]
     pub model_name: String,
-
-    /// Optional: VAE model name
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub vae_name: Option<String>,
-
-    /// Image dimensions
-    #[serde(default = "default_image_width")]
+    #[serde(default = "default_width")]
     pub width: u32,
-
-    #[serde(default = "default_image_height")]
+    #[serde(default = "default_height")]
     pub height: u32,
-
-    /// Number of inference steps
     #[serde(default = "default_steps")]
     pub steps: u32,
-
-    /// CFG scale
-    #[serde(default = "default_cfg")]
+    #[serde(default = "default_cfg_scale")]
     pub cfg_scale: f32,
-
-    /// Sampler name (e.g., "euler_a", "dpmpp_2m")
     #[serde(default = "default_sampler")]
     pub sampler: String,
-
-    /// Scheduler (e.g., "karras", "normal")
     #[serde(default = "default_scheduler")]
     pub scheduler: String,
-
-    /// Negative prompt for SD/SDXL (ignored for Flux)
-    /// Used to specify what NOT to generate
-    #[serde(default = "default_negative_prompt")]
+    #[serde(default)]
     pub negative_prompt: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum WorkflowType {
-    /// Stable Diffusion 1.5/2.1 (tag-based prompts)
-    SD,
-    /// Stable Diffusion XL (tag-based prompts)
-    SDXL,
-    /// Flux/Black Forest Labs (natural language prompts)
-    Flux,
+fn default_comfyui_url() -> String {
+    "http://127.0.0.1:8188".to_string()
 }
 
-fn default_workflow_type() -> WorkflowType {
-    WorkflowType::SDXL
+fn default_workflow_type() -> String {
+    "sd".to_string()
 }
 
-fn default_image_width() -> u32 {
-    768
+fn default_model_name() -> String {
+    "v1-5-pruned-emaonly.safetensors".to_string()
 }
 
-fn default_image_height() -> u32 {
-    768
+fn default_width() -> u32 {
+    512
+}
+
+fn default_height() -> u32 {
+    512
 }
 
 fn default_steps() -> u32 {
     20
 }
 
-fn default_cfg() -> f32 {
+fn default_cfg_scale() -> f32 {
     7.0
 }
 
 fn default_sampler() -> String {
-    "euler_a".to_string()
+    "euler".to_string()
 }
 
 fn default_scheduler() -> String {
     "normal".to_string()
 }
 
-fn default_negative_prompt() -> String {
-    "ugly, blurry, low quality, distorted, deformed, bad anatomy, \
-     poorly drawn, bad proportions, gross proportions, malformed limbs, \
-     missing arms, missing legs, extra arms, extra legs, mutated hands, \
-     long neck, duplicate, morbid, mutilated, extra fingers, poorly drawn hands, \
-     poorly drawn face, mutation, bad art, bad hands, text, error, watermark, \
-     signature, username, worst quality, jpeg artifacts".to_string()
+impl Default for ComfyUIConfig {
+    fn default() -> Self {
+        Self {
+            api_url: default_comfyui_url(),
+            workflow_type: default_workflow_type(),
+            model_name: default_model_name(),
+            vae_name: None,
+            width: default_width(),
+            height: default_height(),
+            steps: default_steps(),
+            cfg_scale: default_cfg_scale(),
+            sampler: default_sampler(),
+            scheduler: default_scheduler(),
+            negative_prompt: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentConfig {
+    // Connection
+    #[serde(default = "default_graphchan_url")]
+    pub graphchan_api_url: String,
+
+    // LLM configuration (OpenAI-compatible: Ollama, LM Studio, vLLM, OpenAI, etc.)
+    #[serde(default = "default_llm_url")]
+    pub llm_api_url: String,
+    #[serde(default = "default_llm_model")]
+    pub llm_model: String,
+    #[serde(default)]
+    pub llm_api_key: Option<String>,
+
+    // Agent Identity
+    #[serde(default = "default_username", alias = "agent_name")]
+    pub username: String,
+
+    // System prompt
+    #[serde(default = "default_system_prompt")]
+    pub system_prompt: String,
+
+    // Polling and Response
+    #[serde(default = "default_poll_interval", alias = "check_interval_seconds")]
+    pub poll_interval_secs: u64,
+
+    #[serde(default)]
+    pub respond_to: RespondTo,
+
+    // Self-reflection and evolution
+    #[serde(default)]
+    pub enable_self_reflection: bool,
+    #[serde(default = "default_reflection_interval")]
+    pub reflection_interval_hours: u64,
+    #[serde(default)]
+    pub reflection_model: Option<String>,
+
+    // Guiding principles
+    #[serde(default)]
+    pub guiding_principles: Vec<String>,
+
+    // Memory and database
+    #[serde(default = "default_database_path")]
+    pub database_path: String,
+    #[serde(default = "default_max_important_posts")]
+    pub max_important_posts: u32,
+
+    // Image generation
+    #[serde(default)]
+    pub enable_image_generation: bool,
+    #[serde(default)]
+    pub comfyui: ComfyUIConfig,
+
+    // Workflow settings
+    #[serde(default)]
+    pub workflow_path: Option<String>,
+    #[serde(default)]
+    pub workflow_settings: Option<String>, // JSON string of workflow settings
+
+    // Character Card (optional)
+    #[serde(default)]
+    pub character_name: String,
+    #[serde(default)]
+    pub character_description: String,
+    #[serde(default)]
+    pub character_personality: String,
+    #[serde(default)]
+    pub character_scenario: String,
+    #[serde(default)]
+    pub character_example_dialogue: String,
+    #[serde(default)]
+    pub character_avatar_path: Option<String>,
+
+    // Legacy fields for backward compatibility
+    #[serde(default)]
+    pub max_posts_per_hour: u32,
 }
 
 fn default_graphchan_url() -> String {
-    "http://127.0.0.1:8080".to_string()
+    env::var("GRAPHCHAN_PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .map(|port| format!("http://localhost:{}", port))
+        .unwrap_or_else(|| "http://localhost:8080".to_string())
 }
 
-fn default_system_prompt() -> String {
-    "You are a helpful AI assistant participating in a decentralized discussion forum called Graphchan. \
-     Be friendly, thoughtful, and concise in your responses.".to_string()
+fn default_llm_url() -> String {
+    "http://localhost:11434".to_string()
 }
 
-fn default_poll_interval() -> u64 {
-    10 // Poll every 10 seconds
+fn default_llm_model() -> String {
+    "llama3.2".to_string()
 }
 
 fn default_username() -> String {
-    "AgentBot".to_string()
+    "Graphchan Agent".to_string()
 }
 
-fn default_guiding_principles() -> Vec<String> {
-    vec![
-        "helpful".to_string(),
-        "curious".to_string(),
-        "thoughtful".to_string(),
-    ]
+fn default_system_prompt() -> String {
+    "You are a helpful AI agent participating in forum discussions. \
+     Be friendly, thoughtful, and contribute meaningfully to conversations. \
+     Only reply when you have something valuable to add.".to_string()
+}
+
+fn default_poll_interval() -> u64 {
+    60
 }
 
 fn default_reflection_interval() -> u64 {
-    24 // Reflect once per day
-}
-
-fn default_enable_reflection() -> bool {
-    true
+    24
 }
 
 fn default_database_path() -> String {
     "agent_memory.db".to_string()
 }
 
-fn default_max_important_posts() -> usize {
-    100 // Keep the 100 most formative experiences
+fn default_max_important_posts() -> u32 {
+    100
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            graphchan_api_url: default_graphchan_url(),
+            llm_api_url: default_llm_url(),
+            llm_model: default_llm_model(),
+            llm_api_key: None,
+            username: default_username(),
+            system_prompt: default_system_prompt(),
+            poll_interval_secs: default_poll_interval(),
+            respond_to: RespondTo::default(),
+            enable_self_reflection: false,
+            reflection_interval_hours: default_reflection_interval(),
+            reflection_model: None,
+            guiding_principles: vec![
+                "helpful".to_string(),
+                "curious".to_string(),
+                "thoughtful".to_string(),
+            ],
+            database_path: default_database_path(),
+            max_important_posts: default_max_important_posts(),
+            enable_image_generation: false,
+            comfyui: ComfyUIConfig::default(),
+            workflow_path: None,
+            workflow_settings: None,
+            character_name: String::new(),
+            character_description: String::new(),
+            character_personality: String::new(),
+            character_scenario: String::new(),
+            character_example_dialogue: String::new(),
+            character_avatar_path: None,
+            max_posts_per_hour: 10,
+        }
+    }
+}
+
+impl AgentConfig {
+    /// Get the directory containing the executable
+    fn get_base_dir() -> PathBuf {
+        match std::env::current_exe() {
+            Ok(exe_path) => {
+                exe_path.parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| PathBuf::from("."))
+            }
+            Err(_) => PathBuf::from("."),
+        }
+    }
+
+    /// Get the path to the config file (relative to executable)
+    pub fn config_path() -> PathBuf {
+        Self::get_base_dir().join("agent_config.toml")
+    }
+
+    /// Load config from agent_config.toml (next to executable)
+    pub fn load() -> Self {
+        let path = Self::config_path();
+
+        match fs::read_to_string(&path) {
+            Ok(contents) => {
+                match toml::from_str::<AgentConfig>(&contents) {
+                    Ok(config) => {
+                        tracing::info!("✅ Loaded config from {:?}", path);
+                        config
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to parse {:?}: {}", path, e);
+                        tracing::warn!("Using defaults + env vars");
+                        Self::from_env()
+                    }
+                }
+            }
+            Err(_) => {
+                tracing::warn!("No {:?} found", path);
+                tracing::info!("Using defaults + env vars");
+                Self::from_env()
+            }
+        }
+    }
+
+    /// Save config to file (next to executable)
+    pub fn save(&self) -> Result<()> {
+        let path = Self::config_path();
+
+        let toml_string = toml::to_string_pretty(self)
+            .context("Failed to serialize config")?;
+
+        fs::write(&path, toml_string)
+            .with_context(|| format!("Failed to write config to {:?}", path))?;
+
+        tracing::info!("💾 Saved config to {:?}", path);
+        Ok(())
+    }
+
+    /// Load from environment variables (legacy support)
+    pub fn from_env() -> Self {
+        let mut config = Self::default();
+
+        if let Ok(url) = env::var("GRAPHCHAN_API_URL") {
+            config.graphchan_api_url = url;
+        }
+
+        if let Ok(url) = env::var("LLM_API_URL") {
+            config.llm_api_url = url;
+        }
+
+        if let Ok(model) = env::var("LLM_MODEL") {
+            config.llm_model = model;
+        }
+
+        if let Ok(key) = env::var("LLM_API_KEY") {
+            config.llm_api_key = Some(key);
+        }
+
+        if let Ok(interval) = env::var("AGENT_CHECK_INTERVAL") {
+            if let Ok(seconds) = interval.parse() {
+                config.poll_interval_secs = seconds;
+            }
+        }
+
+        if let Ok(name) = env::var("AGENT_NAME") {
+            config.username = name;
+        }
+
+        config
+    }
 }

@@ -6,7 +6,7 @@ use crate::database::Database;
 use crate::database::repositories::{ThreadRepository, PeerRepository, PostRepository};
 use crate::dms::{ConversationView, DirectMessageView, DmService};
 use crate::files::{FileService, FileView, SaveFileInput};
-use crate::identity::decode_friendcode;
+use crate::identity::decode_friendcode_auto;
 use crate::identity::IdentitySummary;
 use crate::network::FileAnnouncement;
 use crate::network::NetworkHandle;
@@ -101,7 +101,9 @@ pub async fn serve_http(
         http_client,
     };
 
-    // Increase body limit to 50MB for file uploads (4chan images can be large)
+    // Configure body limit for file uploads (default 10GB if not specified)
+    // Media files (images/video/audio) are limited to 50MB at the handler level
+    let max_upload_bytes = config.file.max_upload_bytes.unwrap_or(10 * 1024 * 1024 * 1024);
     let router = Router::new()
         .route("/health", get(health_handler))
         .route("/threads", get(list_threads).post(create_thread))
@@ -117,6 +119,7 @@ pub async fn serve_http(
         .route("/posts/:id/react", post(add_reaction))
         .route("/posts/:id/unreact", post(remove_reaction))
         .route("/files/:id", get(download_file))
+        .route("/files/:id/download", post(trigger_file_download))
         .route("/peers", get(list_peers))
         .route("/peers", post(add_peer))
         .route("/peers/:id/unfollow", post(unfollow_peer))
@@ -137,8 +140,19 @@ pub async fn serve_http(
         .route("/blocking/blocklists", post(subscribe_blocklist_handler))
         .route("/blocking/blocklists/:id", axum::routing::delete(unsubscribe_blocklist_handler))
         .route("/blocking/blocklists/:id/entries", get(list_blocklist_entries_handler))
+        .route("/blocking/ips", get(list_ip_blocks_handler))
+        .route("/blocking/ips", post(add_ip_block_handler))
+        .route("/blocking/ips/:id", axum::routing::delete(remove_ip_block_handler))
+        .route("/blocking/ips/import", post(import_ip_blocks_handler))
+        .route("/blocking/ips/export", get(export_ip_blocks_handler))
+        .route("/blocking/ips/clear", post(clear_all_ip_blocks_handler))
+        .route("/blocking/ips/stats", get(ip_block_stats_handler))
+        .route("/peers/:peer_id/ip", get(get_peer_ip_handler))
         .route("/search", get(search_handler))
-        .layer(DefaultBodyLimit::max(50 * 1024 * 1024)) // 50MB limit
+        .route("/settings/:key", get(get_setting_handler).put(set_setting_handler))
+        .route("/topics", get(list_topics_handler).post(subscribe_topic_handler))
+        .route("/topics/:topic_id", axum::routing::delete(unsubscribe_topic_handler))
+        .layer(DefaultBodyLimit::max(max_upload_bytes as usize))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
@@ -146,6 +160,11 @@ pub async fn serve_http(
                 .allow_headers(Any),
         )
         .with_state(state.clone());
+
+    tracing::info!(
+        max_body_limit_mb = max_upload_bytes / (1024 * 1024),
+        "Configured upload body limit (files >50MB won't auto-download on recipient)"
+    );
 
     // Try to bind to the configured port, or find the next available port
     let (listener, actual_port) = find_available_port(config.api_port).await?;
@@ -173,6 +192,7 @@ async fn health_handler(State(state): State<AppState>) -> Json<HealthResponse> {
             gpg_fingerprint: state.identity.gpg_fingerprint.clone(),
             iroh_peer_id: state.identity.iroh_peer_id.clone(),
             friendcode: state.identity.friendcode.clone(),
+            short_friendcode: state.identity.short_friendcode.clone(),
         },
         network: NetworkInfo::from_handle(&state.network),
     })
@@ -534,6 +554,7 @@ async fn upload_post_file(
     }
 
     let data = file_bytes.ok_or_else(|| ApiError::BadRequest("missing file field".into()))?;
+
     match service
         .save_post_file(SaveFileInput {
             post_id: post_id.clone(),
@@ -559,7 +580,7 @@ async fn upload_post_file(
             let announcement = FileAnnouncement {
                 id: file_view.id.clone(),
                 post_id: file_view.post_id.clone(),
-                thread_id,
+                thread_id: thread_id.clone(),
                 original_name: file_view.original_name.clone(),
                 mime: file_view.mime.clone(),
                 size_bytes: file_view.size_bytes,
@@ -573,6 +594,8 @@ async fn upload_post_file(
             tracing::info!(
                 file_id = %file_view.id,
                 post_id = %post_id,
+                size_bytes = ?announcement.size_bytes,
+                size_mb = announcement.size_bytes.map(|s| s / (1024 * 1024)),
                 "📢 broadcasting FileAnnouncement"
             );
             if let Err(err) = state.network.publish_file_available(announcement).await {
@@ -583,6 +606,7 @@ async fn upload_post_file(
                     "failed to publish file availability over network"
                 );
             }
+
             Ok((StatusCode::CREATED, Json(map_file_view(file_view))))
         }
         Err(err) if err.to_string().contains("post not found") => {
@@ -662,6 +686,133 @@ async fn download_file(
     Ok(response)
 }
 
+#[derive(Serialize)]
+struct TriggerDownloadResponse {
+    status: String,
+    message: String,
+}
+
+async fn trigger_file_download(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<TriggerDownloadResponse>, ApiError> {
+    use crate::database::repositories::FileRepository;
+
+    // Get the file record with ticket information
+    let file_record = state.database.with_repositories(|repos| {
+        FileRepository::get(&repos.files(), &id)
+    }).map_err(ApiError::Internal)?;
+
+    let Some(record) = file_record else {
+        return Err(ApiError::NotFound(format!("file {id} not found")));
+    };
+
+    // Check if file has a ticket for download
+    let ticket_str = record.ticket.clone()
+        .ok_or_else(|| ApiError::BadRequest("File has no download ticket available".to_string()))?;
+
+    // Parse the ticket
+    let ticket = BlobTicket::from_str(&ticket_str)
+        .map_err(|e| ApiError::BadRequest(format!("Invalid ticket: {}", e)))?;
+
+    // Set status to 'downloading' immediately
+    state.database.with_repositories(|repos| {
+        let mut updated_record = record.clone();
+        updated_record.download_status = Some("downloading".to_string());
+        FileRepository::upsert(&repos.files(), &updated_record)
+    }).map_err(ApiError::Internal)?;
+
+    // Spawn background task to download the file
+    let db = state.database.clone();
+    let paths = state.config.paths.clone();
+    let blobs = state.blobs.clone();
+    let endpoint = state.network.endpoint();
+    let file_id = id.clone();
+
+    tokio::spawn(async move {
+        let hash = ticket.hash();
+
+        tracing::info!(
+            file_id = %file_id,
+            hash = %hash.fmt_short(),
+            "manual download triggered via API"
+        );
+
+        // Download the blob
+        let download_result = async {
+            // Check if blob exists
+            let has_blob = blobs.has(hash).await
+                .context("failed to check blob existence")?;
+
+            if !has_blob {
+                // Download from peer
+                let downloader = blobs.downloader(&endpoint);
+                downloader
+                    .download(hash, Some(ticket.addr().id))
+                    .await
+                    .context("failed to download blob")?;
+            }
+
+            // Export to file
+            let relative_path = format!("files/downloads/{}", file_id);
+            let absolute_path = paths.base.join(&relative_path);
+
+            // Ensure directory exists
+            if let Some(parent) = absolute_path.parent() {
+                tokio::fs::create_dir_all(parent).await
+                    .context("failed to create download directory")?;
+            }
+
+            blobs.export(hash, absolute_path.clone()).await
+                .context("failed to export blob")?;
+
+            // Read and verify
+            let data = tokio::fs::read(&absolute_path).await
+                .context("failed to read exported file")?;
+
+            let size = data.len() as i64;
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(&data);
+            let digest = hasher.finalize();
+            let checksum = format!("blake3:{}", digest.to_hex());
+
+            // Update database
+            db.with_repositories(|repos| {
+                use crate::database::repositories::FileRepository;
+                if let Ok(Some(mut rec)) = FileRepository::get(&repos.files(), &file_id) {
+                    rec.path = relative_path;
+                    rec.size_bytes = Some(size);
+                    rec.checksum = Some(checksum);
+                    rec.download_status = Some("available".to_string());
+                    let _ = FileRepository::upsert(&repos.files(), &rec);
+                }
+                Ok(())
+            })?;
+
+            tracing::info!(file_id = %file_id, "✅ manual download completed successfully");
+            Ok::<(), anyhow::Error>(())
+        }.await;
+
+        // Update status to failed if download failed
+        if let Err(e) = download_result {
+            tracing::warn!(file_id = %file_id, error = ?e, "manual download failed");
+            let _ = db.with_repositories(|repos| {
+                use crate::database::repositories::FileRepository;
+                if let Ok(Some(mut rec)) = FileRepository::get(&repos.files(), &file_id) {
+                    rec.download_status = Some("failed".to_string());
+                    let _ = FileRepository::upsert(&repos.files(), &rec);
+                }
+                Ok(())
+            });
+        }
+    });
+
+    Ok(Json(TriggerDownloadResponse {
+        status: "downloading".to_string(),
+        message: format!("Download started for file {}", id),
+    }))
+}
+
 async fn list_recent_posts(
     State(state): State<AppState>,
     Query(params): Query<RecentPostsParams>,
@@ -709,6 +860,7 @@ async fn list_recent_posts(
             id: post_record.id.clone(),
             thread_id: post_record.thread_id.clone(),
             author_peer_id: post_record.author_peer_id.clone(),
+            author_friendcode: post_record.author_friendcode.clone(),
             body: post_record.body.clone(),
             created_at: post_record.created_at.clone(),
             updated_at: post_record.updated_at.clone(),
@@ -748,7 +900,7 @@ async fn add_peer(
     match service.register_friendcode(friendcode) {
         Ok(peer) => {
             // Connect to the peer and get their iroh peer ID
-            let iroh_peer_id = if let Ok(payload) = decode_friendcode(friendcode) {
+            let iroh_peer_id = if let Ok(payload) = decode_friendcode_auto(friendcode) {
                 match state.network.connect_friendcode(&payload).await {
                     Ok(peer_id) => Some(peer_id),
                     Err(err) => {
@@ -819,6 +971,7 @@ struct IdentityInfo {
     gpg_fingerprint: String,
     iroh_peer_id: String,
     friendcode: String,
+    short_friendcode: String,
 }
 
 #[derive(Serialize)]
@@ -860,6 +1013,7 @@ struct FileResponse {
     path: String,
     download_url: String,
     present: bool,
+    download_status: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1087,6 +1241,7 @@ fn map_file_view(file: FileView) -> FileResponse {
         path: file.path.clone(),
         download_url: format!("/files/{}", file.id),
         present: file.present.unwrap_or(true),
+        download_status: file.download_status.clone(),
     }
 }
 
@@ -1426,6 +1581,38 @@ fn default_auto_apply() -> bool {
     true
 }
 
+#[derive(Debug, Deserialize)]
+struct AddIpBlockRequest {
+    ip_or_range: String,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct IpBlockView {
+    id: i64,
+    ip_or_range: String,
+    block_type: String,
+    blocked_at: i64,
+    reason: Option<String>,
+    active: bool,
+    hit_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct IpBlockStatsResponse {
+    total_blocks: usize,
+    active_blocks: usize,
+    total_hits: i64,
+    exact_ip_blocks: usize,
+    range_blocks: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct PeerIpResponse {
+    peer_id: String,
+    ips: Vec<String>,
+}
+
 async fn list_blocked_peers_handler(
     State(state): State<AppState>,
 ) -> ApiResult<Vec<BlockedPeerView>> {
@@ -1547,6 +1734,7 @@ async fn search_handler(
                 id: r.post.id,
                 thread_id: r.post.thread_id.clone(),
                 author_peer_id: r.post.author_peer_id,
+                author_friendcode: r.post.author_friendcode,
                 body: r.post.body,
                 created_at: r.post.created_at,
                 updated_at: r.post.updated_at,
@@ -1564,10 +1752,11 @@ async fn search_handler(
                     size_bytes: f.size_bytes,
                     checksum: f.checksum,
                     blob_id: f.blob_id,
-                    ticket: f.ticket,
+                    ticket: f.ticket.clone(),
                     path: f.path,
                     download_url,
                     present: true,
+                    download_status: f.download_status,
                 }
             }),
             thread_id: r.post.thread_id,
@@ -1581,4 +1770,335 @@ async fn search_handler(
         results,
         query: query.to_string(),
     }))
+}
+
+// IP Blocking handlers
+
+async fn list_ip_blocks_handler(
+    State(state): State<AppState>,
+) -> ApiResult<Vec<IpBlockView>> {
+    use crate::database::repositories::IpBlockRepository;
+
+    let blocks = state.database.with_repositories(|repos| {
+        repos.ip_blocks().list_all()
+    }).map_err(ApiError::Internal)?;
+
+    let views = blocks.into_iter().map(|block| IpBlockView {
+        id: block.id,
+        ip_or_range: block.ip_or_range,
+        block_type: block.block_type,
+        blocked_at: block.blocked_at,
+        reason: block.reason,
+        active: block.active,
+        hit_count: block.hit_count,
+    }).collect();
+
+    Ok(Json(views))
+}
+
+async fn add_ip_block_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<AddIpBlockRequest>,
+) -> Result<StatusCode, ApiError> {
+    use crate::blocking::IpBlockChecker;
+    use crate::database::models::IpBlockRecord;
+    use crate::database::repositories::IpBlockRepository;
+    use std::net::IpAddr;
+    use ipnetwork::IpNetwork;
+
+    // Validate IP or CIDR range
+    let (block_type, validated_ip_or_range) = if let Ok(ip) = payload.ip_or_range.parse::<IpAddr>() {
+        ("exact".to_string(), ip.to_string())
+    } else if let Ok(network) = payload.ip_or_range.parse::<IpNetwork>() {
+        ("range".to_string(), network.to_string())
+    } else {
+        return Err(ApiError::BadRequest(
+            format!("Invalid IP address or CIDR range: {}", payload.ip_or_range)
+        ));
+    };
+
+    let record = IpBlockRecord {
+        id: 0, // Will be assigned by database
+        ip_or_range: validated_ip_or_range,
+        block_type,
+        blocked_at: chrono::Utc::now().timestamp(),
+        reason: payload.reason,
+        active: true,
+        hit_count: 0,
+    };
+
+    state.database.with_repositories(|repos| {
+        repos.ip_blocks().add(&record)
+    }).map_err(ApiError::Internal)?;
+
+    // Reload cache to include new block
+    let ip_blocker = IpBlockChecker::new(state.database.clone());
+    if let Err(err) = ip_blocker.load_cache().await {
+        tracing::warn!(error = ?err, "failed to reload IP block cache");
+    }
+
+    Ok(StatusCode::CREATED)
+}
+
+async fn remove_ip_block_handler(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    use crate::blocking::IpBlockChecker;
+    use crate::database::repositories::IpBlockRepository;
+
+    state.database.with_repositories(|repos| {
+        repos.ip_blocks().remove(id)
+    }).map_err(ApiError::Internal)?;
+
+    // Reload cache to remove block
+    let ip_blocker = IpBlockChecker::new(state.database.clone());
+    if let Err(err) = ip_blocker.load_cache().await {
+        tracing::warn!(error = ?err, "failed to reload IP block cache");
+    }
+
+    Ok(StatusCode::OK)
+}
+
+async fn import_ip_blocks_handler(
+    State(state): State<AppState>,
+    body: String,
+) -> Result<StatusCode, ApiError> {
+    use crate::blocking::IpBlockChecker;
+    use crate::database::models::IpBlockRecord;
+    use crate::database::repositories::IpBlockRepository;
+    use std::net::IpAddr;
+    use ipnetwork::IpNetwork;
+
+    let mut added_count = 0;
+    let mut error_count = 0;
+
+    for line in body.lines() {
+        let line = line.trim();
+
+        // Skip empty lines and comments
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        // Parse line format: "IP_OR_RANGE [# reason]"
+        let (ip_or_range, reason) = if let Some(hash_pos) = line.find('#') {
+            let ip_part = line[..hash_pos].trim();
+            let reason_part = line[hash_pos + 1..].trim();
+            (ip_part, if reason_part.is_empty() { None } else { Some(reason_part.to_string()) })
+        } else {
+            (line, None)
+        };
+
+        // Validate and add block
+        let (block_type, validated_ip_or_range) = if let Ok(ip) = ip_or_range.parse::<IpAddr>() {
+            ("exact".to_string(), ip.to_string())
+        } else if let Ok(network) = ip_or_range.parse::<IpNetwork>() {
+            ("range".to_string(), network.to_string())
+        } else {
+            tracing::warn!(line = %line, "skipping invalid IP/range in import");
+            error_count += 1;
+            continue;
+        };
+
+        let record = IpBlockRecord {
+            id: 0,
+            ip_or_range: validated_ip_or_range,
+            block_type,
+            blocked_at: chrono::Utc::now().timestamp(),
+            reason,
+            active: true,
+            hit_count: 0,
+        };
+
+        match state.database.with_repositories(|repos| {
+            repos.ip_blocks().add(&record)
+        }) {
+            Ok(_) => added_count += 1,
+            Err(err) => {
+                tracing::warn!(error = ?err, ip_or_range = %record.ip_or_range, "failed to add IP block during import");
+                error_count += 1;
+            }
+        }
+    }
+
+    tracing::info!(added = added_count, errors = error_count, "IP block import completed");
+
+    // Reload cache
+    let ip_blocker = IpBlockChecker::new(state.database.clone());
+    if let Err(err) = ip_blocker.load_cache().await {
+        tracing::warn!(error = ?err, "failed to reload IP block cache");
+    }
+
+    Ok(StatusCode::OK)
+}
+
+async fn export_ip_blocks_handler(
+    State(state): State<AppState>,
+) -> Result<String, ApiError> {
+    use crate::database::repositories::IpBlockRepository;
+
+    let blocks = state.database.with_repositories(|repos| {
+        repos.ip_blocks().list_all()
+    }).map_err(ApiError::Internal)?;
+
+    let mut output = String::new();
+    output.push_str("# Graphchan IP Blocklist Export\n");
+    output.push_str(&format!("# Exported: {}\n", chrono::Utc::now().to_rfc3339()));
+    output.push_str(&format!("# Total blocks: {}\n\n", blocks.len()));
+
+    for block in blocks {
+        if let Some(reason) = &block.reason {
+            output.push_str(&format!("{} # {}\n", block.ip_or_range, reason));
+        } else {
+            output.push_str(&format!("{}\n", block.ip_or_range));
+        }
+    }
+
+    Ok(output)
+}
+
+async fn clear_all_ip_blocks_handler(
+    State(state): State<AppState>,
+) -> Result<StatusCode, ApiError> {
+    use crate::blocking::IpBlockChecker;
+    use crate::database::repositories::IpBlockRepository;
+
+    // Get all blocks and remove them
+    let blocks = state.database.with_repositories(|repos| {
+        repos.ip_blocks().list_all()
+    }).map_err(ApiError::Internal)?;
+
+    for block in blocks {
+        state.database.with_repositories(|repos| {
+            repos.ip_blocks().remove(block.id)
+        }).map_err(ApiError::Internal)?;
+    }
+
+    tracing::info!("All IP blocks cleared");
+
+    // Reload cache
+    let ip_blocker = IpBlockChecker::new(state.database.clone());
+    if let Err(err) = ip_blocker.load_cache().await {
+        tracing::warn!(error = ?err, "failed to reload IP block cache");
+    }
+
+    Ok(StatusCode::OK)
+}
+
+async fn ip_block_stats_handler(
+    State(state): State<AppState>,
+) -> ApiResult<IpBlockStatsResponse> {
+    use crate::database::repositories::IpBlockRepository;
+
+    let blocks = state.database.with_repositories(|repos| {
+        repos.ip_blocks().list_all()
+    }).map_err(ApiError::Internal)?;
+
+    let total_blocks = blocks.len();
+    let active_blocks = blocks.iter().filter(|b| b.active).count();
+    let total_hits: i64 = blocks.iter().map(|b| b.hit_count).sum();
+    let exact_ip_blocks = blocks.iter().filter(|b| b.block_type == "exact").count();
+    let range_blocks = blocks.iter().filter(|b| b.block_type == "range").count();
+
+    Ok(Json(IpBlockStatsResponse {
+        total_blocks,
+        active_blocks,
+        total_hits,
+        exact_ip_blocks,
+        range_blocks,
+    }))
+}
+
+async fn get_peer_ip_handler(
+    State(state): State<AppState>,
+    Path(peer_id): Path<String>,
+) -> ApiResult<PeerIpResponse> {
+    use crate::database::repositories::PeerIpRepository;
+
+    let ips = state.database.with_repositories(|repos| {
+        repos.peer_ips().get_ips(&peer_id)
+    }).map_err(ApiError::Internal)?;
+
+    Ok(Json(PeerIpResponse {
+        peer_id,
+        ips,
+    }))
+}
+
+async fn get_setting_handler(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+) -> ApiResult<Option<String>> {
+    let value = state.database
+        .get_setting(&key)
+        .map_err(ApiError::Internal)?;
+    Ok(Json(value))
+}
+
+#[derive(Deserialize)]
+struct SetSettingRequest {
+    value: String,
+}
+
+async fn set_setting_handler(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+    Json(req): Json<SetSettingRequest>,
+) -> Result<StatusCode, ApiError> {
+    state.database
+        .set_setting(&key, &req.value)
+        .map_err(ApiError::Internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_topics_handler(
+    State(state): State<AppState>,
+) -> ApiResult<Vec<String>> {
+    use crate::database::repositories::TopicRepository;
+
+    let topics = state.database.with_repositories(|repos| {
+        repos.topics().list_subscribed()
+    }).map_err(ApiError::Internal)?;
+
+    Ok(Json(topics))
+}
+
+#[derive(Deserialize)]
+struct SubscribeTopicRequest {
+    topic_id: String,
+}
+
+async fn subscribe_topic_handler(
+    State(state): State<AppState>,
+    Json(req): Json<SubscribeTopicRequest>,
+) -> Result<StatusCode, ApiError> {
+    use crate::database::repositories::TopicRepository;
+
+    // Subscribe in database
+    state.database.with_repositories(|repos| {
+        repos.topics().subscribe(&req.topic_id)
+    }).map_err(ApiError::Internal)?;
+
+    // Subscribe to the gossip topic
+    state.network.subscribe_to_topic(&req.topic_id).await
+        .map_err(ApiError::Internal)?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn unsubscribe_topic_handler(
+    State(state): State<AppState>,
+    Path(topic_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    use crate::database::repositories::TopicRepository;
+
+    state.database.with_repositories(|repos| {
+        repos.topics().unsubscribe(&topic_id)
+    }).map_err(ApiError::Internal)?;
+
+    // Note: We don't unsubscribe from the gossip topic because it's harmless to stay subscribed
+    // and might cause issues if we re-subscribe later
+
+    Ok(StatusCode::NO_CONTENT)
 }

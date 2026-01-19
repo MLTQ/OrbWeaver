@@ -52,10 +52,23 @@ impl GraphchanConfig {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct NetworkConfig {
     pub relay_url: Option<String>,
     pub public_addresses: Vec<String>,
+    pub enable_dht: bool,
+    pub enable_mdns: bool,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            relay_url: None,
+            public_addresses: Vec::new(),
+            enable_dht: true,  // DHT enabled by default
+            enable_mdns: true, // mDNS enabled by default
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -90,9 +103,24 @@ impl NetworkConfig {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+
+        // DHT enabled by default unless explicitly disabled
+        let enable_dht = env::var("GRAPHCHAN_DISABLE_DHT")
+            .ok()
+            .map(|v| v != "1" && v.to_lowercase() != "true")
+            .unwrap_or(true);
+
+        // mDNS enabled by default unless explicitly disabled
+        let enable_mdns = env::var("GRAPHCHAN_DISABLE_MDNS")
+            .ok()
+            .map(|v| v != "1" && v.to_lowercase() != "true")
+            .unwrap_or(true);
+
         Self {
             relay_url,
             public_addresses,
+            enable_dht,
+            enable_mdns,
         }
     }
 }

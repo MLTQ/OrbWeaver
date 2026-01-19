@@ -49,6 +49,14 @@ pub struct ThreadAnnouncement {
     pub created_at: String,
     pub last_activity: String,       // Most recent post timestamp
     pub thread_hash: String,         // Hash of all post hashes - for sync detection
+    #[serde(default = "default_visibility")]
+    pub visibility: String,          // "social", "private", or "global" (DEPRECATED - use topics)
+    #[serde(default)]
+    pub topics: Vec<String>,         // List of topic IDs to announce on
+}
+
+fn default_visibility() -> String {
+    "social".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,6 +152,21 @@ pub async fn run_event_loop(
     while let Some(event) = rx.recv().await {
         match event {
             NetworkEvent::Broadcast(payload) => {
+                // Special handling for ThreadAnnouncement with multiple topics
+                if let EventPayload::ThreadAnnouncement(ref announcement) = payload {
+                    if !announcement.topics.is_empty() {
+                        // Broadcast to all topics
+                        for topic_id in &announcement.topics {
+                            let topic_name = format!("topic:{}", topic_id);
+                            if let Err(err) = broadcast_to_topic(&gossip, &topics, &topic_name, payload.clone()).await {
+                                tracing::warn!(error = ?err, topic = %topic_name, "failed to broadcast thread announcement to topic");
+                            }
+                        }
+                        continue;
+                    }
+                }
+
+                // Default routing for all other payloads
                 let topic_name = topic_for_payload(&payload);
                 if let Err(err) = broadcast_to_topic(&gossip, &topics, &topic_name, payload).await {
                     tracing::warn!(error = ?err, topic = %topic_name, "failed to broadcast event");
@@ -306,9 +329,15 @@ fn envelope_for(payload: EventPayload) -> EventEnvelope {
 
 fn topic_for_payload(payload: &EventPayload) -> String {
     match payload {
-        // Announcements go to the announcer's peer topic - only their friends receive it
+        // Thread announcements route based on visibility:
+        // - "global": Everyone on the global topic sees it
+        // - "social"/"private": Only friends on the peer topic see it
         EventPayload::ThreadAnnouncement(announcement) => {
-            format!("peer-{}", announcement.announcer_peer_id)
+            if announcement.visibility == "global" {
+                crate::network::topics::GLOBAL_TOPIC_NAME.to_string()
+            } else {
+                format!("peer-{}", announcement.announcer_peer_id)
+            }
         }
         EventPayload::ProfileUpdate(update) => {
             format!("peer-{}", update.peer_id)

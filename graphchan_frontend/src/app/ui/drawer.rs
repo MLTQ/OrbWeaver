@@ -19,6 +19,7 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                 UploadAvatar(String),
                 PickAvatar,
                 AddPeer(String),
+                BlockPeerIp(String), // peer_id
             }
 
             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -44,13 +45,25 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                         if let Some(bio) = &peer.bio {
                             ui.label(format!("Bio: {}", bio));
                         }
-                        ui.label(format!("Friendcode: {}", peer.friendcode.as_deref().unwrap_or("Unknown")));
+
+                        // Show short friend code prominently
+                        if let Some(short_code) = &peer.short_friendcode {
+                            ui.label(egui::RichText::new("Friend Code:").strong());
+                            ui.monospace(short_code);
+                            if ui.small_button("📋 Copy").clicked() {
+                                ui.output_mut(|o| o.copied_text = short_code.clone());
+                            }
+                        } else if let Some(legacy_code) = &peer.friendcode {
+                            ui.label(format!("Friend Code: {}", legacy_code));
+                        }
+
                         ui.label(format!("Fingerprint: {}", peer.gpg_fingerprint.as_deref().unwrap_or("Unknown")));
 
                         ui.add_space(10.0);
 
                         // Follow button
-                        if let Some(friendcode) = &peer.friendcode {
+                        // Prefer short_friendcode, fall back to legacy friendcode
+                        if let Some(friendcode) = peer.short_friendcode.as_ref().or(peer.friendcode.as_ref()) {
                             // Check if we already follow this peer (trust_state == "trusted")
                             let already_following = peer.trust_state == "trusted";
 
@@ -63,6 +76,18 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                                     next_action = Some(Action::AddPeer(friendcode.clone()));
                                 }
                             }
+                        } else {
+                            // No friend code available
+                            ui.colored_label(egui::Color32::GRAY, "⚠ No friend code available");
+                            ui.label(egui::RichText::new("You're seeing this peer's posts via gossip, but they haven't shared their friend code yet.").small().italics());
+                            ui.label(egui::RichText::new("Ask them to share their friend code to follow them directly.").small().italics());
+                        }
+
+                        ui.add_space(10.0);
+
+                        // Block IP button
+                        if ui.button("🚫 Block IP").clicked() {
+                            next_action = Some(Action::BlockPeerIp(peer.id.clone()));
                         }
 
                         ui.add_space(10.0);
@@ -97,9 +122,20 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                     }
 
                     ui.group(|ui| {
-                        ui.label(format!("Friendcode: {}", peer.friendcode.as_deref().unwrap_or("Unknown")));
+                        // Show short friend code prominently for local peer
+                        if let Some(short_code) = &peer.short_friendcode {
+                            ui.label(egui::RichText::new("Your Friend Code:").strong());
+                            ui.label("Share this with others to connect:");
+                            ui.monospace(short_code);
+                            if ui.button("📋 Copy to Clipboard").clicked() {
+                                ui.output_mut(|o| o.copied_text = short_code.clone());
+                            }
+                        } else if let Some(legacy_code) = &peer.friendcode {
+                            ui.label(format!("Your Friend Code: {}", legacy_code));
+                        }
+
                         ui.label(format!("Fingerprint: {}", peer.gpg_fingerprint.as_deref().unwrap_or("Unknown")));
-                        
+
                         ui.add_space(10.0);
                         ui.label("Username:");
                         ui.text_edit_singleline(&mut state.username_input);
@@ -215,6 +251,13 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                         app.api.clone(),
                         app.tx.clone(),
                         friendcode,
+                    );
+                }
+                Some(Action::BlockPeerIp(peer_id)) => {
+                    crate::app::tasks::block_peer_ip(
+                        app.api.clone(),
+                        app.tx.clone(),
+                        peer_id,
                     );
                 }
                 Some(Action::PickAvatar) => {

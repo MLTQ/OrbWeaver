@@ -6,15 +6,68 @@ use super::super::{format_timestamp, GraphchanApp};
 
 impl GraphchanApp {
     pub(crate) fn render_catalog(&mut self, ui: &mut egui::Ui) {
-        // Toggle to show/hide ignored threads
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut self.show_ignored_threads, "Show ignored threads");
+        // Topic filter chips
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Topics:");
+            ui.add_space(5.0);
+
+            // "All Topics" button
+            let all_selected = self.catalog_topic_filter.is_none();
+            if ui.selectable_label(all_selected, "📚 All Topics").clicked() {
+                self.catalog_topic_filter = None;
+            }
+
+            // Individual topic chips
+            for topic_id in &self.subscribed_topics.clone() {
+                let is_selected = self.catalog_topic_filter.as_ref() == Some(topic_id);
+                if ui.selectable_label(is_selected, format!("📡 {}", topic_id)).clicked() {
+                    if is_selected {
+                        self.catalog_topic_filter = None; // Deselect
+                    } else {
+                        self.catalog_topic_filter = Some(topic_id.clone());
+                    }
+                }
+            }
+
+            // Button to open topic manager
+            if ui.button("+ Manage Topics").clicked() {
+                self.show_topic_manager = true;
+            }
         });
         ui.add_space(10.0);
 
+        // Toggle to show/hide ignored threads and global threads
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut self.show_ignored_threads, "Show ignored threads");
+            ui.add_space(20.0);
+            ui.checkbox(&mut self.show_global_threads, "🌍 Show global threads")
+                .on_hover_text("Show threads posted globally by all Graphchan users");
+        });
+        ui.add_space(10.0);
+
+        // Filter threads based on global visibility setting and topic
+        let filtered_threads: Vec<ThreadSummary> = self.threads.iter()
+            .filter(|t| {
+                // Filter by global visibility
+                if !self.show_global_threads && matches!(t.visibility.as_deref(), Some("global")) {
+                    return false;
+                }
+
+                // Filter by topic if a topic filter is active
+                if let Some(ref topic_filter) = self.catalog_topic_filter {
+                    if !t.topics.contains(topic_filter) {
+                        return false;
+                    }
+                }
+
+                true
+            })
+            .cloned()
+            .collect();
+
         // Partition threads based on sync_status
         let (my_threads, network_threads): (Vec<ThreadSummary>, Vec<ThreadSummary>) =
-            self.threads.iter().cloned().partition(|t| {
+            filtered_threads.iter().cloned().partition(|t| {
                 t.sync_status == "downloaded"
             });
 
@@ -154,14 +207,43 @@ impl GraphchanApp {
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
-                            let title = if thread.title.is_empty() {
-                                "(untitled thread)"
-                            } else {
-                                &thread.title
-                            };
-                            if ui.button(RichText::new(title).strong()).clicked() {
-                                thread_to_open = Some(thread.clone());
+                            // Show thumbnail if first image exists
+                            if let Some(file) = &thread.first_image_file {
+                                if let Some(texture) = self.image_textures.get(&file.id) {
+                                    ui.image((texture.id(), egui::vec2(48.0, 48.0)));
+                                } else if !self.image_loading.contains(&file.id) {
+                                    // Queue image for loading
+                                    if let Some(url) = &file.download_url {
+                                        let file_id = file.id.clone();
+                                        let url = url.clone();
+                                        self.image_loading.insert(file_id.clone());
+                                        super::super::tasks::download_image(
+                                            self.tx.clone(),
+                                            file_id,
+                                            url,
+                                        );
+                                    }
+                                }
                             }
+
+                            ui.vertical(|ui| {
+                                let title = if thread.title.is_empty() {
+                                    "(untitled thread)"
+                                } else {
+                                    &thread.title
+                                };
+                                if ui.button(RichText::new(title).strong()).clicked() {
+                                    thread_to_open = Some(thread.clone());
+                                }
+                                // Show creator with username lookup
+                                if let Some(peer_id) = &thread.creator_peer_id {
+                                    let display_name = self.peers.get(peer_id)
+                                        .and_then(|p| p.username.as_deref())
+                                        .unwrap_or("Anonymous");
+                                    ui.label(RichText::new(format!("Created by {}", display_name)).size(11.0).weak());
+                                }
+                            });
+
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
@@ -174,13 +256,9 @@ impl GraphchanApp {
                                         thread_to_ignore = Some(thread.id.clone());
                                     }
                                     ui.label(format_timestamp(&thread.created_at));
-                                    ui.label(RichText::new(&thread.id).monospace().size(10.0));
                                 },
                             );
                         });
-                        if let Some(peer) = &thread.creator_peer_id {
-                            ui.label(format!("Created by {peer}"));
-                        }
                     });
                 ui.add_space(8.0);
             }
