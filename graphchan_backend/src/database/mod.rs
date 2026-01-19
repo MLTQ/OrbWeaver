@@ -151,6 +151,7 @@ impl Database {
             self.ensure_ip_blocking_tables(conn)?;
             self.ensure_fts5_search_tables(conn)?;
             self.ensure_file_download_status_column(conn)?;
+            self.ensure_topic_tables(conn)?;
             Ok(())
         })?;
         Ok(self.newly_created)
@@ -282,6 +283,33 @@ impl Database {
             .map_err(|_| anyhow!("database mutex poisoned"))?;
         f(&guard)
     }
+
+    /// Get a setting value by key
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
+        self.with_conn(|conn| {
+            conn.query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                [key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .context("failed to query setting")
+        })
+    }
+
+    /// Set a setting value (upsert)
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = ?2",
+                [key, value],
+            )
+            .context("failed to set setting")?;
+            Ok(())
+        })
+    }
+
     fn ensure_avatar_column(&self, conn: &Connection) -> Result<()> {
         let mut stmt = conn.prepare("PRAGMA table_info(peers)")?;
         let mut has_avatar = false;
@@ -749,6 +777,40 @@ impl Database {
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_ip_blocks_active ON ip_blocks(active)",
+            [],
+        )?;
+
+        Ok(())
+    }
+
+    fn ensure_topic_tables(&self, conn: &Connection) -> Result<()> {
+        // Create user_topics table - tracks which topics the user subscribes to
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS user_topics (
+                topic_id TEXT PRIMARY KEY,
+                subscribed_at TEXT NOT NULL
+            )
+            "#,
+            [],
+        )?;
+
+        // Create thread_topics table - many-to-many relationship between threads and topics
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS thread_topics (
+                thread_id TEXT NOT NULL,
+                topic_id TEXT NOT NULL,
+                PRIMARY KEY (thread_id, topic_id),
+                FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE
+            )
+            "#,
+            [],
+        )?;
+
+        // Create index for querying threads by topic
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_thread_topics_topic ON thread_topics(topic_id)",
             [],
         )?;
 

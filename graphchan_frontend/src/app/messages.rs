@@ -61,6 +61,11 @@ pub enum AppMessage {
         file_id: String,
         result: Result<(), String>,
     },
+    UploadProgress {
+        file_path: String,
+        bytes_uploaded: u64,
+        total_bytes: u64,
+    },
     ReactionsLoaded {
         post_id: String,
         result: Result<ReactionsResponse, anyhow::Error>,
@@ -136,6 +141,16 @@ pub enum AppMessage {
         result: Result<SearchResponse, anyhow::Error>,
     },
     RecentPostsLoaded(Result<crate::models::RecentPostsResponse, anyhow::Error>),
+    // Topic management messages
+    TopicsLoaded(Result<Vec<String>, anyhow::Error>),
+    TopicSubscribed {
+        topic_id: String,
+        result: Result<(), anyhow::Error>,
+    },
+    TopicUnsubscribed {
+        topic_id: String,
+        result: Result<(), anyhow::Error>,
+    },
 }
 
 pub(super) fn process_messages(app: &mut GraphchanApp) {
@@ -293,6 +308,7 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                 match result {
                     Ok(details) => {
                         app.create_thread = CreateThreadState::default();
+                        app.selected_topics.clear();
                         app.show_create_thread = false;
                         app.info_banner = Some("Thread created".into());
                         let summary = details.thread.clone();
@@ -942,6 +958,54 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                     Err(err) => {
                         error!("Failed to load recent posts: {}", err);
                         app.recent_posts_error = Some(err.to_string());
+                    }
+                }
+            }
+            AppMessage::UploadProgress {
+                file_path: _,
+                bytes_uploaded: _,
+                total_bytes: _,
+            } => {
+                // TODO: Display upload progress in UI
+            }
+            AppMessage::TopicsLoaded(result) => {
+                app.topics_loading = false;
+                match result {
+                    Ok(topics) => {
+                        app.subscribed_topics = topics;
+                        app.topics_error = None;
+                    }
+                    Err(err) => {
+                        error!("Failed to load topics: {}", err);
+                        app.topics_error = Some(err.to_string());
+                    }
+                }
+            }
+            AppMessage::TopicSubscribed { topic_id, result } => {
+                match result {
+                    Ok(()) => {
+                        if !app.subscribed_topics.contains(&topic_id) {
+                            app.subscribed_topics.push(topic_id.clone());
+                        }
+                        app.new_topic_input.clear();
+                        info!("Successfully subscribed to topic: {}", topic_id);
+                    }
+                    Err(err) => {
+                        error!("Failed to subscribe to topic {}: {}", topic_id, err);
+                        app.topics_error = Some(err.to_string());
+                    }
+                }
+            }
+            AppMessage::TopicUnsubscribed { topic_id, result } => {
+                match result {
+                    Ok(()) => {
+                        app.subscribed_topics.retain(|t| t != &topic_id);
+                        app.selected_topics.remove(&topic_id);
+                        info!("Successfully unsubscribed from topic: {}", topic_id);
+                    }
+                    Err(err) => {
+                        error!("Failed to unsubscribe from topic {}: {}", topic_id, err);
+                        app.topics_error = Some(err.to_string());
                     }
                 }
             }

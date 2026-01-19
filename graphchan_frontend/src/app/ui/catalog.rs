@@ -6,15 +6,68 @@ use super::super::{format_timestamp, GraphchanApp};
 
 impl GraphchanApp {
     pub(crate) fn render_catalog(&mut self, ui: &mut egui::Ui) {
-        // Toggle to show/hide ignored threads
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut self.show_ignored_threads, "Show ignored threads");
+        // Topic filter chips
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Topics:");
+            ui.add_space(5.0);
+
+            // "All Topics" button
+            let all_selected = self.catalog_topic_filter.is_none();
+            if ui.selectable_label(all_selected, "📚 All Topics").clicked() {
+                self.catalog_topic_filter = None;
+            }
+
+            // Individual topic chips
+            for topic_id in &self.subscribed_topics.clone() {
+                let is_selected = self.catalog_topic_filter.as_ref() == Some(topic_id);
+                if ui.selectable_label(is_selected, format!("📡 {}", topic_id)).clicked() {
+                    if is_selected {
+                        self.catalog_topic_filter = None; // Deselect
+                    } else {
+                        self.catalog_topic_filter = Some(topic_id.clone());
+                    }
+                }
+            }
+
+            // Button to open topic manager
+            if ui.button("+ Manage Topics").clicked() {
+                self.show_topic_manager = true;
+            }
         });
         ui.add_space(10.0);
 
+        // Toggle to show/hide ignored threads and global threads
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut self.show_ignored_threads, "Show ignored threads");
+            ui.add_space(20.0);
+            ui.checkbox(&mut self.show_global_threads, "🌍 Show global threads")
+                .on_hover_text("Show threads posted globally by all Graphchan users");
+        });
+        ui.add_space(10.0);
+
+        // Filter threads based on global visibility setting and topic
+        let filtered_threads: Vec<ThreadSummary> = self.threads.iter()
+            .filter(|t| {
+                // Filter by global visibility
+                if !self.show_global_threads && matches!(t.visibility.as_deref(), Some("global")) {
+                    return false;
+                }
+
+                // Filter by topic if a topic filter is active
+                if let Some(ref topic_filter) = self.catalog_topic_filter {
+                    if !t.topics.contains(topic_filter) {
+                        return false;
+                    }
+                }
+
+                true
+            })
+            .cloned()
+            .collect();
+
         // Partition threads based on sync_status
         let (my_threads, network_threads): (Vec<ThreadSummary>, Vec<ThreadSummary>) =
-            self.threads.iter().cloned().partition(|t| {
+            filtered_threads.iter().cloned().partition(|t| {
                 t.sync_status == "downloaded"
             });
 

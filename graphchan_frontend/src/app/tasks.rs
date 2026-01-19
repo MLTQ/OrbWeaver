@@ -699,3 +699,39 @@ pub fn block_peer_ip(client: ApiClient, tx: Sender<AppMessage>, peer_id: String)
         }
     });
 }
+
+// Topic management tasks
+pub fn load_topics(client: ApiClient, tx: Sender<AppMessage>) {
+    thread::spawn(move || {
+        let result = client.list_topics();
+        if tx.send(AppMessage::TopicsLoaded(result)).is_err() {
+            error!("failed to send TopicsLoaded message");
+        }
+    });
+}
+
+pub fn subscribe_topic(client: ApiClient, tx: Sender<AppMessage>, topic_id: String) {
+    thread::spawn(move || {
+        let result = client.subscribe_topic(&topic_id);
+        let message = AppMessage::TopicSubscribed {
+            topic_id,
+            result,
+        };
+        if tx.send(message).is_err() {
+            error!("failed to send TopicSubscribed message");
+        }
+    });
+}
+
+pub fn unsubscribe_topic(client: ApiClient, tx: Sender<AppMessage>, topic_id: String) {
+    thread::spawn(move || {
+        let result = client.unsubscribe_topic(&topic_id);
+        let message = AppMessage::TopicUnsubscribed {
+            topic_id,
+            result,
+        };
+        if tx.send(message).is_err() {
+            error!("failed to send TopicUnsubscribed message");
+        }
+    });
+}

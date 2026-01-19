@@ -149,6 +149,9 @@ pub async fn serve_http(
         .route("/blocking/ips/stats", get(ip_block_stats_handler))
         .route("/peers/:peer_id/ip", get(get_peer_ip_handler))
         .route("/search", get(search_handler))
+        .route("/settings/:key", get(get_setting_handler).put(set_setting_handler))
+        .route("/topics", get(list_topics_handler).post(subscribe_topic_handler))
+        .route("/topics/:topic_id", axum::routing::delete(unsubscribe_topic_handler))
         .layer(DefaultBodyLimit::max(max_upload_bytes as usize))
         .layer(
             CorsLayer::new()
@@ -2021,4 +2024,81 @@ async fn get_peer_ip_handler(
         peer_id,
         ips,
     }))
+}
+
+async fn get_setting_handler(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+) -> ApiResult<Option<String>> {
+    let value = state.database
+        .get_setting(&key)
+        .map_err(ApiError::Internal)?;
+    Ok(Json(value))
+}
+
+#[derive(Deserialize)]
+struct SetSettingRequest {
+    value: String,
+}
+
+async fn set_setting_handler(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+    Json(req): Json<SetSettingRequest>,
+) -> Result<StatusCode, ApiError> {
+    state.database
+        .set_setting(&key, &req.value)
+        .map_err(ApiError::Internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_topics_handler(
+    State(state): State<AppState>,
+) -> ApiResult<Vec<String>> {
+    use crate::database::repositories::TopicRepository;
+
+    let topics = state.database.with_repositories(|repos| {
+        repos.topics().list_subscribed()
+    }).map_err(ApiError::Internal)?;
+
+    Ok(Json(topics))
+}
+
+#[derive(Deserialize)]
+struct SubscribeTopicRequest {
+    topic_id: String,
+}
+
+async fn subscribe_topic_handler(
+    State(state): State<AppState>,
+    Json(req): Json<SubscribeTopicRequest>,
+) -> Result<StatusCode, ApiError> {
+    use crate::database::repositories::TopicRepository;
+
+    // Subscribe in database
+    state.database.with_repositories(|repos| {
+        repos.topics().subscribe(&req.topic_id)
+    }).map_err(ApiError::Internal)?;
+
+    // Subscribe to the gossip topic
+    state.network.subscribe_to_topic(&req.topic_id).await
+        .map_err(ApiError::Internal)?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn unsubscribe_topic_handler(
+    State(state): State<AppState>,
+    Path(topic_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    use crate::database::repositories::TopicRepository;
+
+    state.database.with_repositories(|repos| {
+        repos.topics().unsubscribe(&topic_id)
+    }).map_err(ApiError::Internal)?;
+
+    // Note: We don't unsubscribe from the gossip topic because it's harmless to stay subscribed
+    // and might cause issues if we re-subscribe later
+
+    Ok(StatusCode::NO_CONTENT)
 }

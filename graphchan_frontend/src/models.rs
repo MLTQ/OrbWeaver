@@ -14,6 +14,10 @@ pub struct ThreadSummary {
     pub sync_status: String,
     #[serde(default)]
     pub first_image_file: Option<FileResponse>,
+    #[serde(default)]
+    pub visibility: Option<String>,
+    #[serde(default)]
+    pub topics: Vec<String>,
 }
 
 fn default_sync_status() -> String {
@@ -59,6 +63,16 @@ pub struct CreateThreadInput {
     /// Optional timestamp for imported threads. If None, backend uses current time.
     #[serde(default)]
     pub created_at: Option<String>,
+    /// DEPRECATED: Use topics field instead
+    #[serde(default = "default_visibility")]
+    pub visibility: Option<String>,
+    /// List of topic IDs to announce this thread on
+    #[serde(default)]
+    pub topics: Vec<String>,
+}
+
+fn default_visibility() -> Option<String> {
+    Some("social".to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

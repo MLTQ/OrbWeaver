@@ -376,6 +376,8 @@ impl CliSession {
             creator_peer_id: Some(self.identity.gpg_fingerprint.clone()),
             pinned: Some(false),
             created_at: None, // Use current time for interactive posts
+            visibility: Some("social".to_string()), // CLI defaults to social visibility
+            topics: vec![], // CLI doesn't support topic selection yet
         };
         let details = self.thread_service.create_thread(input)?;
         println!("Created thread {}", details.thread.id);

@@ -178,6 +178,20 @@ impl NetworkHandle {
             handle.subscribe_to_peer(&fingerprint, None).await?;
         }
 
+        // Subscribe to global discovery topic (unless opted out)
+        let opt_out_global = database
+            .get_setting("opt_out_global_discovery")
+            .unwrap_or(Some("false".to_string()))
+            .unwrap_or_else(|| "false".to_string())
+            == "true";
+
+        if !opt_out_global {
+            tracing::info!("subscribing to global discovery topic");
+            handle.subscribe_to_global().await?;
+        } else {
+            tracing::info!("global discovery opted out via settings");
+        }
+
         // Subscribe to all existing friends' peer topics
         let peer_service = crate::peers::PeerService::new(database.clone());
         if let Ok(peers) = peer_service.list_peers() {
@@ -198,6 +212,15 @@ impl NetworkHandle {
             for thread in threads {
                 tracing::info!(thread_id = %thread.id, "subscribing to thread topic on startup");
                 handle.subscribe_to_thread(&thread.id).await?;
+            }
+        }
+
+        // Subscribe to all user topics for public discovery
+        use crate::database::repositories::TopicRepository;
+        if let Ok(topics) = database.with_repositories(|repos| repos.topics().list_subscribed()) {
+            for topic_id in topics {
+                tracing::info!(topic = %topic_id, "subscribing to user topic on startup");
+                handle.subscribe_to_topic(&topic_id).await?;
             }
         }
 
@@ -263,6 +286,12 @@ impl NetworkHandle {
         // Calculate thread hash from all posts
         let thread_hash = crate::threading::calculate_thread_hash(&snapshot.posts);
 
+        // Get topics for this thread from database
+        use crate::database::repositories::TopicRepository;
+        let topics = self.database.with_repositories(|repos| {
+            repos.topics().list_thread_topics(&snapshot.thread.id)
+        }).unwrap_or_default();
+
         // Create lightweight announcement
         let announcement = events::ThreadAnnouncement {
             thread_id: snapshot.thread.id.clone(),
@@ -276,6 +305,8 @@ impl NetworkHandle {
             created_at: snapshot.thread.created_at.clone(),
             last_activity,
             thread_hash,
+            visibility: snapshot.thread.visibility.clone(),
+            topics,
         };
 
         tracing::info!(
@@ -329,6 +360,141 @@ impl NetworkHandle {
             }),
         };
         self.publisher.send(event).await.ok();
+        Ok(())
+    }
+
+    /// Subscribe to the global discovery topic to receive announcements from all nodes.
+    /// This is called automatically on startup unless the user has opted out.
+    pub async fn subscribe_to_global(&self) -> Result<()> {
+        use crate::network::topics::{GLOBAL_TOPIC_NAME, derive_global_topic};
+
+        let topic_name = GLOBAL_TOPIC_NAME.to_string();
+        let topic_id = TopicId::from_bytes(derive_global_topic());
+
+        tracing::info!(topic = %topic_name, "subscribing to global discovery topic");
+
+        // Create two subscriptions to this topic:
+        // 1. For receiving (consumed by the spawned task below)
+        // 2. For broadcasting (stored in topics map for the event worker)
+        let receiver_topic = self.gossip.subscribe(topic_id, vec![]).await?;
+        let broadcaster_topic = self.gossip.subscribe(topic_id, vec![]).await?;
+
+        // Store broadcaster in topics map
+        {
+            let mut topics_guard = self.topics.write().await;
+            topics_guard.insert(topic_name.clone(), broadcaster_topic);
+        }
+
+        let mut receiver = receiver_topic;
+        let inbound_tx = self.inbound_tx.clone();
+
+        // Spawn a task to forward messages from the global topic to the ingest loop
+        tokio::spawn(async move {
+            use futures_util::StreamExt;
+            while let Some(event_result) = receiver.next().await {
+                match event_result {
+                    Ok(iroh_gossip::api::Event::Received(message)) => {
+                        match serde_json::from_slice::<events::EventEnvelope>(&message.content) {
+                            Ok(envelope) => {
+                                let gossip = events::InboundGossip {
+                                    peer_id: Some(message.delivered_from.to_string()),
+                                    payload: envelope.payload,
+                                };
+                                if inbound_tx.send(gossip).await.is_err() {
+                                    tracing::warn!(topic = %topic_name, "inbound channel closed, stopping global topic receiver");
+                                    break;
+                                }
+                            }
+                            Err(err) => {
+                                tracing::warn!(error = ?err, topic = %topic_name, "failed to deserialize message on global topic");
+                            }
+                        }
+                    }
+                    Ok(iroh_gossip::api::Event::NeighborUp(neighbor_id)) => {
+                        tracing::debug!(peer = %neighbor_id.fmt_short(), topic = %topic_name, "neighbor up on global topic");
+                    }
+                    Ok(iroh_gossip::api::Event::NeighborDown(neighbor_id)) => {
+                        tracing::debug!(peer = %neighbor_id.fmt_short(), topic = %topic_name, "neighbor down on global topic");
+                    }
+                    Ok(iroh_gossip::api::Event::Lagged) => {
+                        tracing::warn!(topic = %topic_name, "gossip receiver lagged on global topic");
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = ?err, topic = %topic_name, "error in global topic receiver");
+                    }
+                }
+            }
+            tracing::info!(topic = %topic_name, "global topic receiver loop ended");
+        });
+
+        Ok(())
+    }
+
+    /// Subscribe to a user-defined topic for public discovery.
+    /// Topics are well-known hashes that anyone can subscribe to.
+    pub async fn subscribe_to_topic(&self, topic_name: &str) -> Result<()> {
+        use crate::network::topics::derive_topic_id;
+
+        let topic_id = TopicId::from_bytes(derive_topic_id(topic_name));
+
+        tracing::info!(topic = %topic_name, "subscribing to user topic");
+
+        // Create two subscriptions to this topic:
+        // 1. For receiving (consumed by the spawned task below)
+        // 2. For broadcasting (stored in topics map for the event worker)
+        let receiver_topic = self.gossip.subscribe(topic_id, vec![]).await?;
+        let broadcaster_topic = self.gossip.subscribe(topic_id, vec![]).await?;
+
+        // Store broadcaster in topics map with "topic:{name}" prefix for routing
+        let topic_key = format!("topic:{}", topic_name);
+        {
+            let mut topics_guard = self.topics.write().await;
+            topics_guard.insert(topic_key.clone(), broadcaster_topic);
+        }
+
+        let mut receiver = receiver_topic;
+        let inbound_tx = self.inbound_tx.clone();
+        let topic_key_clone = topic_key.clone();
+
+        // Spawn a task to forward messages from this topic to the ingest loop
+        tokio::spawn(async move {
+            use futures_util::StreamExt;
+            while let Some(event_result) = receiver.next().await {
+                match event_result {
+                    Ok(iroh_gossip::api::Event::Received(message)) => {
+                        match serde_json::from_slice::<events::EventEnvelope>(&message.content) {
+                            Ok(envelope) => {
+                                let gossip = events::InboundGossip {
+                                    peer_id: Some(message.delivered_from.to_string()),
+                                    payload: envelope.payload,
+                                };
+                                if inbound_tx.send(gossip).await.is_err() {
+                                    tracing::warn!(topic = %topic_key_clone, "inbound channel closed, stopping topic receiver");
+                                    break;
+                                }
+                            }
+                            Err(err) => {
+                                tracing::warn!(error = ?err, topic = %topic_key_clone, "failed to deserialize message on topic");
+                            }
+                        }
+                    }
+                    Ok(iroh_gossip::api::Event::NeighborUp(neighbor_id)) => {
+                        tracing::info!(peer = %neighbor_id.fmt_short(), topic = %topic_key_clone, "neighbor up on topic");
+                    }
+                    Ok(iroh_gossip::api::Event::NeighborDown(neighbor_id)) => {
+                        tracing::info!(peer = %neighbor_id.fmt_short(), topic = %topic_key_clone, "neighbor down on topic");
+                    }
+                    Ok(iroh_gossip::api::Event::Lagged) => {
+                        tracing::warn!(topic = %topic_key_clone, "gossip receiver lagged on topic");
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = ?err, topic = %topic_key_clone, "error in topic receiver");
+                    }
+                }
+            }
+            tracing::info!(topic = %topic_key_clone, "topic receiver loop ended");
+        });
+
         Ok(())
     }
 

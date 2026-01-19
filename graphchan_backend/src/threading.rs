@@ -63,6 +63,10 @@ impl ThreadService {
                             })
                     });
 
+                // Load topics for this thread
+                use crate::database::repositories::TopicRepository;
+                let topics = repos.topics().list_thread_topics(&thread.id).unwrap_or_default();
+
                 summaries.push(ThreadSummary {
                     id: thread.id,
                     title: thread.title,
@@ -73,6 +77,7 @@ impl ThreadService {
                     topic_secret: thread.topic_secret,
                     sync_status: thread.sync_status,
                     first_image_file: first_image,
+                    topics,
                 });
             }
 
@@ -170,16 +175,25 @@ impl ThreadService {
             created_at: created_at.clone(),
             pinned: input.pinned.unwrap_or(false),
             thread_hash: None, // Will be calculated after posts are added
-            visibility: "social".to_string(),
+            visibility: input.visibility.unwrap_or_else(|| "social".to_string()),
             topic_secret: None,
             sync_status: "downloaded".to_string(), // Locally created thread
         };
 
         let initial_post_body = input.body.clone();
         let author_peer_id = input.creator_peer_id.clone();
+        let topics = input.topics.clone();
 
         self.database.with_repositories(|repos| {
+            use crate::database::repositories::TopicRepository;
+
             repos.threads().create(&thread_record)?;
+
+            // Save topic associations
+            for topic_id in &topics {
+                repos.topics().add_thread_topic(&thread_id, topic_id)?;
+            }
+
             if let Some(body) = initial_post_body {
                 if !body.trim().is_empty() {
                     // Look up author's short friend code if we have an author_peer_id
@@ -310,6 +324,8 @@ pub struct ThreadSummary {
     pub sync_status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_image_file: Option<crate::files::FileView>,
+    #[serde(default)]
+    pub topics: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -346,6 +362,13 @@ pub struct CreateThreadInput {
     /// Optional timestamp for imported threads. If None, uses current time.
     #[serde(default)]
     pub created_at: Option<String>,
+    /// Thread visibility: "social" (friends only), "private" (encrypted), or "global" (public discovery)
+    /// DEPRECATED: Use topics field instead
+    #[serde(default)]
+    pub visibility: Option<String>,
+    /// List of topic IDs to announce this thread on (for public discovery)
+    #[serde(default)]
+    pub topics: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -379,6 +402,7 @@ impl ThreadSummary {
             topic_secret: record.topic_secret,
             sync_status: record.sync_status,
             first_image_file: None, // Not populated in from_record
+            topics: Vec::new(), // Not populated in from_record
         }
     }
 }
@@ -423,6 +447,8 @@ mod tests {
                 creator_peer_id: None,
                 pinned: None,
                 created_at: None,
+                visibility: None,
+                topics: vec![],
             })
             .expect("create thread");
         assert_eq!(details.thread.title, "Example");
@@ -440,6 +466,8 @@ mod tests {
                 creator_peer_id: None,
                 pinned: None,
                 created_at: None,
+                visibility: None,
+                topics: vec![],
             })
             .expect("create thread");
 

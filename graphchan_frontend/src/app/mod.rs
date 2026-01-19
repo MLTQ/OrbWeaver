@@ -110,6 +110,8 @@ pub struct GraphchanApp {
     audio_device: Option<AudioDevice>,
     video_volume: f32, // 0.0 to 1.0
     show_ignored_threads: bool, // Toggle to show/hide ignored threads in peer catalog
+    show_global_threads: bool, // Toggle to show/hide global discovery threads
+    catalog_topic_filter: Option<String>, // Filter catalog by topic (None = show all)
     dm_state: DmState,
     blocking_state: BlockingState,
     auto_refresh_enabled: bool, // Toggle for auto-refresh
@@ -123,6 +125,13 @@ pub struct GraphchanApp {
     recent_posts_error: Option<String>,
     last_recent_posts_refresh: Option<std::time::Instant>,
     recent_posts_poll_interval: u64, // In seconds
+    // Topic management
+    subscribed_topics: Vec<String>,
+    topics_loading: bool,
+    topics_error: Option<String>,
+    show_topic_manager: bool,
+    new_topic_input: String,
+    selected_topics: HashSet<String>, // For create thread dialog
 }
 
 #[derive(Debug, Clone)]
@@ -275,6 +284,8 @@ impl GraphchanApp {
             audio_device,
             video_volume: 0.8, // Default to 80% volume
             show_ignored_threads: false, // Default to hiding ignored threads
+            show_global_threads: true, // Default to showing global threads
+            catalog_topic_filter: None, // Default to showing all topics
             dm_state: DmState::default(),
             blocking_state: BlockingState::default(),
             auto_refresh_enabled: true, // Auto-refresh on by default
@@ -288,6 +299,13 @@ impl GraphchanApp {
             recent_posts_error: None,
             last_recent_posts_refresh: None,
             recent_posts_poll_interval: 5, // Poll every 5 seconds by default
+            // Topic management
+            subscribed_topics: Vec::new(),
+            topics_loading: false,
+            topics_error: None,
+            show_topic_manager: false,
+            new_topic_input: String::new(),
+            selected_topics: HashSet::new(),
         };
         app.spawn_load_threads();
         app.spawn_load_recent_posts();
@@ -297,6 +315,7 @@ impl GraphchanApp {
         app.spawn_load_blocklists();
         app.spawn_load_ip_blocks();
         app.spawn_load_ip_block_stats();
+        app.spawn_load_topics();
         app
     }
 
@@ -331,6 +350,10 @@ impl GraphchanApp {
         if !body.is_empty() {
             payload.body = Some(body);
         }
+        // Set topics to announce on
+        payload.topics = self.selected_topics.iter().cloned().collect();
+        // Keep visibility for backward compatibility (deprecated)
+        payload.visibility = Some("social".to_string());
         self.create_thread.submitting = true;
         self.create_thread.error = None;
         tasks::create_thread(self.api.clone(), self.tx.clone(), payload, self.create_thread.files.clone());
@@ -371,6 +394,23 @@ impl GraphchanApp {
 
     fn spawn_load_peers(&mut self) {
         tasks::load_peers(self.api.clone(), self.tx.clone());
+    }
+
+    fn spawn_load_topics(&mut self) {
+        if self.topics_loading {
+            return;
+        }
+        self.topics_loading = true;
+        self.topics_error = None;
+        tasks::load_topics(self.api.clone(), self.tx.clone());
+    }
+
+    fn spawn_subscribe_topic(&mut self, topic_id: String) {
+        tasks::subscribe_topic(self.api.clone(), self.tx.clone(), topic_id);
+    }
+
+    fn spawn_unsubscribe_topic(&mut self, topic_id: String) {
+        tasks::unsubscribe_topic(self.api.clone(), self.tx.clone(), topic_id);
     }
 
     fn spawn_load_recent_posts(&mut self) {
@@ -1069,6 +1109,9 @@ impl eframe::App for GraphchanApp {
                 if ui.button("Following").clicked() {
                     self.view = ViewState::Following;
                 }
+                if ui.button("Topics").clicked() {
+                    self.show_topic_manager = true;
+                }
                 if ui.selectable_label(self.show_identity, "Identity").clicked() {
                     self.show_identity = !self.show_identity;
                 }
@@ -1326,6 +1369,7 @@ impl eframe::App for GraphchanApp {
 
         self.render_create_thread_dialog(ctx);
         self.render_import_dialog(ctx);
+        self.render_topic_manager(ctx);
         ui::drawer::render_identity_drawer(self, ctx);
         ui::drawer::render_avatar_cropper(self, ctx);
         self.render_file_viewers(ctx);
