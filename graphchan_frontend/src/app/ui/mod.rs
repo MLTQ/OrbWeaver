@@ -15,3 +15,4 @@ pub mod settings;
 pub mod reaction_colors;
 pub mod blocking;
 pub mod search;
+pub mod topics;

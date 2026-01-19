@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use eframe::egui;
-use log::error;
+use log::{error, info};
 
 use crate::models::{
     BlockedPeerView, BlocklistEntryView, BlocklistSubscriptionView, ConversationView,
@@ -61,6 +61,11 @@ pub enum AppMessage {
         file_id: String,
         result: Result<(), String>,
     },
+    UploadProgress {
+        file_path: String,
+        bytes_uploaded: u64,
+        total_bytes: u64,
+    },
     ReactionsLoaded {
         post_id: String,
         result: Result<ReactionsResponse, anyhow::Error>,
@@ -104,11 +109,48 @@ pub enum AppMessage {
         blocklist_id: String,
         result: Result<Vec<BlocklistEntryView>, anyhow::Error>,
     },
+    // IP Blocking messages
+    IpBlocksLoaded(Result<Vec<crate::models::IpBlockView>, anyhow::Error>),
+    IpBlockStatsLoaded(Result<crate::models::IpBlockStatsResponse, anyhow::Error>),
+    IpBlockAdded {
+        result: Result<(), anyhow::Error>,
+    },
+    IpBlockRemoved {
+        block_id: i64,
+        result: Result<(), anyhow::Error>,
+    },
+    IpBlocksImported {
+        result: Result<(), anyhow::Error>,
+    },
+    IpBlocksExported {
+        result: Result<String, anyhow::Error>,
+    },
+    IpBlocksCleared {
+        result: Result<(), anyhow::Error>,
+    },
+    PeerIpBlocked {
+        peer_id: String,
+        blocked_ips: Vec<String>,
+    },
+    PeerIpBlockFailed {
+        peer_id: String,
+        error: String,
+    },
     SearchCompleted {
         query: String,
         result: Result<SearchResponse, anyhow::Error>,
     },
     RecentPostsLoaded(Result<crate::models::RecentPostsResponse, anyhow::Error>),
+    // Topic management messages
+    TopicsLoaded(Result<Vec<String>, anyhow::Error>),
+    TopicSubscribed {
+        topic_id: String,
+        result: Result<(), anyhow::Error>,
+    },
+    TopicUnsubscribed {
+        topic_id: String,
+        result: Result<(), anyhow::Error>,
+    },
 }
 
 pub(super) fn process_messages(app: &mut GraphchanApp) {
@@ -266,6 +308,7 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                 match result {
                     Ok(details) => {
                         app.create_thread = CreateThreadState::default();
+                        app.selected_topics.clear();
                         app.show_create_thread = false;
                         app.info_banner = Some("Thread created".into());
                         let summary = details.thread.clone();
@@ -783,6 +826,111 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                     }
                 }
             }
+            // IP Blocking handlers
+            AppMessage::IpBlocksLoaded(result) => {
+                app.blocking_state.ip_blocks_loading = false;
+                match result {
+                    Ok(blocks) => {
+                        app.blocking_state.ip_blocks = blocks;
+                        app.blocking_state.ip_blocks_error = None;
+                    }
+                    Err(err) => {
+                        error!("Failed to load IP blocks: {}", err);
+                        app.blocking_state.ip_blocks_error = Some(err.to_string());
+                    }
+                }
+            }
+            AppMessage::IpBlockStatsLoaded(result) => {
+                app.blocking_state.ip_block_stats_loading = false;
+                match result {
+                    Ok(stats) => {
+                        app.blocking_state.ip_block_stats = Some(stats);
+                    }
+                    Err(err) => {
+                        error!("Failed to load IP block stats: {}", err);
+                    }
+                }
+            }
+            AppMessage::IpBlockAdded { result } => {
+                app.blocking_state.adding_ip_block = false;
+                match result {
+                    Ok(_) => {
+                        app.blocking_state.new_ip_block.clear();
+                        app.blocking_state.new_ip_block_reason.clear();
+                        app.blocking_state.add_ip_block_error = None;
+                        app.spawn_load_ip_blocks();
+                        app.spawn_load_ip_block_stats();
+                    }
+                    Err(err) => {
+                        error!("Failed to add IP block: {}", err);
+                        app.blocking_state.add_ip_block_error = Some(err.to_string());
+                    }
+                }
+            }
+            AppMessage::IpBlockRemoved { block_id, result } => {
+                match result {
+                    Ok(_) => {
+                        app.blocking_state.ip_blocks.retain(|b| b.id != block_id);
+                        app.spawn_load_ip_block_stats();
+                    }
+                    Err(err) => {
+                        error!("Failed to remove IP block {}: {}", block_id, err);
+                        app.blocking_state.ip_blocks_error = Some(err.to_string());
+                    }
+                }
+            }
+            AppMessage::IpBlocksImported { result } => {
+                app.blocking_state.importing_ips = false;
+                match result {
+                    Ok(_) => {
+                        app.blocking_state.import_text.clear();
+                        app.blocking_state.import_error = None;
+                        app.spawn_load_ip_blocks();
+                        app.spawn_load_ip_block_stats();
+                    }
+                    Err(err) => {
+                        error!("Failed to import IP blocks: {}", err);
+                        app.blocking_state.import_error = Some(err.to_string());
+                    }
+                }
+            }
+            AppMessage::IpBlocksExported { result } => {
+                match result {
+                    Ok(export_text) => {
+                        // Copy to clipboard or save to file
+                        // For now, just log it
+                        info!("IP blocks exported: {} bytes", export_text.len());
+                        // TODO: Add clipboard or save dialog
+                    }
+                    Err(err) => {
+                        error!("Failed to export IP blocks: {}", err);
+                    }
+                }
+            }
+            AppMessage::IpBlocksCleared { result } => {
+                match result {
+                    Ok(_) => {
+                        app.blocking_state.ip_blocks.clear();
+                        app.spawn_load_ip_block_stats();
+                    }
+                    Err(err) => {
+                        error!("Failed to clear IP blocks: {}", err);
+                        app.blocking_state.ip_blocks_error = Some(err.to_string());
+                    }
+                }
+            }
+            AppMessage::PeerIpBlocked { peer_id, blocked_ips } => {
+                info!("Blocked {} IP(s) for peer {}: {:?}", blocked_ips.len(), peer_id, blocked_ips);
+                // Refresh IP blocks list
+                app.spawn_load_ip_blocks();
+                app.spawn_load_ip_block_stats();
+                // Show success message
+                app.info_banner = Some(format!("Blocked {} IP(s) for peer {}", blocked_ips.len(), peer_id));
+            }
+            AppMessage::PeerIpBlockFailed { peer_id, error } => {
+                error!("Failed to block IPs for peer {}: {}", peer_id, error);
+                app.info_banner = Some(format!("Failed to block IPs for peer {}: {}", peer_id, error));
+            }
             AppMessage::SearchCompleted { query, result } => {
                 if let ViewState::SearchResults(state) = &mut app.view {
                     if state.query == query {
@@ -810,6 +958,54 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                     Err(err) => {
                         error!("Failed to load recent posts: {}", err);
                         app.recent_posts_error = Some(err.to_string());
+                    }
+                }
+            }
+            AppMessage::UploadProgress {
+                file_path: _,
+                bytes_uploaded: _,
+                total_bytes: _,
+            } => {
+                // TODO: Display upload progress in UI
+            }
+            AppMessage::TopicsLoaded(result) => {
+                app.topics_loading = false;
+                match result {
+                    Ok(topics) => {
+                        app.subscribed_topics = topics;
+                        app.topics_error = None;
+                    }
+                    Err(err) => {
+                        error!("Failed to load topics: {}", err);
+                        app.topics_error = Some(err.to_string());
+                    }
+                }
+            }
+            AppMessage::TopicSubscribed { topic_id, result } => {
+                match result {
+                    Ok(()) => {
+                        if !app.subscribed_topics.contains(&topic_id) {
+                            app.subscribed_topics.push(topic_id.clone());
+                        }
+                        app.new_topic_input.clear();
+                        info!("Successfully subscribed to topic: {}", topic_id);
+                    }
+                    Err(err) => {
+                        error!("Failed to subscribe to topic {}: {}", topic_id, err);
+                        app.topics_error = Some(err.to_string());
+                    }
+                }
+            }
+            AppMessage::TopicUnsubscribed { topic_id, result } => {
+                match result {
+                    Ok(()) => {
+                        app.subscribed_topics.retain(|t| t != &topic_id);
+                        app.selected_topics.remove(&topic_id);
+                        info!("Successfully unsubscribed from topic: {}", topic_id);
+                    }
+                    Err(err) => {
+                        error!("Failed to unsubscribe from topic {}: {}", topic_id, err);
+                        app.topics_error = Some(err.to_string());
                     }
                 }
             }

@@ -384,6 +384,72 @@ fn render_node_attachments(app: &mut GraphchanApp, ui: &mut egui::Ui, attachment
 
     for file in files {
         let mime = file.mime.as_deref().unwrap_or("");
+        let download_status = file.download_status.as_deref().unwrap_or("available");
+        let is_available = download_status == "available" && file.present;
+
+        // Show download UI for non-available files
+        if !is_available {
+            ui.horizontal(|ui| {
+                let name = file.original_name.as_deref().unwrap_or("file");
+                let size_text = if let Some(size) = file.size_bytes {
+                    format!(" ({:.1} MB)", size as f64 / 1_048_576.0)
+                } else {
+                    String::new()
+                };
+
+                let icon = if mime.starts_with("image/") { "🖼️" }
+                    else if mime.starts_with("video/") { "🎥" }
+                    else if mime.starts_with("audio/") { "🎵" }
+                    else if mime.contains("pdf") { "📕" }
+                    else { "📎" };
+
+                ui.label(RichText::new(format!("{} {}{}", icon, name, size_text)).size(11.0 * zoom));
+
+                match download_status {
+                    "downloading" => {
+                        ui.add(egui::Spinner::new().size(12.0 * zoom));
+                        ui.label(RichText::new("Downloading...").size(10.0 * zoom).color(Color32::from_rgb(100, 150, 255)));
+                    }
+                    "failed" => {
+                        ui.colored_label(Color32::from_rgb(255, 100, 100), RichText::new("Failed").size(10.0 * zoom));
+                        if ui.button(RichText::new("↻ Retry").size(10.0 * zoom)).clicked() {
+                            // Get thread_id from current view state
+                            let thread_id = if let ViewState::Thread(state) = &app.view {
+                                state.summary.id.clone()
+                            } else {
+                                String::new() // Fallback, shouldn't happen in thread view
+                            };
+                            crate::app::tasks::trigger_file_download(
+                                app.api.clone(),
+                                app.tx.clone(),
+                                file.id.clone(),
+                                thread_id,
+                            );
+                        }
+                    }
+                    _ => { // "pending" or unknown
+                        if ui.button(RichText::new("⬇ Download").size(10.0 * zoom)).clicked() {
+                            // Get thread_id from current view state
+                            let thread_id = if let ViewState::Thread(state) = &app.view {
+                                state.summary.id.clone()
+                            } else {
+                                String::new() // Fallback, shouldn't happen in thread view
+                            };
+                            crate::app::tasks::trigger_file_download(
+                                app.api.clone(),
+                                app.tx.clone(),
+                                file.id.clone(),
+                                thread_id,
+                            );
+                        }
+                    }
+                }
+            });
+            ui.add_space(4.0 * zoom);
+            continue;
+        }
+
+        // Existing rendering logic for available files
         if mime.starts_with("image/") {
             match image_preview(app, ui, file, api_base) {
                 ImagePreview::Ready(tex) => {

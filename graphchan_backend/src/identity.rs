@@ -23,6 +23,7 @@ pub struct IdentitySummary {
     pub iroh_peer_id: String,
     pub x25519_pubkey: String,
     pub friendcode: String,
+    pub short_friendcode: String,
     pub gpg_created: bool,
     pub iroh_key_created: bool,
     pub x25519_created: bool,
@@ -50,12 +51,14 @@ pub fn ensure_local_identity(paths: &GraphchanPaths) -> Result<IdentitySummary> 
     let (iroh_peer_id, iroh_key_created) = ensure_iroh_identity(paths)?;
     let (x25519_pubkey, x25519_created) = crate::crypto::ensure_x25519_identity(paths)?;
     let friendcode = encode_friendcode(&iroh_peer_id, &gpg_fingerprint, Some(&x25519_pubkey))?;
+    let short_friendcode = encode_short_friendcode(&iroh_peer_id, &gpg_fingerprint);
 
     Ok(IdentitySummary {
         gpg_fingerprint,
         iroh_peer_id,
         x25519_pubkey,
         friendcode,
+        short_friendcode,
         gpg_created,
         iroh_key_created,
         x25519_created,
@@ -171,6 +174,59 @@ pub fn decode_friendcode(friendcode: &str) -> Result<FriendCodePayload> {
     let bytes = BASE64.decode(friendcode.as_bytes())?;
     let payload: FriendCodePayload = serde_json::from_slice(&bytes)?;
     Ok(payload)
+}
+
+/// Generate a short friend code containing just the peer ID and GPG fingerprint
+/// Format: "graphchan:{peer_id}:{gpg_fingerprint}"
+/// Example: "graphchan:abc123def456...xyz789:ABCD1234EFGH5678..."
+///
+/// This format is much shorter (~120 chars) than the legacy base64 format (~400+ chars)
+/// and relies on DHT discovery to resolve the peer's addresses automatically.
+pub fn encode_short_friendcode(peer_id: &str, gpg_fingerprint: &str) -> String {
+    format!("graphchan:{}:{}", peer_id, gpg_fingerprint)
+}
+
+/// Decode a short friend code
+/// Returns (peer_id, gpg_fingerprint)
+pub fn decode_short_friendcode(friendcode: &str) -> Result<(String, String)> {
+    let friendcode = friendcode.trim();
+
+    // Check prefix
+    if !friendcode.starts_with("graphchan:") {
+        anyhow::bail!("Invalid friend code format: missing 'graphchan:' prefix");
+    }
+
+    // Strip prefix
+    let data = &friendcode[10..]; // "graphchan:".len() = 10
+
+    // Split on ':'
+    let parts: Vec<&str> = data.split(':').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid friend code format: expected peer_id:gpg_fingerprint");
+    }
+
+    Ok((parts[0].to_string(), parts[1].to_string()))
+}
+
+/// Try to decode either short or legacy friend code formats
+/// This provides backward compatibility while supporting the new shorter format
+pub fn decode_friendcode_auto(friendcode: &str) -> Result<FriendCodePayload> {
+    let friendcode = friendcode.trim();
+
+    // Try short format first (starts with "graphchan:")
+    if friendcode.starts_with("graphchan:") {
+        let (peer_id, gpg_fingerprint) = decode_short_friendcode(friendcode)?;
+        return Ok(FriendCodePayload {
+            version: 3, // New version for short codes
+            peer_id,
+            gpg_fingerprint,
+            x25519_pubkey: None, // Will be negotiated on connection via DH key exchange
+            addresses: vec![], // DHT will resolve addresses automatically
+        });
+    }
+
+    // Fall back to legacy base64 format
+    decode_friendcode(friendcode)
 }
 
 pub fn load_iroh_secret(paths: &GraphchanPaths) -> Result<SecretKey> {

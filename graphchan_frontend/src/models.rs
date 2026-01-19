@@ -12,6 +12,12 @@ pub struct ThreadSummary {
     pub pinned: bool,
     #[serde(default = "default_sync_status")]
     pub sync_status: String,
+    #[serde(default)]
+    pub first_image_file: Option<FileResponse>,
+    #[serde(default)]
+    pub visibility: Option<String>,
+    #[serde(default)]
+    pub topics: Vec<String>,
 }
 
 fn default_sync_status() -> String {
@@ -33,6 +39,8 @@ pub struct PostView {
     pub thread_id: String,
     #[serde(default)]
     pub author_peer_id: Option<String>,
+    #[serde(default)]
+    pub author_short_friendcode: Option<String>,
     pub body: String,
     pub created_at: String,
     #[serde(default)]
@@ -55,6 +63,16 @@ pub struct CreateThreadInput {
     /// Optional timestamp for imported threads. If None, backend uses current time.
     #[serde(default)]
     pub created_at: Option<String>,
+    /// DEPRECATED: Use topics field instead
+    #[serde(default = "default_visibility")]
+    pub visibility: Option<String>,
+    /// List of topic IDs to announce this thread on
+    #[serde(default)]
+    pub topics: Vec<String>,
+}
+
+fn default_visibility() -> Option<String> {
+    Some("social".to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -97,6 +115,8 @@ pub struct FileResponse {
     pub download_url: Option<String>,
     #[serde(default)]
     pub present: bool,
+    #[serde(default)]
+    pub download_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -109,6 +129,8 @@ pub struct PeerView {
     pub username: Option<String>,
     pub bio: Option<String>,
     pub friendcode: Option<String>,
+    #[serde(default)]
+    pub short_friendcode: Option<String>,
     pub iroh_peer_id: Option<String>,
     pub gpg_fingerprint: Option<String>,
     pub last_seen: Option<String>,
@@ -251,4 +273,38 @@ pub struct RecentPostView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecentPostsResponse {
     pub posts: Vec<RecentPostView>,
+}
+
+// IP Blocking models
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IpBlockView {
+    pub id: i64,
+    pub ip_or_range: String,
+    pub block_type: String,
+    pub blocked_at: i64,
+    pub reason: Option<String>,
+    pub active: bool,
+    pub hit_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IpBlockStatsResponse {
+    pub total_blocks: usize,
+    pub active_blocks: usize,
+    pub total_hits: i64,
+    pub exact_ip_blocks: usize,
+    pub range_blocks: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerIpResponse {
+    pub peer_id: String,
+    pub ips: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddIpBlockRequest {
+    pub ip_or_range: String,
+    pub reason: Option<String>,
 }

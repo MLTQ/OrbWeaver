@@ -548,3 +548,190 @@ pub fn load_blocklist_entries(client: ApiClient, tx: Sender<AppMessage>, blockli
         }
     });
 }
+
+// IP Blocking tasks
+
+pub fn load_ip_blocks(client: ApiClient, tx: Sender<AppMessage>) {
+    thread::spawn(move || {
+        let result = client.list_ip_blocks();
+        let message = AppMessage::IpBlocksLoaded(result);
+        if tx.send(message).is_err() {
+            error!("failed to send IpBlocksLoaded message");
+        }
+    });
+}
+
+pub fn load_ip_block_stats(client: ApiClient, tx: Sender<AppMessage>) {
+    thread::spawn(move || {
+        let result = client.get_ip_block_stats();
+        let message = AppMessage::IpBlockStatsLoaded(result);
+        if tx.send(message).is_err() {
+            error!("failed to send IpBlockStatsLoaded message");
+        }
+    });
+}
+
+pub fn add_ip_block(client: ApiClient, tx: Sender<AppMessage>, ip_or_range: String, reason: Option<String>) {
+    thread::spawn(move || {
+        let result = client.add_ip_block(&ip_or_range, reason);
+        let message = AppMessage::IpBlockAdded { result };
+        if tx.send(message).is_err() {
+            error!("failed to send IpBlockAdded message");
+        }
+    });
+}
+
+pub fn remove_ip_block(client: ApiClient, tx: Sender<AppMessage>, block_id: i64) {
+    thread::spawn(move || {
+        let result = client.remove_ip_block(block_id);
+        let message = AppMessage::IpBlockRemoved { block_id, result };
+        if tx.send(message).is_err() {
+            error!("failed to send IpBlockRemoved message");
+        }
+    });
+}
+
+pub fn import_ip_blocks(client: ApiClient, tx: Sender<AppMessage>, import_text: String) {
+    thread::spawn(move || {
+        let result = client.import_ip_blocks(&import_text);
+        let message = AppMessage::IpBlocksImported { result };
+        if tx.send(message).is_err() {
+            error!("failed to send IpBlocksImported message");
+        }
+    });
+}
+
+pub fn export_ip_blocks(client: ApiClient, tx: Sender<AppMessage>) {
+    thread::spawn(move || {
+        let result = client.export_ip_blocks();
+        let message = AppMessage::IpBlocksExported { result };
+        if tx.send(message).is_err() {
+            error!("failed to send IpBlocksExported message");
+        }
+    });
+}
+
+pub fn clear_all_ip_blocks(client: ApiClient, tx: Sender<AppMessage>) {
+    thread::spawn(move || {
+        let result = client.clear_all_ip_blocks();
+        let message = AppMessage::IpBlocksCleared { result };
+        if tx.send(message).is_err() {
+            error!("failed to send IpBlocksCleared message");
+        }
+    });
+}
+
+pub fn trigger_file_download(client: ApiClient, tx: Sender<AppMessage>, file_id: String, thread_id: String) {
+    thread::spawn(move || {
+        let result = client.trigger_file_download(&file_id);
+        if result.is_ok() {
+            // Reload thread to get updated download status
+            let thread_result = client.get_thread(&thread_id);
+            if thread_result.is_ok() {
+                let message = AppMessage::ThreadLoaded { thread_id: thread_id.clone(), result: thread_result };
+                if tx.send(message).is_err() {
+                    error!("failed to send ThreadLoaded message after file download trigger");
+                }
+            }
+        } else if let Err(e) = result {
+            error!("Failed to trigger file download: {}", e);
+        }
+    });
+}
+
+pub fn block_peer_ip(client: ApiClient, tx: Sender<AppMessage>, peer_id: String) {
+    thread::spawn(move || {
+        // First, fetch the peer's IP addresses
+        let ips_result = client.get_peer_ips(&peer_id);
+
+        match ips_result {
+            Ok(peer_ips) => {
+                if peer_ips.ips.is_empty() {
+                    let message = AppMessage::PeerIpBlockFailed {
+                        peer_id,
+                        error: "No IP addresses found for this peer".to_string(),
+                    };
+                    if tx.send(message).is_err() {
+                        error!("failed to send PeerIpBlockFailed message");
+                    }
+                    return;
+                }
+
+                // Block all IPs for this peer
+                let mut blocked_count = 0;
+                let mut errors = Vec::new();
+
+                for ip in &peer_ips.ips {
+                    let reason = Some(format!("Blocked peer: {}", peer_id));
+                    match client.add_ip_block(ip, reason) {
+                        Ok(_) => blocked_count += 1,
+                        Err(e) => errors.push(format!("{}: {}", ip, e)),
+                    }
+                }
+
+                if blocked_count > 0 {
+                    let message = AppMessage::PeerIpBlocked {
+                        peer_id,
+                        blocked_ips: peer_ips.ips.clone(),
+                    };
+                    if tx.send(message).is_err() {
+                        error!("failed to send PeerIpBlocked message");
+                    }
+                } else {
+                    let message = AppMessage::PeerIpBlockFailed {
+                        peer_id,
+                        error: format!("Failed to block IPs: {}", errors.join(", ")),
+                    };
+                    if tx.send(message).is_err() {
+                        error!("failed to send PeerIpBlockFailed message");
+                    }
+                }
+            }
+            Err(err) => {
+                let message = AppMessage::PeerIpBlockFailed {
+                    peer_id,
+                    error: format!("Failed to fetch peer IPs: {}", err),
+                };
+                if tx.send(message).is_err() {
+                    error!("failed to send PeerIpBlockFailed message");
+                }
+            }
+        }
+    });
+}
+
+// Topic management tasks
+pub fn load_topics(client: ApiClient, tx: Sender<AppMessage>) {
+    thread::spawn(move || {
+        let result = client.list_topics();
+        if tx.send(AppMessage::TopicsLoaded(result)).is_err() {
+            error!("failed to send TopicsLoaded message");
+        }
+    });
+}
+
+pub fn subscribe_topic(client: ApiClient, tx: Sender<AppMessage>, topic_id: String) {
+    thread::spawn(move || {
+        let result = client.subscribe_topic(&topic_id);
+        let message = AppMessage::TopicSubscribed {
+            topic_id,
+            result,
+        };
+        if tx.send(message).is_err() {
+            error!("failed to send TopicSubscribed message");
+        }
+    });
+}
+
+pub fn unsubscribe_topic(client: ApiClient, tx: Sender<AppMessage>, topic_id: String) {
+    thread::spawn(move || {
+        let result = client.unsubscribe_topic(&topic_id);
+        let message = AppMessage::TopicUnsubscribed {
+            topic_id,
+            result,
+        };
+        if tx.send(message).is_err() {
+            error!("failed to send TopicUnsubscribed message");
+        }
+    });
+}

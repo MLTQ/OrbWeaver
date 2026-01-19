@@ -52,6 +52,7 @@ pub(crate) const MIGRATIONS: &str = r#"
         id TEXT PRIMARY KEY,
         thread_id TEXT NOT NULL,
         author_peer_id TEXT,
+        author_friendcode TEXT,
         body TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT,
@@ -107,6 +108,9 @@ pub(crate) const MIGRATIONS: &str = r#"
     -- ALTER TABLE peers ADD COLUMN avatar_file_id TEXT;
     -- ALTER TABLE peers ADD COLUMN username TEXT;
     -- ALTER TABLE peers ADD COLUMN bio TEXT;
+
+    -- Migration: Add author_friendcode to posts table (now in base schema)
+    -- ALTER TABLE posts ADD COLUMN author_friendcode TEXT;
 "#;
 
 #[derive(Clone)]
@@ -144,7 +148,10 @@ impl Database {
             self.ensure_thread_member_keys_table(conn)?;
             self.ensure_dm_tables(conn)?;
             self.ensure_blocking_tables(conn)?;
+            self.ensure_ip_blocking_tables(conn)?;
             self.ensure_fts5_search_tables(conn)?;
+            self.ensure_file_download_status_column(conn)?;
+            self.ensure_topic_tables(conn)?;
             Ok(())
         })?;
         Ok(self.newly_created)
@@ -266,7 +273,7 @@ impl Database {
         })
     }
 
-    fn with_conn<T, F>(&self, f: F) -> Result<T>
+    pub fn with_conn<T, F>(&self, f: F) -> Result<T>
     where
         F: FnOnce(&Connection) -> Result<T>,
     {
@@ -276,6 +283,33 @@ impl Database {
             .map_err(|_| anyhow!("database mutex poisoned"))?;
         f(&guard)
     }
+
+    /// Get a setting value by key
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
+        self.with_conn(|conn| {
+            conn.query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                [key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .context("failed to query setting")
+        })
+    }
+
+    /// Set a setting value (upsert)
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = ?2",
+                [key, value],
+            )
+            .context("failed to set setting")?;
+            Ok(())
+        })
+    }
+
     fn ensure_avatar_column(&self, conn: &Connection) -> Result<()> {
         let mut stmt = conn.prepare("PRAGMA table_info(peers)")?;
         let mut has_avatar = false;
@@ -425,6 +459,28 @@ impl Database {
             // Default to 'downloaded' for existing threads (they're already in DB)
             // Values: 'announced', 'downloading', 'downloaded', 'failed'
             conn.execute("ALTER TABLE threads ADD COLUMN sync_status TEXT DEFAULT 'downloaded'", [])?;
+        }
+        Ok(())
+    }
+
+    fn ensure_file_download_status_column(&self, conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare("PRAGMA table_info(files)")?;
+        let mut has_download_status = false;
+        let rows = stmt.query_map([], |row| {
+            let name: String = row.get(1)?;
+            Ok(name)
+        })?;
+        for row in rows {
+            let name = row?;
+            if name.eq_ignore_ascii_case("download_status") {
+                has_download_status = true;
+                break;
+            }
+        }
+        if !has_download_status {
+            // Default to 'available' for existing files (they're already in DB and physically present)
+            // Values: 'pending', 'downloading', 'available', 'failed'
+            conn.execute("ALTER TABLE files ADD COLUMN download_status TEXT DEFAULT 'available'", [])?;
         }
         Ok(())
     }
@@ -677,6 +733,84 @@ impl Database {
              AFTER DELETE ON files BEGIN
                  DELETE FROM files_fts WHERE rowid = old.rowid;
              END",
+            [],
+        )?;
+
+        Ok(())
+    }
+
+    fn ensure_ip_blocking_tables(&self, conn: &Connection) -> Result<()> {
+        // Create peer_ips table for tracking peer IP addresses
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS peer_ips (
+                peer_id TEXT NOT NULL,
+                ip_address TEXT NOT NULL,
+                last_seen INTEGER NOT NULL,
+                PRIMARY KEY (peer_id, ip_address),
+                FOREIGN KEY (peer_id) REFERENCES peers(id)
+            )
+            "#,
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_peer_ips_ip ON peer_ips(ip_address)",
+            [],
+        )?;
+
+        // Create ip_blocks table for user's IP blocking preferences
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS ip_blocks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip_or_range TEXT NOT NULL,
+                block_type TEXT NOT NULL,
+                blocked_at INTEGER NOT NULL,
+                reason TEXT,
+                active INTEGER NOT NULL DEFAULT 1,
+                hit_count INTEGER DEFAULT 0
+            )
+            "#,
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ip_blocks_active ON ip_blocks(active)",
+            [],
+        )?;
+
+        Ok(())
+    }
+
+    fn ensure_topic_tables(&self, conn: &Connection) -> Result<()> {
+        // Create user_topics table - tracks which topics the user subscribes to
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS user_topics (
+                topic_id TEXT PRIMARY KEY,
+                subscribed_at TEXT NOT NULL
+            )
+            "#,
+            [],
+        )?;
+
+        // Create thread_topics table - many-to-many relationship between threads and topics
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS thread_topics (
+                thread_id TEXT NOT NULL,
+                topic_id TEXT NOT NULL,
+                PRIMARY KEY (thread_id, topic_id),
+                FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE
+            )
+            "#,
+            [],
+        )?;
+
+        // Create index for querying threads by topic
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_thread_topics_topic ON thread_topics(topic_id)",
             [],
         )?;
 

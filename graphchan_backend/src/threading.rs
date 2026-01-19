@@ -32,10 +32,56 @@ impl ThreadService {
     pub fn list_threads(&self, limit: usize) -> Result<Vec<ThreadSummary>> {
         self.database.with_repositories(|repos| {
             let threads = repos.threads().list_recent(limit)?;
-            Ok(threads
-                .into_iter()
-                .map(ThreadSummary::from_record)
-                .collect())
+            let mut summaries = Vec::with_capacity(threads.len());
+
+            for thread in threads {
+                // Get first image from the thread's first post
+                let first_image = repos.posts()
+                    .list_for_thread(&thread.id)?
+                    .into_iter()
+                    .next() // Get first post (OP)
+                    .and_then(|post| {
+                        // Get files for the OP post
+                        repos.files().list_for_post(&post.id).ok()
+                    })
+                    .and_then(|files| {
+                        // Find first image file
+                        files.into_iter()
+                            .find(|f| {
+                                f.mime.as_ref()
+                                    .map(|m| m.starts_with("image/"))
+                                    .unwrap_or(false)
+                            })
+                            .map(|record| {
+                                let mut view = crate::files::FileView::from_record(record.clone());
+                                // Set present flag if file_paths is available
+                                if let Some(ref base) = self.file_paths {
+                                    let absolute = base.base.join(&record.path);
+                                    view.present = Some(absolute.exists());
+                                }
+                                view
+                            })
+                    });
+
+                // Load topics for this thread
+                use crate::database::repositories::TopicRepository;
+                let topics = repos.topics().list_thread_topics(&thread.id).unwrap_or_default();
+
+                summaries.push(ThreadSummary {
+                    id: thread.id,
+                    title: thread.title,
+                    creator_peer_id: thread.creator_peer_id,
+                    created_at: thread.created_at,
+                    pinned: thread.pinned,
+                    visibility: thread.visibility,
+                    topic_secret: thread.topic_secret,
+                    sync_status: thread.sync_status,
+                    first_image_file: first_image,
+                    topics,
+                });
+            }
+
+            Ok(summaries)
         })
     }
 
@@ -129,22 +175,52 @@ impl ThreadService {
             created_at: created_at.clone(),
             pinned: input.pinned.unwrap_or(false),
             thread_hash: None, // Will be calculated after posts are added
-            visibility: "social".to_string(),
+            visibility: input.visibility.unwrap_or_else(|| "social".to_string()),
             topic_secret: None,
             sync_status: "downloaded".to_string(), // Locally created thread
         };
 
         let initial_post_body = input.body.clone();
         let author_peer_id = input.creator_peer_id.clone();
+        let topics = input.topics.clone();
 
         self.database.with_repositories(|repos| {
+            use crate::database::repositories::TopicRepository;
+
             repos.threads().create(&thread_record)?;
+
+            // Save topic associations
+            for topic_id in &topics {
+                repos.topics().add_thread_topic(&thread_id, topic_id)?;
+            }
+
             if let Some(body) = initial_post_body {
                 if !body.trim().is_empty() {
+                    // Look up author's short friend code if we have an author_peer_id
+                    let author_friendcode = if let Some(ref author_id) = author_peer_id {
+                        if let Some(peer) = repos.peers().get(author_id)? {
+                            // Reconstruct short friend code from peer record
+                            if let (Some(iroh_peer_id), Some(gpg_fingerprint)) =
+                                (&peer.iroh_peer_id, &peer.gpg_fingerprint) {
+                                Some(crate::identity::encode_short_friendcode(
+                                    iroh_peer_id,
+                                    gpg_fingerprint
+                                ))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
                     let post_record = PostRecord {
                         id: Uuid::new_v4().to_string(),
                         thread_id: thread_id.clone(),
                         author_peer_id,
+                        author_friendcode,
                         body,
                         created_at: created_at.clone(),
                         updated_at: None,
@@ -163,10 +239,44 @@ impl ThreadService {
         if input.body.trim().is_empty() {
             anyhow::bail!("post body may not be empty");
         }
+
+        // Look up author's full friend code (v2 legacy format with multiaddrs for IP extraction)
+        let author_friendcode = if let Some(author_id) = &input.author_peer_id {
+            self.database.with_repositories(|repos| {
+                if let Some(peer) = repos.peers().get(author_id)? {
+                    // Use the stored friendcode if available (contains multiaddrs with IPs)
+                    if let Some(fc) = peer.friendcode {
+                        Ok(Some(fc))
+                    } else {
+                        // Fallback: generate v2 friendcode if we have the required fields
+                        if let (Some(iroh_peer_id), Some(gpg_fingerprint)) =
+                            (&peer.iroh_peer_id, &peer.gpg_fingerprint) {
+                            // Generate v2 friendcode with multiaddrs
+                            let x25519_pubkey = peer.x25519_pubkey.as_deref();
+                            match crate::identity::encode_friendcode(iroh_peer_id, gpg_fingerprint, x25519_pubkey) {
+                                Ok(fc) => Ok(Some(fc)),
+                                Err(err) => {
+                                    tracing::warn!(error = ?err, "failed to generate friendcode for post");
+                                    Ok(None)
+                                }
+                            }
+                        } else {
+                            Ok(None)
+                        }
+                    }
+                } else {
+                    Ok(None)
+                }
+            })?
+        } else {
+            None
+        };
+
         let post_record = PostRecord {
             id: Uuid::new_v4().to_string(),
             thread_id: input.thread_id.clone(),
             author_peer_id: input.author_peer_id.clone(),
+            author_friendcode,
             body: input.body,
             created_at: input.created_at.unwrap_or_else(now_utc_iso),
             updated_at: None,
@@ -191,6 +301,7 @@ impl ThreadService {
             id: stored_post.id,
             thread_id: stored_post.thread_id,
             author_peer_id: stored_post.author_peer_id,
+            author_friendcode: stored_post.author_friendcode,
             body: stored_post.body,
             created_at: stored_post.created_at,
             updated_at: stored_post.updated_at,
@@ -211,6 +322,10 @@ pub struct ThreadSummary {
     pub visibility: String,
     pub topic_secret: Option<String>,
     pub sync_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_image_file: Option<crate::files::FileView>,
+    #[serde(default)]
+    pub topics: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -218,6 +333,8 @@ pub struct PostView {
     pub id: String,
     pub thread_id: String,
     pub author_peer_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_friendcode: Option<String>,
     pub body: String,
     pub created_at: String,
     pub updated_at: Option<String>,
@@ -245,6 +362,13 @@ pub struct CreateThreadInput {
     /// Optional timestamp for imported threads. If None, uses current time.
     #[serde(default)]
     pub created_at: Option<String>,
+    /// Thread visibility: "social" (friends only), "private" (encrypted), or "global" (public discovery)
+    /// DEPRECATED: Use topics field instead
+    #[serde(default)]
+    pub visibility: Option<String>,
+    /// List of topic IDs to announce this thread on (for public discovery)
+    #[serde(default)]
+    pub topics: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -277,6 +401,8 @@ impl ThreadSummary {
             visibility: record.visibility,
             topic_secret: record.topic_secret,
             sync_status: record.sync_status,
+            first_image_file: None, // Not populated in from_record
+            topics: Vec::new(), // Not populated in from_record
         }
     }
 }
@@ -287,6 +413,7 @@ impl PostView {
             id: record.id,
             thread_id: record.thread_id,
             author_peer_id: record.author_peer_id,
+            author_friendcode: record.author_friendcode,
             body: record.body,
             created_at: record.created_at,
             updated_at: record.updated_at,
@@ -320,6 +447,8 @@ mod tests {
                 creator_peer_id: None,
                 pinned: None,
                 created_at: None,
+                visibility: None,
+                topics: vec![],
             })
             .expect("create thread");
         assert_eq!(details.thread.title, "Example");
@@ -337,6 +466,8 @@ mod tests {
                 creator_peer_id: None,
                 pinned: None,
                 created_at: None,
+                visibility: None,
+                topics: vec![],
             })
             .expect("create thread");
 

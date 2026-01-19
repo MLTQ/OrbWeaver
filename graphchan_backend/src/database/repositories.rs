@@ -2,6 +2,7 @@ use super::models::{
     FileRecord, PeerRecord, PostRecord, ReactionRecord, ThreadRecord, ThreadMemberKey,
     DirectMessageRecord, ConversationRecord, BlockedPeerRecord, BlocklistSubscriptionRecord,
     BlocklistEntryRecord, RedactedPostRecord, SearchResultRecord, SearchResultType,
+    PeerIpRecord, IpBlockRecord,
 };
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -103,6 +104,35 @@ pub trait SearchRepository {
     fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResultRecord>>;
 }
 
+pub trait PeerIpRepository {
+    fn update(&self, peer_id: &str, ip_address: &str, last_seen: i64) -> Result<()>;
+    fn get(&self, peer_id: &str) -> Result<Option<PeerIpRecord>>;
+    fn get_by_ip(&self, ip_address: &str) -> Result<Vec<PeerIpRecord>>;
+    fn get_ips(&self, peer_id: &str) -> Result<Vec<String>>;
+    fn list_all(&self) -> Result<Vec<PeerIpRecord>>;
+}
+
+pub trait IpBlockRepository {
+    fn add(&self, record: &IpBlockRecord) -> Result<i64>;
+    fn remove(&self, id: i64) -> Result<()>;
+    fn set_active(&self, id: i64, active: bool) -> Result<()>;
+    fn increment_hit_count(&self, id: i64) -> Result<()>;
+    fn list_active(&self) -> Result<Vec<IpBlockRecord>>;
+    fn list_all(&self) -> Result<Vec<IpBlockRecord>>;
+    fn get(&self, id: i64) -> Result<Option<IpBlockRecord>>;
+}
+
+pub trait TopicRepository {
+    fn subscribe(&self, topic_id: &str) -> Result<()>;
+    fn unsubscribe(&self, topic_id: &str) -> Result<()>;
+    fn list_subscribed(&self) -> Result<Vec<String>>;
+    fn is_subscribed(&self, topic_id: &str) -> Result<bool>;
+    fn add_thread_topic(&self, thread_id: &str, topic_id: &str) -> Result<()>;
+    fn remove_thread_topic(&self, thread_id: &str, topic_id: &str) -> Result<()>;
+    fn list_thread_topics(&self, thread_id: &str) -> Result<Vec<String>>;
+    fn list_threads_for_topic(&self, topic_id: &str) -> Result<Vec<String>>;
+}
+
 /// Thin wrapper that will eventually host rusqlite-backed implementations.
 pub struct SqliteRepositories<'conn> {
     conn: &'conn Connection,
@@ -159,6 +189,18 @@ impl<'conn> SqliteRepositories<'conn> {
 
     pub fn search(&self) -> impl SearchRepository + '_ {
         SqliteSearchRepository { conn: self.conn }
+    }
+
+    pub fn peer_ips(&self) -> impl PeerIpRepository + '_ {
+        SqlitePeerIpRepository { conn: self.conn }
+    }
+
+    pub fn ip_blocks(&self) -> impl IpBlockRepository + '_ {
+        SqliteIpBlockRepository { conn: self.conn }
+    }
+
+    pub fn topics(&self) -> impl TopicRepository + '_ {
+        SqliteTopicRepository { conn: self.conn }
     }
 
     pub fn conn(&self) -> &'conn Connection {
@@ -362,13 +404,14 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
     fn create(&self, record: &PostRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO posts (id, thread_id, author_peer_id, body, created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            INSERT INTO posts (id, thread_id, author_peer_id, author_friendcode, body, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             "#,
             params![
                 record.id,
                 record.thread_id,
                 record.author_peer_id,
+                record.author_friendcode,
                 record.body,
                 record.created_at,
                 record.updated_at
@@ -380,11 +423,12 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
     fn upsert(&self, record: &PostRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO posts (id, thread_id, author_peer_id, body, created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            INSERT INTO posts (id, thread_id, author_peer_id, author_friendcode, body, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             ON CONFLICT(id) DO UPDATE SET
                 thread_id = excluded.thread_id,
                 author_peer_id = excluded.author_peer_id,
+                author_friendcode = excluded.author_friendcode,
                 body = excluded.body,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at
@@ -393,6 +437,7 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
                 record.id,
                 record.thread_id,
                 record.author_peer_id,
+                record.author_friendcode,
                 record.body,
                 record.created_at,
                 record.updated_at
@@ -406,7 +451,7 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
             .conn
             .query_row(
                 r#"
-                SELECT id, thread_id, author_peer_id, body, created_at, updated_at
+                SELECT id, thread_id, author_peer_id, author_friendcode, body, created_at, updated_at
                 FROM posts
                 WHERE id = ?1
                 "#,
@@ -416,9 +461,10 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
                         id: row.get(0)?,
                         thread_id: row.get(1)?,
                         author_peer_id: row.get(2)?,
-                        body: row.get(3)?,
-                        created_at: row.get(4)?,
-                        updated_at: row.get(5)?,
+                        author_friendcode: row.get(3)?,
+                        body: row.get(4)?,
+                        created_at: row.get(5)?,
+                        updated_at: row.get(6)?,
                     })
                 },
             )
@@ -428,7 +474,7 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
     fn list_for_thread(&self, thread_id: &str) -> Result<Vec<PostRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, thread_id, author_peer_id, body, created_at, updated_at
+            SELECT id, thread_id, author_peer_id, author_friendcode, body, created_at, updated_at
             FROM posts
             WHERE thread_id = ?1
             ORDER BY datetime(created_at) ASC
@@ -439,9 +485,10 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
                 id: row.get(0)?,
                 thread_id: row.get(1)?,
                 author_peer_id: row.get(2)?,
-                body: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
+                author_friendcode: row.get(3)?,
+                body: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
             })
         })?;
         let mut posts = Vec::new();
@@ -454,7 +501,7 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
     fn list_recent(&self, limit: usize) -> Result<Vec<PostRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT p.id, p.thread_id, p.author_peer_id, p.body, p.created_at, p.updated_at
+            SELECT p.id, p.thread_id, p.author_peer_id, p.author_friendcode, p.body, p.created_at, p.updated_at
             FROM posts p
             INNER JOIN threads t ON p.thread_id = t.id
             WHERE t.sync_status = 'downloaded'
@@ -467,9 +514,10 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
                 id: row.get(0)?,
                 thread_id: row.get(1)?,
                 author_peer_id: row.get(2)?,
-                body: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
+                author_friendcode: row.get(3)?,
+                body: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
             })
         })?;
         let mut posts = Vec::new();
@@ -646,8 +694,8 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
     fn attach(&self, record: &FileRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO files (id, post_id, path, original_name, mime, blob_id, size_bytes, checksum, ticket)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            INSERT INTO files (id, post_id, path, original_name, mime, blob_id, size_bytes, checksum, ticket, download_status)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             "#,
             params![
                 record.id,
@@ -658,7 +706,8 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
                 record.blob_id,
                 record.size_bytes,
                 record.checksum,
-                record.ticket
+                record.ticket,
+                record.download_status
             ],
         )?;
         Ok(())
@@ -667,8 +716,8 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
     fn upsert(&self, record: &FileRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO files (id, post_id, path, original_name, mime, blob_id, size_bytes, checksum, ticket)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            INSERT INTO files (id, post_id, path, original_name, mime, blob_id, size_bytes, checksum, ticket, download_status)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             ON CONFLICT(id) DO UPDATE SET
                 post_id = excluded.post_id,
                 path = excluded.path,
@@ -677,7 +726,8 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
                 blob_id = excluded.blob_id,
                 size_bytes = excluded.size_bytes,
                 checksum = excluded.checksum,
-                ticket = excluded.ticket
+                ticket = excluded.ticket,
+                download_status = excluded.download_status
             "#,
             params![
                 record.id,
@@ -688,7 +738,8 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
                 record.blob_id,
                 record.size_bytes,
                 record.checksum,
-                record.ticket
+                record.ticket,
+                record.download_status
             ],
         )?;
         Ok(())
@@ -697,7 +748,7 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
     fn list_for_post(&self, post_id: &str) -> Result<Vec<FileRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, post_id, path, original_name, mime, blob_id, size_bytes, checksum, ticket
+            SELECT id, post_id, path, original_name, mime, blob_id, size_bytes, checksum, ticket, download_status
             FROM files
             WHERE post_id = ?1
             ORDER BY id ASC
@@ -714,6 +765,7 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
                 size_bytes: row.get(6)?,
                 checksum: row.get(7)?,
                 ticket: row.get(8)?,
+                download_status: row.get(9)?,
             })
         })?;
         let mut files = Vec::new();
@@ -726,7 +778,7 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
     fn list_for_thread(&self, thread_id: &str) -> Result<Vec<FileRecord>> {
         tracing::info!("FileRepository::list_for_thread called for thread_id: {}", thread_id);
         let query = r#"
-            SELECT f.id, f.post_id, f.path, f.original_name, f.mime, f.blob_id, f.size_bytes, f.checksum, f.ticket
+            SELECT f.id, f.post_id, f.path, f.original_name, f.mime, f.blob_id, f.size_bytes, f.checksum, f.ticket, f.download_status
             FROM files f
             INNER JOIN posts p ON f.post_id = p.id
             WHERE p.thread_id = ?1
@@ -750,6 +802,7 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
                 size_bytes: row.get(6)?,
                 checksum: row.get(7)?,
                 ticket: row.get(8)?,
+                download_status: row.get(9)?,
             })
         })?;
         let mut files = Vec::new();
@@ -764,7 +817,7 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
             .conn
             .query_row(
                 r#"
-                SELECT id, post_id, path, original_name, mime, blob_id, size_bytes, checksum, ticket
+                SELECT id, post_id, path, original_name, mime, blob_id, size_bytes, checksum, ticket, download_status
                 FROM files
                 WHERE id = ?1
                 "#,
@@ -776,10 +829,11 @@ impl<'conn> FileRepository for SqliteFileRepository<'conn> {
                         path: row.get(2)?,
                         original_name: row.get(3)?,
                         mime: row.get(4)?,
-                        blob_id: row.get(5)?,
+                blob_id: row.get(5)?,
                         size_bytes: row.get(6)?,
                         checksum: row.get(7)?,
                         ticket: row.get(8)?,
+                        download_status: row.get(9)?,
                     })
                 },
             )
@@ -1566,7 +1620,7 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
         // Search posts
         let mut stmt = self.conn.prepare(
             r#"SELECT
-                p.id, p.thread_id, p.author_peer_id, p.body, p.created_at, p.updated_at,
+                p.id, p.thread_id, p.author_peer_id, p.author_friendcode, p.body, p.created_at, p.updated_at,
                 bm25(posts_fts) as score,
                 t.title,
                 snippet(posts_fts, -1, '<mark>', '</mark>', '...', 30) as snippet
@@ -1585,14 +1639,15 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
                     id: row.get(0)?,
                     thread_id: row.get(1)?,
                     author_peer_id: row.get(2)?,
-                    body: row.get(3)?,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
+                    author_friendcode: row.get(3)?,
+                    body: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
                 },
                 file: None,
-                bm25_score: row.get(6)?,
-                thread_title: row.get(7)?,
-                snippet: row.get(8)?,
+                bm25_score: row.get(7)?,
+                thread_title: row.get(8)?,
+                snippet: row.get(9)?,
             })
         })?;
 
@@ -1603,8 +1658,8 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
         // Search files
         let mut stmt = self.conn.prepare(
             r#"SELECT
-                p.id, p.thread_id, p.author_peer_id, p.body, p.created_at, p.updated_at,
-                f.id, f.post_id, f.path, f.original_name, f.mime, f.size_bytes, f.blob_id, f.checksum, f.ticket,
+                p.id, p.thread_id, p.author_peer_id, p.author_friendcode, p.body, p.created_at, p.updated_at,
+                f.id, f.post_id, f.path, f.original_name, f.mime, f.size_bytes, f.blob_id, f.checksum, f.ticket, f.download_status,
                 bm25(files_fts) as score,
                 t.title,
                 snippet(files_fts, -1, '<mark>', '</mark>', '...', 30) as snippet
@@ -1624,24 +1679,26 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
                     id: row.get(0)?,
                     thread_id: row.get(1)?,
                     author_peer_id: row.get(2)?,
-                    body: row.get(3)?,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
+                    author_friendcode: row.get(3)?,
+                    body: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
                 },
                 file: Some(FileRecord {
-                    id: row.get(6)?,
-                    post_id: row.get(7)?,
-                    path: row.get(8)?,
-                    original_name: row.get(9)?,
-                    mime: row.get(10)?,
-                    blob_id: row.get(12)?,
-                    size_bytes: row.get(11)?,
-                    checksum: row.get(13)?,
-                    ticket: row.get(14)?,
+                    id: row.get(7)?,
+                    post_id: row.get(8)?,
+                    path: row.get(9)?,
+                    original_name: row.get(10)?,
+                    mime: row.get(11)?,
+                    blob_id: row.get(13)?,
+                    size_bytes: row.get(12)?,
+                    checksum: row.get(14)?,
+                    ticket: row.get(15)?,
+                    download_status: row.get(16)?,
                 }),
-                bm25_score: row.get(15)?,
-                thread_title: row.get(16)?,
-                snippet: row.get(17)?,
+                bm25_score: row.get(17)?,
+                thread_title: row.get(18)?,
+                snippet: row.get(19)?,
             })
         })?;
 
@@ -1658,5 +1715,329 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
 
         results.truncate(limit);
         Ok(results)
+    }
+}
+
+struct SqlitePeerIpRepository<'conn> {
+    conn: &'conn Connection,
+}
+
+impl<'conn> PeerIpRepository for SqlitePeerIpRepository<'conn> {
+    fn update(&self, peer_id: &str, ip_address: &str, last_seen: i64) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO peer_ips (peer_id, ip_address, last_seen)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(peer_id, ip_address) DO UPDATE SET
+                last_seen = excluded.last_seen
+            "#,
+            params![peer_id, ip_address, last_seen],
+        )?;
+        Ok(())
+    }
+
+    fn get(&self, peer_id: &str) -> Result<Option<PeerIpRecord>> {
+        let result = self.conn.query_row(
+            r#"
+            SELECT peer_id, ip_address, last_seen
+            FROM peer_ips
+            WHERE peer_id = ?1
+            ORDER BY last_seen DESC
+            LIMIT 1
+            "#,
+            params![peer_id],
+            |row| {
+                Ok(PeerIpRecord {
+                    peer_id: row.get(0)?,
+                    ip_address: row.get(1)?,
+                    last_seen: row.get(2)?,
+                })
+            },
+        ).optional()?;
+        Ok(result)
+    }
+
+    fn get_by_ip(&self, ip_address: &str) -> Result<Vec<PeerIpRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT peer_id, ip_address, last_seen
+            FROM peer_ips
+            WHERE ip_address = ?1
+            ORDER BY last_seen DESC
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![ip_address], |row| {
+            Ok(PeerIpRecord {
+                peer_id: row.get(0)?,
+                ip_address: row.get(1)?,
+                last_seen: row.get(2)?,
+            })
+        })?;
+
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
+    fn get_ips(&self, peer_id: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT ip_address
+            FROM peer_ips
+            WHERE peer_id = ?1
+            ORDER BY last_seen DESC
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![peer_id], |row| {
+            row.get::<_, String>(0)
+        })?;
+
+        let mut ips = Vec::new();
+        for row in rows {
+            ips.push(row?);
+        }
+        Ok(ips)
+    }
+
+    fn list_all(&self) -> Result<Vec<PeerIpRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT peer_id, ip_address, last_seen
+            FROM peer_ips
+            ORDER BY last_seen DESC
+            "#,
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(PeerIpRecord {
+                peer_id: row.get(0)?,
+                ip_address: row.get(1)?,
+                last_seen: row.get(2)?,
+            })
+        })?;
+
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+}
+
+struct SqliteIpBlockRepository<'conn> {
+    conn: &'conn Connection,
+}
+
+impl<'conn> IpBlockRepository for SqliteIpBlockRepository<'conn> {
+    fn add(&self, record: &IpBlockRecord) -> Result<i64> {
+        self.conn.execute(
+            r#"
+            INSERT INTO ip_blocks (ip_or_range, block_type, blocked_at, reason, active, hit_count)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "#,
+            params![
+                record.ip_or_range,
+                record.block_type,
+                record.blocked_at,
+                record.reason,
+                if record.active { 1 } else { 0 },
+                record.hit_count
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    fn remove(&self, id: i64) -> Result<()> {
+        self.conn.execute(
+            r#"
+            DELETE FROM ip_blocks
+            WHERE id = ?1
+            "#,
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    fn set_active(&self, id: i64, active: bool) -> Result<()> {
+        self.conn.execute(
+            r#"
+            UPDATE ip_blocks
+            SET active = ?1
+            WHERE id = ?2
+            "#,
+            params![if active { 1 } else { 0 }, id],
+        )?;
+        Ok(())
+    }
+
+    fn increment_hit_count(&self, id: i64) -> Result<()> {
+        self.conn.execute(
+            r#"
+            UPDATE ip_blocks
+            SET hit_count = hit_count + 1
+            WHERE id = ?1
+            "#,
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    fn list_active(&self) -> Result<Vec<IpBlockRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, ip_or_range, block_type, blocked_at, reason, active, hit_count
+            FROM ip_blocks
+            WHERE active = 1
+            ORDER BY blocked_at DESC
+            "#,
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(IpBlockRecord {
+                id: row.get(0)?,
+                ip_or_range: row.get(1)?,
+                block_type: row.get(2)?,
+                blocked_at: row.get(3)?,
+                reason: row.get(4)?,
+                active: row.get::<_, i64>(5)? != 0,
+                hit_count: row.get(6)?,
+            })
+        })?;
+
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
+    fn list_all(&self) -> Result<Vec<IpBlockRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, ip_or_range, block_type, blocked_at, reason, active, hit_count
+            FROM ip_blocks
+            ORDER BY blocked_at DESC
+            "#,
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(IpBlockRecord {
+                id: row.get(0)?,
+                ip_or_range: row.get(1)?,
+                block_type: row.get(2)?,
+                blocked_at: row.get(3)?,
+                reason: row.get(4)?,
+                active: row.get::<_, i64>(5)? != 0,
+                hit_count: row.get(6)?,
+            })
+        })?;
+
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
+    fn get(&self, id: i64) -> Result<Option<IpBlockRecord>> {
+        let result = self.conn.query_row(
+            r#"
+            SELECT id, ip_or_range, block_type, blocked_at, reason, active, hit_count
+            FROM ip_blocks
+            WHERE id = ?1
+            "#,
+            params![id],
+            |row| {
+                Ok(IpBlockRecord {
+                    id: row.get(0)?,
+                    ip_or_range: row.get(1)?,
+                    block_type: row.get(2)?,
+                    blocked_at: row.get(3)?,
+                    reason: row.get(4)?,
+                    active: row.get::<_, i64>(5)? != 0,
+                    hit_count: row.get(6)?,
+                })
+            },
+        ).optional()?;
+        Ok(result)
+    }
+}
+
+struct SqliteTopicRepository<'conn> {
+    conn: &'conn Connection,
+}
+
+impl<'conn> TopicRepository for SqliteTopicRepository<'conn> {
+    fn subscribe(&self, topic_id: &str) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT OR IGNORE INTO user_topics (topic_id, subscribed_at) VALUES (?1, ?2)",
+            params![topic_id, now],
+        )?;
+        Ok(())
+    }
+
+    fn unsubscribe(&self, topic_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM user_topics WHERE topic_id = ?1",
+            params![topic_id],
+        )?;
+        Ok(())
+    }
+
+    fn list_subscribed(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT topic_id FROM user_topics ORDER BY subscribed_at DESC"
+        )?;
+        let topics = stmt.query_map([], |row| row.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+        Ok(topics)
+    }
+
+    fn is_subscribed(&self, topic_id: &str) -> Result<bool> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM user_topics WHERE topic_id = ?1",
+            params![topic_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    fn add_thread_topic(&self, thread_id: &str, topic_id: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO thread_topics (thread_id, topic_id) VALUES (?1, ?2)",
+            params![thread_id, topic_id],
+        )?;
+        Ok(())
+    }
+
+    fn remove_thread_topic(&self, thread_id: &str, topic_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM thread_topics WHERE thread_id = ?1 AND topic_id = ?2",
+            params![thread_id, topic_id],
+        )?;
+        Ok(())
+    }
+
+    fn list_thread_topics(&self, thread_id: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT topic_id FROM thread_topics WHERE thread_id = ?1"
+        )?;
+        let topics = stmt.query_map(params![thread_id], |row| row.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+        Ok(topics)
+    }
+
+    fn list_threads_for_topic(&self, topic_id: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT thread_id FROM thread_topics WHERE topic_id = ?1"
+        )?;
+        let threads = stmt.query_map(params![topic_id], |row| row.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+        Ok(threads)
     }
 }
