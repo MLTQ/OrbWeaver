@@ -86,6 +86,23 @@ fn render_search_result(
                     .and_then(|p| p.username.as_deref())
                     .unwrap_or("Unknown");
                 ui.label(RichText::new(format!("by {}", author_name)).italics().weak());
+
+                // Display agent badge if post has agent metadata
+                if let Some(metadata) = &result.post.metadata {
+                    if let Some(agent) = &metadata.agent {
+                        let badge_text = if let Some(version) = &agent.version {
+                            format!("[Agent: {} v{}]", agent.name, version)
+                        } else {
+                            format!("[Agent: {}]", agent.name)
+                        };
+                        ui.label(
+                            RichText::new(badge_text)
+                                .size(10.0)
+                                .color(Color32::from_rgb(150, 200, 255))
+                        );
+                    }
+                }
+
                 ui.add_space(4.0);
             }
 

@@ -332,7 +332,7 @@ async fn handle_message(
 
 fn apply_profile_update(database: &Database, update: ProfileUpdate) -> Result<()> {
     let service = PeerService::new(database.clone());
-    service.update_profile(&update.peer_id, update.avatar_file_id, update.username, update.bio)?;
+    service.update_profile(&update.peer_id, update.avatar_file_id, update.username, update.bio, update.agents)?;
     Ok(())
 }
 
@@ -444,6 +444,7 @@ fn apply_thread_announcement(
                 last_seen: None,
                 avatar_file_id: None,
                 trust_state: "unknown".into(),
+                agents: None,
             };
             peers_repo.upsert(&stub_peer)?;
         }
@@ -472,6 +473,7 @@ fn apply_thread_announcement(
             body: format!("{}...", announcement.preview),
             created_at: announcement.created_at.clone(),
             updated_at: None,
+            metadata: None,
         };
         repos.posts().upsert(&op_post)?;
 
@@ -536,6 +538,7 @@ fn apply_thread_snapshot(
                 last_seen: peer.last_seen.clone(),
                 avatar_file_id: peer.avatar_file_id.clone(),
                 trust_state: peer.trust_state.clone(),
+                agents: None, // TODO: Add agents to PeerView and include here
             };
             peers_repo.upsert(&record)?;
         }
@@ -567,6 +570,7 @@ fn apply_thread_snapshot(
                     last_seen: None,
                     avatar_file_id: None,
                     trust_state: "unknown".into(),
+                    agents: None,
                 };
                 peers_repo.upsert(&stub_peer)?;
             }
@@ -730,6 +734,7 @@ fn create_stub_post_for_blocked_ip(
             body: stub_body,
             created_at: post.created_at.clone(),
             updated_at: post.updated_at.clone(),
+            metadata: None,
         };
 
         // Store stub post
@@ -822,6 +827,10 @@ async fn apply_post_update(database: &Database, ip_blocker: &IpBlockChecker, pos
                 let file_views = files.into_iter()
                     .map(crate::files::FileView::from_record)
                     .collect();
+                // Parse metadata JSON if present
+                let metadata = p.metadata.as_ref().and_then(|json_str| {
+                    serde_json::from_str::<crate::threading::PostMetadata>(json_str).ok()
+                });
                 PostView {
                     id: p.id.clone(),
                     thread_id: p.thread_id.clone(),
@@ -833,6 +842,7 @@ async fn apply_post_update(database: &Database, ip_blocker: &IpBlockChecker, pos
                     parent_post_ids: parents,
                     files: file_views,
                     thread_hash: None,
+                    metadata,
                 }
             }).collect();
 
@@ -956,6 +966,7 @@ async fn apply_post_update(database: &Database, ip_blocker: &IpBlockChecker, pos
                     last_seen: None,
                     avatar_file_id: None,
                     trust_state: "unknown".into(),
+                    agents: None,
                 };
                 peers_repo.upsert(&stub_peer)?;
             }
@@ -978,6 +989,11 @@ fn upsert_post<R>(repo: &R, post: &PostView) -> Result<()>
 where
     R: PostRepository,
 {
+    // Serialize metadata to JSON if present
+    let metadata_json = post.metadata.as_ref().and_then(|meta| {
+        serde_json::to_string(meta).ok()
+    });
+
     let record = PostRecord {
         id: post.id.clone(),
         thread_id: post.thread_id.clone(),
@@ -986,6 +1002,7 @@ where
         body: post.body.clone(),
         created_at: post.created_at.clone(),
         updated_at: post.updated_at.clone(),
+        metadata: metadata_json,
     };
     repo.upsert(&record)?;
     repo.add_relationships(&record.id, &post.parent_post_ids)?;

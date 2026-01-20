@@ -251,14 +251,17 @@ impl Agent {
             let config = self.config.read().await;
             (state.processed_posts.clone(), config.username.clone())
         };
-        let agent_prefix = format!("[{}]:", username);
 
         // Filter out:
-        // 1. Agent's own posts (with prefix)
+        // 1. Agent's own posts (check metadata.agent.name)
         // 2. Posts we've already processed
         let filtered_posts: Vec<_> = recent_posts.posts.iter()
             .filter(|post_view| {
-                let is_agent_post = post_view.post.body.trim().starts_with(&agent_prefix);
+                // Check if post has agent metadata matching our username
+                let is_agent_post = post_view.post.metadata.as_ref()
+                    .and_then(|m| m.agent.as_ref())
+                    .map(|a| a.name == username)
+                    .unwrap_or(false);
                 let already_processed = processed_posts.contains(&post_view.post.id);
                 !is_agent_post && !already_processed
             })
@@ -313,19 +316,28 @@ impl Agent {
                     .map(|p| p.post.thread_id.clone())
                     .ok_or_else(|| anyhow::anyhow!("Could not find thread for post"))?;
 
-                // Get username from config and prefix the body
+                // Get username from config and add to metadata
                 let username = {
                     let config = self.config.read().await;
                     config.username.clone()
                 };
-                let prefixed_body = format!("[{}]: {}", username, content);
+
+                // Create metadata with agent info
+                let metadata = Some(crate::models::PostMetadata {
+                    agent: Some(crate::models::AgentInfo {
+                        name: username,
+                        version: None,
+                    }),
+                    client: Some("graphchan_agent".to_string()),
+                });
 
                 // Create the post
                 let input = crate::models::CreatePostInput {
                     thread_id: thread_id.clone(),
                     author_peer_id: None, // Use default from backend
-                    body: prefixed_body,
+                    body: content,
                     parent_post_ids: vec![post_id.clone()],
+                    metadata,
                 };
 
                 match self.client.create_post(input).await {

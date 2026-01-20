@@ -3,6 +3,21 @@ use serde::{Deserialize, Serialize};
 // Reuse models from graphchan API responses
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentInfo {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadSummary {
     pub id: String,
     pub title: String,
@@ -34,6 +49,8 @@ pub struct PostView {
     pub updated_at: Option<String>,
     #[serde(default)]
     pub parent_post_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<PostMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +69,8 @@ pub struct CreatePostInput {
     pub body: String,
     #[serde(default)]
     pub parent_post_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<PostMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

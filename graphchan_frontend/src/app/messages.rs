@@ -151,6 +151,8 @@ pub enum AppMessage {
         topic_id: String,
         result: Result<(), anyhow::Error>,
     },
+    // Theme management messages
+    ThemeColorLoaded(Result<(u8, u8, u8), anyhow::Error>),
 }
 
 pub(super) fn process_messages(app: &mut GraphchanApp) {
@@ -1006,6 +1008,21 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
                     Err(err) => {
                         error!("Failed to unsubscribe from topic {}: {}", topic_id, err);
                         app.topics_error = Some(err.to_string());
+                    }
+                }
+            }
+            AppMessage::ThemeColorLoaded(result) => {
+                match result {
+                    Ok((r, g, b)) => {
+                        app.primary_color = egui::Color32::from_rgb(r, g, b);
+                        app.theme_dirty = true;
+                        info!("Theme color loaded: RGB({}, {}, {})", r, g, b);
+                    }
+                    Err(err) => {
+                        error!("Failed to load theme color: {}", err);
+                        // Use default color on error
+                        app.primary_color = egui::Color32::from_rgb(64, 128, 255);
+                        app.theme_dirty = true;
                     }
                 }
             }

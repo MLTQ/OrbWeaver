@@ -132,6 +132,9 @@ pub struct GraphchanApp {
     show_topic_manager: bool,
     new_topic_input: String,
     selected_topics: HashSet<String>, // For create thread dialog
+    // Theme customization
+    primary_color: egui::Color32,
+    theme_dirty: bool, // Flag to reapply theme on next frame
 }
 
 #[derive(Debug, Clone)]
@@ -306,6 +309,9 @@ impl GraphchanApp {
             show_topic_manager: false,
             new_topic_input: String::new(),
             selected_topics: HashSet::new(),
+            // Theme customization
+            primary_color: egui::Color32::from_rgb(64, 128, 255), // Default blue
+            theme_dirty: true, // Apply default theme on first frame
         };
         app.spawn_load_threads();
         app.spawn_load_recent_posts();
@@ -316,6 +322,7 @@ impl GraphchanApp {
         app.spawn_load_ip_blocks();
         app.spawn_load_ip_block_stats();
         app.spawn_load_topics();
+        app.spawn_load_theme_color();
         app
     }
 
@@ -403,6 +410,10 @@ impl GraphchanApp {
         self.topics_loading = true;
         self.topics_error = None;
         tasks::load_topics(self.api.clone(), self.tx.clone());
+    }
+
+    fn spawn_load_theme_color(&mut self) {
+        tasks::load_theme_color(self.api.clone(), self.tx.clone());
     }
 
     fn spawn_subscribe_topic(&mut self, topic_id: String) {
@@ -1041,6 +1052,14 @@ impl eframe::App for GraphchanApp {
         // Store context for video player initialization
         if self.ctx.is_none() {
             self.ctx = Some(ctx.clone());
+        }
+
+        // Apply theme if it changed
+        if self.theme_dirty {
+            let color_scheme = crate::color_theme::ColorScheme::from_primary(self.primary_color);
+            let visuals = color_scheme.to_dark_visuals();
+            ctx.set_visuals(visuals);
+            self.theme_dirty = false;
         }
 
         // Handle keyboard input EARLY, before any UI is rendered.

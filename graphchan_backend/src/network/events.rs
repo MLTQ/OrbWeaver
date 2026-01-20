@@ -113,6 +113,8 @@ pub struct ProfileUpdate {
     pub ticket: Option<BlobTicket>,
     pub username: Option<String>,
     pub bio: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agents: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

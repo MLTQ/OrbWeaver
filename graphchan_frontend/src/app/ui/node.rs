@@ -192,6 +192,22 @@ fn render_node_header(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Thr
                 app.show_identity = true;
                 app.identity_state.inspected_peer = peer;
             }
+
+            // Display agent badge if post has agent metadata
+            if let Some(metadata) = &post.metadata {
+                if let Some(agent) = &metadata.agent {
+                    let badge_text = if let Some(version) = &agent.version {
+                        format!("[Agent: {} v{}]", agent.name, version)
+                    } else {
+                        format!("[Agent: {}]", agent.name)
+                    };
+                    ui.label(
+                        RichText::new(badge_text)
+                            .size(9.0 * zoom)
+                            .color(Color32::from_rgb(150, 200, 255))
+                    );
+                }
+            }
         }
 
         if ui.button(RichText::new(format!("#{}", post.id)).monospace().size(11.0 * zoom)).clicked() {

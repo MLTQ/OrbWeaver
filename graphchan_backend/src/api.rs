@@ -23,7 +23,7 @@ use axum::http::{
     HeaderValue, StatusCode,
 };
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use iroh_blobs::store::fs::FsStore;
 use iroh_blobs::ticket::BlobTicket;
@@ -51,6 +51,30 @@ pub struct AppState {
 pub struct UpdateProfileRequest {
     pub username: Option<String>,
     pub bio: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AddAgentRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentsResponse {
+    pub agents: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ThemeColorResponse {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetThemeColorRequest {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
 }
 
 /// Tries to bind to the given port, or finds the next available port
@@ -126,6 +150,11 @@ pub async fn serve_http(
         .route("/peers/self", get(get_self_peer))
         .route("/identity/avatar", post(upload_avatar))
         .route("/identity/profile", post(update_profile_handler))
+        .route("/identity/agents", get(get_agents_handler))
+        .route("/identity/agents", post(add_agent_handler))
+        .route("/identity/agents/:name", delete(remove_agent_handler))
+        .route("/identity/theme_color", get(get_theme_color_handler))
+        .route("/identity/theme_color", post(set_theme_color_handler))
         .route("/blobs/:blob_id", get(get_blob))
         .route("/import", post(import_thread_handler))
         .route("/dms/conversations", get(list_conversations_handler))
@@ -856,6 +885,11 @@ async fn list_recent_posts(
         let files: Vec<FileResponse> = file_views.iter().map(|f| map_file_view(f.clone())).collect();
 
         // Convert to PostView
+        // Parse metadata JSON if present
+        let metadata = post_record.metadata.as_ref().and_then(|json_str| {
+            serde_json::from_str::<crate::threading::PostMetadata>(json_str).ok()
+        });
+
         let post_view = crate::threading::PostView {
             id: post_record.id.clone(),
             thread_id: post_record.thread_id.clone(),
@@ -867,6 +901,7 @@ async fn list_recent_posts(
             parent_post_ids,
             files: file_views,
             thread_hash: None,
+            metadata,
         };
 
         recent_posts.push(RecentPostView {
@@ -1140,7 +1175,7 @@ async fn upload_avatar(
     // We need the local peer ID (fingerprint).
     // We can get it from state.identity.gpg_fingerprint.
     let peer_id = state.identity.gpg_fingerprint.clone();
-    peer_service.update_profile(&peer_id, Some(blob_id.clone()), None, None).map_err(ApiError::Internal)?;
+    peer_service.update_profile(&peer_id, Some(blob_id.clone()), None, None, None).map_err(ApiError::Internal)?;
 
     // Generate ticket
     let hash = Hash::from_str(&blob_id).map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
@@ -1154,6 +1189,7 @@ async fn upload_avatar(
         ticket: Some(ticket),
         username: None,
         bio: None,
+        agents: None,
     };
     state.network.publish_profile_update(update).await.map_err(ApiError::Internal)?;
 
@@ -1167,25 +1203,26 @@ async fn update_profile_handler(
     let peer_service = PeerService::new(state.database.clone());
     let peer_id = state.identity.gpg_fingerprint.clone();
     
-    peer_service.update_profile(&peer_id, None, payload.username.clone(), payload.bio.clone())
+    peer_service.update_profile(&peer_id, None, payload.username.clone(), payload.bio.clone(), None)
         .map_err(ApiError::Internal)?;
 
     // Broadcast ProfileUpdate
-    // We need to fetch the current avatar ticket if we want to include it, 
+    // We need to fetch the current avatar ticket if we want to include it,
     // or we can make the fields optional in ProfileUpdate too.
     // Let's assume ProfileUpdate needs to be updated to support optional fields.
     // For now, let's just send what we have.
-    
+
     // We need to get the current avatar ticket to send it along, or send None if we don't want to change it.
     // But broadcast_profile_update replaces the state usually.
     // Let's check ProfileUpdate struct in network.rs.
-    
+
     let update = ProfileUpdate {
         peer_id: peer_id.clone(),
         avatar_file_id: None,
         ticket: None,
         username: payload.username,
         bio: payload.bio,
+        agents: None,
     };
     state.network.publish_profile_update(update).await.map_err(ApiError::Internal)?;
 
@@ -1725,6 +1762,11 @@ async fn search_handler(
     }).map_err(ApiError::Internal)?;
 
     let results = search_results.into_iter().map(|r| {
+        // Parse metadata JSON if present
+        let metadata = r.post.metadata.as_ref().and_then(|json_str| {
+            serde_json::from_str::<crate::threading::PostMetadata>(json_str).ok()
+        });
+
         SearchResultView {
             result_type: match r.result_type {
                 crate::database::models::SearchResultType::Post => "post".to_string(),
@@ -1741,6 +1783,7 @@ async fn search_handler(
                 parent_post_ids: Vec::new(),
                 files: Vec::new(),
                 thread_hash: None,
+                metadata,
             },
             file: r.file.map(|f| {
                 let download_url = format!("/files/{}", f.id);
@@ -2101,4 +2144,120 @@ async fn unsubscribe_topic_handler(
     // and might cause issues if we re-subscribe later
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_agents_handler(
+    State(state): State<AppState>,
+) -> Result<Json<AgentsResponse>, ApiError> {
+    let peer_service = PeerService::new(state.database.clone());
+
+    let peer = peer_service.get_local_peer().map_err(ApiError::Internal)?;
+    let agents = peer.and_then(|p| p.agents).unwrap_or_default();
+
+    Ok(Json(AgentsResponse { agents }))
+}
+
+async fn add_agent_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<AddAgentRequest>,
+) -> Result<StatusCode, ApiError> {
+    let peer_id = state.identity.gpg_fingerprint.clone();
+    let peer_service = PeerService::new(state.database.clone());
+
+    // Get current agents list
+    let peer = peer_service.get_local_peer().map_err(ApiError::Internal)?;
+    let mut agents = peer.and_then(|p| p.agents).unwrap_or_default();
+
+    // Add new agent if not already present
+    if !agents.contains(&payload.name) {
+        agents.push(payload.name.clone());
+
+        // Update profile with new agents list
+        peer_service.update_profile(&peer_id, None, None, None, Some(agents.clone()))
+            .map_err(ApiError::Internal)?;
+
+        // Broadcast ProfileUpdate
+        let update = ProfileUpdate {
+            peer_id: peer_id.clone(),
+            avatar_file_id: None,
+            ticket: None,
+            username: None,
+            bio: None,
+            agents: Some(agents),
+        };
+        state.network.publish_profile_update(update).await.map_err(ApiError::Internal)?;
+    }
+
+    Ok(StatusCode::OK)
+}
+
+async fn remove_agent_handler(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let peer_id = state.identity.gpg_fingerprint.clone();
+    let peer_service = PeerService::new(state.database.clone());
+
+    // Get current agents list
+    let peer = peer_service.get_local_peer().map_err(ApiError::Internal)?;
+    let mut agents = peer.and_then(|p| p.agents).unwrap_or_default();
+
+    // Remove agent if present
+    if agents.iter().position(|a| a == &name).is_some() {
+        agents.retain(|a| a != &name);
+
+        // Update profile with new agents list
+        peer_service.update_profile(&peer_id, None, None, None, Some(agents.clone()))
+            .map_err(ApiError::Internal)?;
+
+        // Broadcast ProfileUpdate
+        let update = ProfileUpdate {
+            peer_id: peer_id.clone(),
+            avatar_file_id: None,
+            ticket: None,
+            username: None,
+            bio: None,
+            agents: Some(agents),
+        };
+        state.network.publish_profile_update(update).await.map_err(ApiError::Internal)?;
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_theme_color_handler(
+    State(state): State<AppState>,
+) -> Result<Json<ThemeColorResponse>, ApiError> {
+    // Default to a nice blue if not set
+    let default_color = ThemeColorResponse { r: 64, g: 128, b: 255 };
+
+    let color_str = state.database.get_setting("theme_color")
+        .map_err(ApiError::Internal)?;
+
+    if let Some(color_str) = color_str {
+        // Parse format: "r,g,b"
+        let parts: Vec<&str> = color_str.split(',').collect();
+        if parts.len() == 3 {
+            if let (Ok(r), Ok(g), Ok(b)) = (
+                parts[0].parse::<u8>(),
+                parts[1].parse::<u8>(),
+                parts[2].parse::<u8>(),
+            ) {
+                return Ok(Json(ThemeColorResponse { r, g, b }));
+            }
+        }
+    }
+
+    Ok(Json(default_color))
+}
+
+async fn set_theme_color_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<SetThemeColorRequest>,
+) -> Result<StatusCode, ApiError> {
+    let color_str = format!("{},{},{}", payload.r, payload.g, payload.b);
+    state.database.set_setting("theme_color", &color_str)
+        .map_err(ApiError::Internal)?;
+
+    Ok(StatusCode::OK)
 }

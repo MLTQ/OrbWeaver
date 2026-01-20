@@ -710,6 +710,15 @@ pub fn load_topics(client: ApiClient, tx: Sender<AppMessage>) {
     });
 }
 
+pub fn load_theme_color(client: ApiClient, tx: Sender<AppMessage>) {
+    thread::spawn(move || {
+        let result = client.get_theme_color();
+        if tx.send(AppMessage::ThemeColorLoaded(result)).is_err() {
+            error!("failed to send ThemeColorLoaded message");
+        }
+    });
+}
+
 pub fn subscribe_topic(client: ApiClient, tx: Sender<AppMessage>, topic_id: String) {
     thread::spawn(move || {
         let result = client.subscribe_topic(&topic_id);

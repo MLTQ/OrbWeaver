@@ -224,6 +224,7 @@ impl ThreadService {
                         body,
                         created_at: created_at.clone(),
                         updated_at: None,
+                        metadata: None,
                     };
                     repos.posts().create(&post_record)?;
                 }
@@ -272,6 +273,11 @@ impl ThreadService {
             None
         };
 
+        // Serialize metadata to JSON if present
+        let metadata_json = input.metadata.as_ref().and_then(|meta| {
+            serde_json::to_string(meta).ok()
+        });
+
         let post_record = PostRecord {
             id: Uuid::new_v4().to_string(),
             thread_id: input.thread_id.clone(),
@@ -280,6 +286,7 @@ impl ThreadService {
             body: input.body,
             created_at: input.created_at.unwrap_or_else(now_utc_iso),
             updated_at: None,
+            metadata: metadata_json,
         };
 
         let stored_post = self.database.with_repositories(|repos| {
@@ -297,6 +304,11 @@ impl ThreadService {
             Ok(post_record.clone())
         })?;
 
+        // Parse metadata JSON if present
+        let metadata = stored_post.metadata.as_ref().and_then(|json_str| {
+            serde_json::from_str::<PostMetadata>(json_str).ok()
+        });
+
         Ok(PostView {
             id: stored_post.id,
             thread_id: stored_post.thread_id,
@@ -308,6 +320,7 @@ impl ThreadService {
             parent_post_ids: input.parent_post_ids,
             files: Vec::new(),
             thread_hash: None, // Only populated for network broadcast
+            metadata,
         })
     }
 }
@@ -329,6 +342,21 @@ pub struct ThreadSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentInfo {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PostView {
     pub id: String,
     pub thread_id: String,
@@ -344,6 +372,9 @@ pub struct PostView {
     /// Thread hash for synchronization - allows peers to detect they're out of sync
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_hash: Option<String>,
+    /// Post metadata (agent info, client info, etc.)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<PostMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -384,6 +415,9 @@ pub struct CreatePostInput {
     /// Whether to rebroadcast this thread to peers (Host mode)
     #[serde(default = "default_rebroadcast")]
     pub rebroadcast: bool,
+    /// Post metadata (agent info, client info, etc.)
+    #[serde(default)]
+    pub metadata: Option<PostMetadata>,
 }
 
 fn default_rebroadcast() -> bool {
@@ -409,6 +443,11 @@ impl ThreadSummary {
 
 impl PostView {
     fn from_record(record: PostRecord, parent_post_ids: Vec<String>, files: Vec<crate::files::FileView>) -> Self {
+        // Parse metadata JSON if present
+        let metadata = record.metadata.as_ref().and_then(|json_str| {
+            serde_json::from_str::<PostMetadata>(json_str).ok()
+        });
+
         Self {
             id: record.id,
             thread_id: record.thread_id,
@@ -420,6 +459,7 @@ impl PostView {
             parent_post_ids,
             files,
             thread_hash: None, // Only populated for network broadcast
+            metadata,
         }
     }
 }

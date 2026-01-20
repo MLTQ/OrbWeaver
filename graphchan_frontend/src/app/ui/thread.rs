@@ -322,6 +322,23 @@ impl GraphchanApp {
                                             self.show_identity = true;
                                             self.identity_state.inspected_peer = peer.clone();
                                         }
+
+                                        // Display agent badge if post has agent metadata
+                                        if let Some(metadata) = &post.metadata {
+                                            if let Some(agent) = &metadata.agent {
+                                                ui.add_space(4.0);
+                                                let badge_text = if let Some(version) = &agent.version {
+                                                    format!("[Agent: {} v{}]", agent.name, version)
+                                                } else {
+                                                    format!("[Agent: {}]", agent.name)
+                                                };
+                                                ui.label(
+                                                    RichText::new(badge_text)
+                                                        .size(10.0)
+                                                        .color(Color32::from_rgb(150, 200, 255))
+                                                );
+                                            }
+                                        }
                                     });
                                 }
                                 ui.separator();

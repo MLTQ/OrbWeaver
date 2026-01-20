@@ -404,8 +404,8 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
     fn create(&self, record: &PostRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO posts (id, thread_id, author_peer_id, author_friendcode, body, created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            INSERT INTO posts (id, thread_id, author_peer_id, author_friendcode, body, created_at, updated_at, metadata)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
             "#,
             params![
                 record.id,
@@ -414,7 +414,8 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
                 record.author_friendcode,
                 record.body,
                 record.created_at,
-                record.updated_at
+                record.updated_at,
+                record.metadata
             ],
         )?;
         Ok(())
@@ -423,15 +424,16 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
     fn upsert(&self, record: &PostRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO posts (id, thread_id, author_peer_id, author_friendcode, body, created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            INSERT INTO posts (id, thread_id, author_peer_id, author_friendcode, body, created_at, updated_at, metadata)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
             ON CONFLICT(id) DO UPDATE SET
                 thread_id = excluded.thread_id,
                 author_peer_id = excluded.author_peer_id,
                 author_friendcode = excluded.author_friendcode,
                 body = excluded.body,
                 created_at = excluded.created_at,
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at,
+                metadata = excluded.metadata
             "#,
             params![
                 record.id,
@@ -440,7 +442,8 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
                 record.author_friendcode,
                 record.body,
                 record.created_at,
-                record.updated_at
+                record.updated_at,
+                record.metadata
             ],
         )?;
         Ok(())
@@ -451,7 +454,7 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
             .conn
             .query_row(
                 r#"
-                SELECT id, thread_id, author_peer_id, author_friendcode, body, created_at, updated_at
+                SELECT id, thread_id, author_peer_id, author_friendcode, body, created_at, updated_at, metadata
                 FROM posts
                 WHERE id = ?1
                 "#,
@@ -465,6 +468,7 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
                         body: row.get(4)?,
                         created_at: row.get(5)?,
                         updated_at: row.get(6)?,
+                        metadata: row.get(7)?,
                     })
                 },
             )
@@ -474,7 +478,7 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
     fn list_for_thread(&self, thread_id: &str) -> Result<Vec<PostRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, thread_id, author_peer_id, author_friendcode, body, created_at, updated_at
+            SELECT id, thread_id, author_peer_id, author_friendcode, body, created_at, updated_at, metadata
             FROM posts
             WHERE thread_id = ?1
             ORDER BY datetime(created_at) ASC
@@ -489,6 +493,7 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
                 body: row.get(4)?,
                 created_at: row.get(5)?,
                 updated_at: row.get(6)?,
+                metadata: row.get(7)?,
             })
         })?;
         let mut posts = Vec::new();
@@ -501,7 +506,7 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
     fn list_recent(&self, limit: usize) -> Result<Vec<PostRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT p.id, p.thread_id, p.author_peer_id, p.author_friendcode, p.body, p.created_at, p.updated_at
+            SELECT p.id, p.thread_id, p.author_peer_id, p.author_friendcode, p.body, p.created_at, p.updated_at, p.metadata
             FROM posts p
             INNER JOIN threads t ON p.thread_id = t.id
             WHERE t.sync_status = 'downloaded'
@@ -518,6 +523,7 @@ impl<'conn> PostRepository for SqlitePostRepository<'conn> {
                 body: row.get(4)?,
                 created_at: row.get(5)?,
                 updated_at: row.get(6)?,
+                metadata: row.get(7)?,
             })
         })?;
         let mut posts = Vec::new();
@@ -586,8 +592,8 @@ impl<'conn> PeerRepository for SqlitePeerRepository<'conn> {
     fn upsert(&self, record: &PeerRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO peers (id, alias, friendcode, iroh_peer_id, gpg_fingerprint, x25519_pubkey, last_seen, trust_state, avatar_file_id, username, bio)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            INSERT INTO peers (id, alias, friendcode, iroh_peer_id, gpg_fingerprint, x25519_pubkey, last_seen, trust_state, avatar_file_id, username, bio, agents)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
             ON CONFLICT(id) DO UPDATE SET
                 alias = excluded.alias,
                 friendcode = excluded.friendcode,
@@ -598,7 +604,8 @@ impl<'conn> PeerRepository for SqlitePeerRepository<'conn> {
                 trust_state = excluded.trust_state,
                 avatar_file_id = excluded.avatar_file_id,
                 username = excluded.username,
-                bio = excluded.bio
+                bio = excluded.bio,
+                agents = excluded.agents
             "#,
             params![
                 record.id,
@@ -611,7 +618,8 @@ impl<'conn> PeerRepository for SqlitePeerRepository<'conn> {
                 record.trust_state,
                 record.avatar_file_id,
                 record.username,
-                record.bio
+                record.bio,
+                record.agents
             ],
         )?;
         Ok(())
@@ -622,7 +630,7 @@ impl<'conn> PeerRepository for SqlitePeerRepository<'conn> {
             .conn
             .query_row(
                 r#"
-                SELECT id, alias, friendcode, iroh_peer_id, gpg_fingerprint, x25519_pubkey, last_seen, trust_state, avatar_file_id, username, bio
+                SELECT id, alias, friendcode, iroh_peer_id, gpg_fingerprint, x25519_pubkey, last_seen, trust_state, avatar_file_id, username, bio, agents
                 FROM peers
                 WHERE id = ?1
                 "#,
@@ -640,6 +648,7 @@ impl<'conn> PeerRepository for SqlitePeerRepository<'conn> {
                         avatar_file_id: row.get(8)?,
                         username: row.get(9)?,
                         bio: row.get(10)?,
+                        agents: row.get(11)?,
                     })
                 },
             )
@@ -650,7 +659,7 @@ impl<'conn> PeerRepository for SqlitePeerRepository<'conn> {
     fn list(&self) -> Result<Vec<PeerRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, alias, friendcode, iroh_peer_id, gpg_fingerprint, x25519_pubkey, last_seen, trust_state, avatar_file_id, username, bio
+            SELECT id, alias, friendcode, iroh_peer_id, gpg_fingerprint, x25519_pubkey, last_seen, trust_state, avatar_file_id, username, bio, agents
             FROM peers
             ORDER BY datetime(COALESCE(last_seen, '1970-01-01T00:00:00Z')) DESC
             "#,
@@ -668,6 +677,7 @@ impl<'conn> PeerRepository for SqlitePeerRepository<'conn> {
                 avatar_file_id: row.get(8)?,
                 username: row.get(9)?,
                 bio: row.get(10)?,
+                agents: row.get(11)?,
             })
         })?;
         let mut peers = Vec::new();
@@ -1620,7 +1630,7 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
         // Search posts
         let mut stmt = self.conn.prepare(
             r#"SELECT
-                p.id, p.thread_id, p.author_peer_id, p.author_friendcode, p.body, p.created_at, p.updated_at,
+                p.id, p.thread_id, p.author_peer_id, p.author_friendcode, p.body, p.created_at, p.updated_at, p.metadata,
                 bm25(posts_fts) as score,
                 t.title,
                 snippet(posts_fts, -1, '<mark>', '</mark>', '...', 30) as snippet
@@ -1643,11 +1653,12 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
                     body: row.get(4)?,
                     created_at: row.get(5)?,
                     updated_at: row.get(6)?,
+                    metadata: row.get(7)?,
                 },
                 file: None,
-                bm25_score: row.get(7)?,
-                thread_title: row.get(8)?,
-                snippet: row.get(9)?,
+                bm25_score: row.get(8)?,
+                thread_title: row.get(9)?,
+                snippet: row.get(10)?,
             })
         })?;
 
@@ -1658,7 +1669,7 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
         // Search files
         let mut stmt = self.conn.prepare(
             r#"SELECT
-                p.id, p.thread_id, p.author_peer_id, p.author_friendcode, p.body, p.created_at, p.updated_at,
+                p.id, p.thread_id, p.author_peer_id, p.author_friendcode, p.body, p.created_at, p.updated_at, p.metadata,
                 f.id, f.post_id, f.path, f.original_name, f.mime, f.size_bytes, f.blob_id, f.checksum, f.ticket, f.download_status,
                 bm25(files_fts) as score,
                 t.title,
@@ -1683,22 +1694,23 @@ impl<'conn> SearchRepository for SqliteSearchRepository<'conn> {
                     body: row.get(4)?,
                     created_at: row.get(5)?,
                     updated_at: row.get(6)?,
+                    metadata: row.get(7)?,
                 },
                 file: Some(FileRecord {
-                    id: row.get(7)?,
-                    post_id: row.get(8)?,
-                    path: row.get(9)?,
-                    original_name: row.get(10)?,
-                    mime: row.get(11)?,
-                    blob_id: row.get(13)?,
-                    size_bytes: row.get(12)?,
-                    checksum: row.get(14)?,
-                    ticket: row.get(15)?,
-                    download_status: row.get(16)?,
+                    id: row.get(8)?,
+                    post_id: row.get(9)?,
+                    path: row.get(10)?,
+                    original_name: row.get(11)?,
+                    mime: row.get(12)?,
+                    size_bytes: row.get(13)?,
+                    blob_id: row.get(14)?,
+                    checksum: row.get(15)?,
+                    ticket: row.get(16)?,
+                    download_status: row.get(17)?,
                 }),
-                bm25_score: row.get(17)?,
-                thread_title: row.get(18)?,
-                snippet: row.get(19)?,
+                bm25_score: row.get(18)?,
+                thread_title: row.get(19)?,
+                snippet: row.get(20)?,
             })
         })?;
 

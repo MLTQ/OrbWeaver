@@ -1,5 +1,6 @@
 pub mod api;
 pub mod app;
+pub mod color_theme;
 pub mod importer;
 pub mod models;
 

@@ -44,6 +44,7 @@ impl PeerService {
                 last_seen: Some(now_utc_iso()),
                 avatar_file_id: None,
                 trust_state: "trusted".into(),
+                agents: None,
             };
             repos.peers().upsert(&record)?;
             Ok(PeerView::from_record(record))
@@ -74,7 +75,7 @@ impl PeerService {
         })
     }
 
-    pub fn update_profile(&self, peer_id: &str, avatar_file_id: Option<String>, username: Option<String>, bio: Option<String>) -> Result<()> {
+    pub fn update_profile(&self, peer_id: &str, avatar_file_id: Option<String>, username: Option<String>, bio: Option<String>, agents: Option<Vec<String>>) -> Result<()> {
         self.database.with_repositories(|repos| {
             if let Some(mut record) = repos.peers().get(peer_id)? {
                 if avatar_file_id.is_some() {
@@ -85,6 +86,10 @@ impl PeerService {
                 }
                 if bio.is_some() {
                     record.bio = bio;
+                }
+                if let Some(agents_list) = agents {
+                    // Serialize agents to JSON
+                    record.agents = serde_json::to_string(&agents_list).ok();
                 }
                 repos.peers().upsert(&record)?;
             } else {
@@ -109,6 +114,8 @@ pub struct PeerView {
     pub last_seen: Option<String>,
     pub avatar_file_id: Option<String>,
     pub trust_state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agents: Option<Vec<String>>,
 }
 
 impl PeerView {
@@ -120,6 +127,11 @@ impl PeerView {
             }
             _ => None,
         };
+
+        // Parse agents JSON
+        let agents = record.agents.as_ref().and_then(|json_str| {
+            serde_json::from_str::<Vec<String>>(json_str).ok()
+        });
 
         Self {
             id: record.id,
@@ -134,6 +146,7 @@ impl PeerView {
             last_seen: record.last_seen,
             avatar_file_id: record.avatar_file_id,
             trust_state: record.trust_state,
+            agents,
         }
     }
 }
@@ -151,6 +164,7 @@ fn payload_to_peer_record(friendcode: &str, payload: &FriendCodePayload) -> Peer
         last_seen: Some(now_utc_iso()),
         avatar_file_id: None,
         trust_state: "unknown".into(),
+        agents: None,
     }
 }
 
