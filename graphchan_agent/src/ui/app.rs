@@ -7,6 +7,7 @@ use crate::config::AgentConfig;
 use super::settings::SettingsPanel;
 use super::character::CharacterPanel;
 use super::comfy_settings::ComfySettingsPanel;
+use super::avatar::AvatarSet;
 
 pub struct AgentApp {
     events: Vec<AgentEvent>,
@@ -18,6 +19,7 @@ pub struct AgentApp {
     settings_panel: SettingsPanel,
     character_panel: CharacterPanel,
     comfy_settings_panel: ComfySettingsPanel,
+    avatars: Option<AvatarSet>,
 }
 
 impl AgentApp {
@@ -39,12 +41,35 @@ impl AgentApp {
             settings_panel: SettingsPanel::new(config.clone()),
             character_panel: CharacterPanel::new(config),
             comfy_settings_panel,
+            avatars: None, // Will be loaded on first frame when egui context is available
+        }
+    }
+
+    fn load_avatars(&mut self, ctx: &egui::Context, config: &AgentConfig) {
+        let idle = config.avatar_idle.as_deref();
+        let thinking = config.avatar_thinking.as_deref();
+        let active = config.avatar_active.as_deref();
+
+        let avatars = AvatarSet::load(ctx, idle, thinking, active);
+
+        if avatars.has_avatars() {
+            tracing::info!("Loaded avatars successfully");
+            self.avatars = Some(avatars);
+        } else {
+            tracing::info!("No avatars configured, using emoji fallback");
+            self.avatars = None;
         }
     }
 }
 
 impl eframe::App for AgentApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Load avatars on first frame when context is available
+        if self.avatars.is_none() {
+            let config = self.settings_panel.config.clone();
+            self.load_avatars(ctx, &config);
+        }
+
         // Poll for new events from agent (non-blocking)
         while let Ok(event) = self.event_rx.try_recv() {
             match &event {
@@ -55,11 +80,11 @@ impl eframe::App for AgentApp {
             }
             self.events.push(event);
         }
-        
+
         egui::CentralPanel::default().show(ctx, |ui| {
             // Header with agent sprite
             ui.horizontal(|ui| {
-                super::sprite::render_agent_emoji(ui, &self.current_state);
+                super::sprite::render_agent_sprite(ui, &self.current_state, self.avatars.as_mut());
                 ui.vertical(|ui| {
                     ui.heading("Graphchan Agent");
                     ui.label(format!("Status: {:?}", self.current_state));

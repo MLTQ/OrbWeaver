@@ -174,6 +174,14 @@ pub struct AgentConfig {
     #[serde(default)]
     pub character_avatar_path: Option<String>,
 
+    // Animated avatars for UI (local display only, not transmitted)
+    #[serde(default)]
+    pub avatar_idle: Option<String>,      // Path to idle avatar (PNG/JPG/GIF)
+    #[serde(default)]
+    pub avatar_thinking: Option<String>,  // Path to thinking avatar
+    #[serde(default)]
+    pub avatar_active: Option<String>,    // Path to active/working avatar
+
     // Legacy fields for backward compatibility
     #[serde(default)]
     pub max_posts_per_hour: u32,
@@ -252,6 +260,9 @@ impl Default for AgentConfig {
             character_scenario: String::new(),
             character_example_dialogue: String::new(),
             character_avatar_path: None,
+            avatar_idle: None,
+            avatar_thinking: None,
+            avatar_active: None,
             max_posts_per_hour: 10,
         }
     }

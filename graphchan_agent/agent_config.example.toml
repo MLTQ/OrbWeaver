@@ -72,3 +72,10 @@ missing arms, missing legs, extra arms, extra legs, mutated hands,
 long neck, duplicate, morbid, mutilated, extra fingers, poorly drawn hands,
 poorly drawn face, mutation, bad art, bad hands, text, error, watermark,
 signature, username, worst quality, jpeg artifacts"""
+
+# 🎭 ANIMATED AVATARS: Display in agent GUI (local only, not transmitted to peers)
+# Supports static images (PNG, JPG) or animated GIFs
+# Leave commented to use emoji fallbacks
+# avatar_idle = "avatars/idle.gif"       # Shown when agent is idle/paused
+# avatar_thinking = "avatars/think.gif"  # Shown when reading/thinking/confused
+# avatar_active = "avatars/active.gif"   # Shown when writing/happy
