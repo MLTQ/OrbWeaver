@@ -63,6 +63,20 @@ pub struct AgentsResponse {
     pub agents: Vec<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ThemeColorResponse {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetThemeColorRequest {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
 /// Tries to bind to the given port, or finds the next available port
 async fn find_available_port(start_port: u16) -> Result<(TcpListener, u16)> {
     const MAX_PORT_ATTEMPTS: u16 = 100;
@@ -139,6 +153,8 @@ pub async fn serve_http(
         .route("/identity/agents", get(get_agents_handler))
         .route("/identity/agents", post(add_agent_handler))
         .route("/identity/agents/:name", delete(remove_agent_handler))
+        .route("/identity/theme_color", get(get_theme_color_handler))
+        .route("/identity/theme_color", post(set_theme_color_handler))
         .route("/blobs/:blob_id", get(get_blob))
         .route("/import", post(import_thread_handler))
         .route("/dms/conversations", get(list_conversations_handler))
@@ -2207,4 +2223,41 @@ async fn remove_agent_handler(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_theme_color_handler(
+    State(state): State<AppState>,
+) -> Result<Json<ThemeColorResponse>, ApiError> {
+    // Default to a nice blue if not set
+    let default_color = ThemeColorResponse { r: 64, g: 128, b: 255 };
+
+    let color_str = state.database.get_setting("theme_color")
+        .map_err(ApiError::Internal)?;
+
+    if let Some(color_str) = color_str {
+        // Parse format: "r,g,b"
+        let parts: Vec<&str> = color_str.split(',').collect();
+        if parts.len() == 3 {
+            if let (Ok(r), Ok(g), Ok(b)) = (
+                parts[0].parse::<u8>(),
+                parts[1].parse::<u8>(),
+                parts[2].parse::<u8>(),
+            ) {
+                return Ok(Json(ThemeColorResponse { r, g, b }));
+            }
+        }
+    }
+
+    Ok(Json(default_color))
+}
+
+async fn set_theme_color_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<SetThemeColorRequest>,
+) -> Result<StatusCode, ApiError> {
+    let color_str = format!("{},{},{}", payload.r, payload.g, payload.b);
+    state.database.set_setting("theme_color", &color_str)
+        .map_err(ApiError::Internal)?;
+
+    Ok(StatusCode::OK)
 }

@@ -444,6 +444,35 @@ impl ApiClient {
         Ok(())
     }
 
+    pub fn get_theme_color(&self) -> Result<(u8, u8, u8)> {
+        #[derive(serde::Deserialize)]
+        struct ThemeColorResponse {
+            r: u8,
+            g: u8,
+            b: u8,
+        }
+
+        let url = self.url("/identity/theme_color")?;
+        let response: ThemeColorResponse = self.client.get(url).send()?.error_for_status()?.json()?;
+        Ok((response.r, response.g, response.b))
+    }
+
+    pub fn set_theme_color(&self, r: u8, g: u8, b: u8) -> Result<()> {
+        #[derive(serde::Serialize)]
+        struct SetThemeColorRequest {
+            r: u8,
+            g: u8,
+            b: u8,
+        }
+
+        let url = self.url("/identity/theme_color")?;
+        self.client.post(url)
+            .json(&SetThemeColorRequest { r, g, b })
+            .send()?
+            .error_for_status()?;
+        Ok(())
+    }
+
     fn url(&self, path: &str) -> Result<Url> {
         let mut url = Url::parse(&self.base_url).context("invalid base URL")?;
         url.set_path(path.trim_start_matches('/'));
