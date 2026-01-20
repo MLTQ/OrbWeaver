@@ -13,6 +13,8 @@ pub struct PeerRecord {
     pub last_seen: Option<String>,
     pub avatar_file_id: Option<String>,
     pub trust_state: String,
+    /// JSON-encoded Vec<String> of authorized agent names
+    pub agents: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +40,8 @@ pub struct PostRecord {
     pub body: String,
     pub created_at: String,
     pub updated_at: Option<String>,
+    /// JSON-encoded PostMetadata
+    pub metadata: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

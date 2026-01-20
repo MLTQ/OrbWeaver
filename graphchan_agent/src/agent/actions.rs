@@ -19,8 +19,9 @@ impl ActionExecutor {
             author_peer_id: None, // Will use default from backend
             body,
             parent_post_ids: parent_ids,
+            metadata: None, // No metadata for direct action calls
         };
-        
+
         let post = self.client.create_post(input).await?;
         Ok(post.id)
     }

@@ -151,6 +151,8 @@ impl Database {
             self.ensure_ip_blocking_tables(conn)?;
             self.ensure_fts5_search_tables(conn)?;
             self.ensure_file_download_status_column(conn)?;
+            self.ensure_post_metadata_column(conn)?;
+            self.ensure_peers_agents_column(conn)?;
             self.ensure_topic_tables(conn)?;
             Ok(())
         })?;
@@ -481,6 +483,48 @@ impl Database {
             // Default to 'available' for existing files (they're already in DB and physically present)
             // Values: 'pending', 'downloading', 'available', 'failed'
             conn.execute("ALTER TABLE files ADD COLUMN download_status TEXT DEFAULT 'available'", [])?;
+        }
+        Ok(())
+    }
+
+    fn ensure_post_metadata_column(&self, conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare("PRAGMA table_info(posts)")?;
+        let mut has_metadata = false;
+        let rows = stmt.query_map([], |row| {
+            let name: String = row.get(1)?;
+            Ok(name)
+        })?;
+        for row in rows {
+            let name = row?;
+            if name.eq_ignore_ascii_case("metadata") {
+                has_metadata = true;
+                break;
+            }
+        }
+        if !has_metadata {
+            // JSON-encoded PostMetadata (agent info, client info, etc.)
+            conn.execute("ALTER TABLE posts ADD COLUMN metadata TEXT", [])?;
+        }
+        Ok(())
+    }
+
+    fn ensure_peers_agents_column(&self, conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare("PRAGMA table_info(peers)")?;
+        let mut has_agents = false;
+        let rows = stmt.query_map([], |row| {
+            let name: String = row.get(1)?;
+            Ok(name)
+        })?;
+        for row in rows {
+            let name = row?;
+            if name.eq_ignore_ascii_case("agents") {
+                has_agents = true;
+                break;
+            }
+        }
+        if !has_agents {
+            // JSON-encoded Vec<String> of authorized agent names
+            conn.execute("ALTER TABLE peers ADD COLUMN agents TEXT", [])?;
         }
         Ok(())
     }

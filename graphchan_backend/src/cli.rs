@@ -401,6 +401,7 @@ impl CliSession {
             parent_post_ids: vec![],
             created_at: None, // Use current time for interactive posts
             rebroadcast: true, // CLI defaults to Host mode
+            metadata: None,
         };
         let post = self.thread_service.create_post(input)?;
         println!("Posted message {}", post.id);
