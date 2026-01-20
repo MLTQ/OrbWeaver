@@ -66,6 +66,14 @@ if [ -n "$FFMPEG_BUILD_RS" ]; then
 ' "$FFMPEG_BUILD_RS"
         rm -f "$FFMPEG_BUILD_RS.bak"
     fi
+
+    # Patch 4: Fix FFmpeg 7.0 compatibility - remove avfft.h which was removed in FFmpeg 7.0
+    if grep -q 'avfft\.h' "$FFMPEG_BUILD_RS" 2>/dev/null; then
+        echo "  Patching FFmpeg build.rs (FFmpeg 7.0 compatibility - remove avfft.h)..."
+        # Remove the line that includes avfft.h
+        sed -i.bak '/avfft\.h/d' "$FFMPEG_BUILD_RS"
+        rm -f "$FFMPEG_BUILD_RS.bak"
+    fi
 else
     echo "FFmpeg build.rs not found (might be using system library)"
 fi

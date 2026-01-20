@@ -35,10 +35,18 @@ jobs:
       - name: Install FFmpeg via vcpkg
         run: |
           vcpkg install pkgconf:x64-windows-static
-          vcpkg install ffmpeg:x64-windows-static
+          vcpkg install ffmpeg[core,avcodec,avformat,avfilter,avdevice,swresample,swscale]:x64-windows-static
           echo "VCPKG_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "C:\vcpkg\installed\x64-windows-static\tools\pkgconf" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "PKG_CONFIG_PATH=C:\vcpkg\installed\x64-windows-static\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Set FFmpeg paths for bindgen
+        run: |
+          echo "FFMPEG_DIR=C:\vcpkg\installed\x64-windows-static" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "FFMPEG_INCLUDE_DIR=C:\vcpkg\installed\x64-windows-static\include" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "FFMPEG_LIB_DIR=C:\vcpkg\installed\x64-windows-static\lib" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          # Tell bindgen to use the vcpkg include directory
+          echo "BINDGEN_EXTRA_CLANG_ARGS=-IC:\vcpkg\installed\x64-windows-static\include" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Fetch dependencies
         run: cargo fetch
@@ -132,7 +140,9 @@ jobs:
           path: target/release/graphchan_desktop
 
   create-release:
+    # Run even if some builds fail, but need at least one to succeed
     needs: [build-windows, build-macos, build-linux]
+    if: always() && (needs.build-windows.result == 'success' || needs.build-macos.result == 'success' || needs.build-linux.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -143,6 +153,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+        continue-on-error: true
 
       - name: Create release tag
         id: release_info
@@ -160,10 +171,29 @@ jobs:
       - name: Prepare binaries for release
         run: |
           cd artifacts
-          cp graphchan_desktop-windows/graphchan_desktop.exe ../graphchan_desktop-windows.exe
-          cp graphchan_desktop-macos/graphchan_desktop ../graphchan_desktop-macos
-          cp graphchan_desktop-linux/graphchan_desktop ../graphchan_desktop-linux
-          chmod +x ../graphchan_desktop-macos ../graphchan_desktop-linux
+          # Only copy artifacts that exist (from successful builds)
+          if [ -d "graphchan_desktop-windows" ]; then
+            cp graphchan_desktop-windows/graphchan_desktop.exe ../graphchan_desktop-windows.exe
+            echo "Windows build included"
+          else
+            echo "Windows build not available (build may have failed)"
+          fi
+
+          if [ -d "graphchan_desktop-macos" ]; then
+            cp graphchan_desktop-macos/graphchan_desktop ../graphchan_desktop-macos
+            chmod +x ../graphchan_desktop-macos
+            echo "macOS build included"
+          else
+            echo "macOS build not available (build may have failed)"
+          fi
+
+          if [ -d "graphchan_desktop-linux" ]; then
+            cp graphchan_desktop-linux/graphchan_desktop ../graphchan_desktop-linux
+            chmod +x ../graphchan_desktop-linux
+            echo "Linux build included"
+          else
+            echo "Linux build not available (build may have failed)"
+          fi
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -173,7 +203,13 @@ jobs:
           draft: false
           prerelease: ${{ steps.release_info.outputs.is_tag == 'false' }}
           generate_release_notes: true
+          body: |
+            Build Status:
+            - Windows: ${{ needs.build-windows.result }}
+            - macOS: ${{ needs.build-macos.result }}
+            - Linux: ${{ needs.build-linux.result }}
           files: |
             graphchan_desktop-windows.exe
             graphchan_desktop-macos
             graphchan_desktop-linux
+          fail_on_unmatched_files: false
