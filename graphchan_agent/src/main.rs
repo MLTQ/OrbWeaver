@@ -4,6 +4,7 @@ mod character_card;
 mod comfy_client;
 mod comfy_workflow;
 mod config;
+mod database;
 mod models;
 mod ui;
 

@@ -18,11 +18,13 @@ base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
 shell-words = "1.1"
 infer = "0.15"
-iroh-base = { version = "0.94.1", features = ["key"] }
-iroh = { version = "0.94.0", features = ["discovery-pkarr-dht", "discovery-local-network"] }
-iroh-relay = "0.94.0"
-iroh-blobs = "0.96.0"
-iroh-gossip = "0.94.0"
+iroh-base = { version = "0.95", features = ["key"] }
+iroh = { version = "0.95", features = ["discovery-pkarr-dht", "discovery-local-network"] }
+iroh-relay = "0.95"
+iroh-blobs = "0.97"
+iroh-gossip = "0.95"
+distributed-topic-tracker = "0.2"
+ed25519-dalek = "3.0.0-pre.1"
 rand = { version = "0.9", features = ["std"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 tokio-util = { version = "0.7", features = ["io"] }

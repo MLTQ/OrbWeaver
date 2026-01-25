@@ -1,8 +1,10 @@
 pub mod reasoning;
 pub mod actions;
 pub mod image_gen;
+pub mod trajectory;
 
 use anyhow::Result;
+use chrono::{Duration as ChronoDuration, Utc};
 use flume::Sender;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -11,6 +13,7 @@ use tokio::time::{sleep, Duration};
 
 use crate::api_client::GraphchanClient;
 use crate::config::AgentConfig;
+use crate::database::AgentDatabase;
 
 #[derive(Debug, Clone)]
 pub enum AgentVisualState {
@@ -59,6 +62,8 @@ pub struct Agent {
     event_tx: Sender<AgentEvent>,
     reasoning: Arc<RwLock<reasoning::ReasoningEngine>>,
     image_gen: Arc<RwLock<Option<image_gen::ImageGenerator>>>,
+    database: Arc<RwLock<Option<AgentDatabase>>>,
+    trajectory_engine: Arc<RwLock<Option<trajectory::TrajectoryEngine>>>,
 }
 
 impl Agent {
@@ -98,6 +103,32 @@ impl Agent {
             None
         };
 
+        // Initialize database for memory and persona tracking
+        let database = match AgentDatabase::new(&config.database_path) {
+            Ok(db) => {
+                tracing::info!("📚 Agent memory database initialized: {}", config.database_path);
+                Some(db)
+            }
+            Err(e) => {
+                tracing::error!("Failed to initialize agent database: {}", e);
+                None
+            }
+        };
+
+        // Initialize trajectory engine for Ludonarrative Assonantic Tracing
+        let trajectory_engine = if config.enable_self_reflection {
+            let model = config.reflection_model.clone()
+                .unwrap_or_else(|| config.llm_model.clone());
+            tracing::info!("🔮 Trajectory engine enabled (model: {})", model);
+            Some(trajectory::TrajectoryEngine::new(
+                config.llm_api_url.clone(),
+                model,
+                config.llm_api_key.clone(),
+            ))
+        } else {
+            None
+        };
+
         Self {
             client,
             config: Arc::new(RwLock::new(config)),
@@ -105,6 +136,8 @@ impl Agent {
             event_tx,
             reasoning: Arc::new(RwLock::new(reasoning)),
             image_gen: Arc::new(RwLock::new(image_gen)),
+            database: Arc::new(RwLock::new(database)),
+            trajectory_engine: Arc::new(RwLock::new(trajectory_engine)),
         }
     }
 
@@ -144,10 +177,24 @@ impl Agent {
             None
         };
 
+        // Recreate trajectory engine if self-reflection settings changed
+        let new_trajectory = if new_config.enable_self_reflection {
+            let model = new_config.reflection_model.clone()
+                .unwrap_or_else(|| new_config.llm_model.clone());
+            Some(trajectory::TrajectoryEngine::new(
+                new_config.llm_api_url.clone(),
+                model,
+                new_config.llm_api_key.clone(),
+            ))
+        } else {
+            None
+        };
+
         // Update all components atomically
         *self.config.write().await = new_config;
         *self.reasoning.write().await = new_reasoning;
         *self.image_gen.write().await = new_image_gen;
+        *self.trajectory_engine.write().await = new_trajectory;
 
         self.emit(AgentEvent::Observation("✓ Configuration reloaded".to_string())).await;
         tracing::info!("Configuration reloaded successfully");
@@ -190,6 +237,9 @@ impl Agent {
         }
         self.emit(AgentEvent::Observation("✓ Connected to Graphchan".to_string())).await;
 
+        // Capture initial persona snapshot if this is the first run
+        self.maybe_capture_initial_persona().await;
+
         loop {
             // Check if paused
             {
@@ -201,6 +251,9 @@ impl Agent {
             }
 
             self.set_state(AgentVisualState::Idle).await;
+
+            // Check if it's time for persona evolution (Ludonarrative Assonantic Tracing)
+            self.maybe_evolve_persona().await;
 
             // Get poll interval from config
             let poll_interval = {
@@ -231,6 +284,190 @@ impl Agent {
                 sleep(Duration::from_secs(10)).await;
             }
         }
+    }
+
+    /// Capture initial persona snapshot if database is empty
+    async fn maybe_capture_initial_persona(&self) {
+        let db_lock = self.database.read().await;
+        if let Some(ref db) = *db_lock {
+            match db.count_persona_snapshots() {
+                Ok(0) => {
+                    drop(db_lock);
+                    self.emit(AgentEvent::Observation("🔮 Capturing initial persona snapshot...".to_string())).await;
+                    if let Err(e) = self.capture_persona_snapshot("initial").await {
+                        tracing::warn!("Failed to capture initial persona: {}", e);
+                    }
+                }
+                Ok(n) => {
+                    tracing::info!("📚 Found {} existing persona snapshots", n);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to count persona snapshots: {}", e);
+                }
+            }
+        }
+    }
+
+    /// Check if it's time to evolve persona and run trajectory inference
+    async fn maybe_evolve_persona(&self) {
+        let config = self.config.read().await;
+        if !config.enable_self_reflection {
+            return;
+        }
+
+        let reflection_interval_hours = config.reflection_interval_hours;
+        drop(config);
+
+        // Check last reflection time
+        let db_lock = self.database.read().await;
+        let should_reflect = if let Some(ref db) = *db_lock {
+            match db.get_last_reflection_time() {
+                Ok(Some(last_time)) => {
+                    let elapsed = Utc::now() - last_time;
+                    elapsed > ChronoDuration::hours(reflection_interval_hours as i64)
+                }
+                Ok(None) => true, // Never reflected before
+                Err(e) => {
+                    tracing::warn!("Failed to get last reflection time: {}", e);
+                    false
+                }
+            }
+        } else {
+            false
+        };
+        drop(db_lock);
+
+        if should_reflect {
+            self.emit(AgentEvent::Observation("🔮 Beginning persona evolution cycle...".to_string())).await;
+            self.set_state(AgentVisualState::Thinking).await;
+
+            if let Err(e) = self.run_persona_evolution().await {
+                tracing::error!("Persona evolution failed: {}", e);
+                self.emit(AgentEvent::Error(format!("Persona evolution error: {}", e))).await;
+            }
+        }
+    }
+
+    /// Run the full persona evolution cycle (Ludonarrative Assonantic Tracing)
+    async fn run_persona_evolution(&self) -> Result<()> {
+        // 1. Capture current persona snapshot
+        self.emit(AgentEvent::Observation("📸 Capturing persona snapshot...".to_string())).await;
+        let snapshot = self.capture_persona_snapshot("scheduled_reflection").await?;
+
+        // 2. Get persona history and guiding principles for trajectory inference
+        let (history, guiding_principles) = {
+            let db_lock = self.database.read().await;
+            let config = self.config.read().await;
+            let principles = config.guiding_principles.clone();
+            drop(config);
+
+            if let Some(ref db) = *db_lock {
+                (db.get_persona_history(10)?, principles)
+            } else {
+                return Err(anyhow::anyhow!("Database not available"));
+            }
+        };
+
+        // 3. Run trajectory inference
+        self.emit(AgentEvent::Observation("🔮 Inferring personality trajectory...".to_string())).await;
+        let trajectory_analysis = {
+            let engine_lock = self.trajectory_engine.read().await;
+            if let Some(ref engine) = *engine_lock {
+                engine.infer_trajectory(&history, &guiding_principles).await?
+            } else {
+                return Err(anyhow::anyhow!("Trajectory engine not available"));
+            }
+        };
+
+        // 4. Log the trajectory analysis
+        tracing::info!("🔮 Trajectory Analysis:");
+        tracing::info!("  Narrative: {}", trajectory_analysis.narrative);
+        tracing::info!("  Trajectory: {}", trajectory_analysis.trajectory);
+        tracing::info!("  Themes: {:?}", trajectory_analysis.themes);
+        tracing::info!("  Confidence: {:.2}", trajectory_analysis.confidence);
+
+        self.emit(AgentEvent::Observation(format!(
+            "✨ Trajectory inferred: {} (confidence: {:.0}%)",
+            &trajectory_analysis.trajectory[..trajectory_analysis.trajectory.len().min(80)],
+            trajectory_analysis.confidence * 100.0
+        ))).await;
+
+        // 5. Update the snapshot with trajectory and save
+        let mut updated_snapshot = snapshot;
+        updated_snapshot.inferred_trajectory = Some(trajectory_analysis.trajectory.clone());
+
+        {
+            let db_lock = self.database.read().await;
+            if let Some(ref db) = *db_lock {
+                db.save_persona_snapshot(&updated_snapshot)?;
+                db.set_last_reflection_time(Utc::now())?;
+            }
+        }
+
+        // 6. Emit reasoning trace with trajectory insights
+        self.emit(AgentEvent::ReasoningTrace(vec![
+            format!("📊 Persona Evolution Complete"),
+            format!("Narrative: {}", trajectory_analysis.narrative),
+            format!("Direction: {}", trajectory_analysis.trajectory),
+            format!("Themes: {}", trajectory_analysis.themes.join(", ")),
+            format!("Tensions: {}", if trajectory_analysis.tensions.is_empty() {
+                "None identified".to_string()
+            } else {
+                trajectory_analysis.tensions.join(", ")
+            }),
+        ])).await;
+
+        self.set_state(AgentVisualState::Happy).await;
+        sleep(Duration::from_secs(2)).await;
+
+        Ok(())
+    }
+
+    /// Capture a persona snapshot
+    async fn capture_persona_snapshot(&self, trigger: &str) -> Result<crate::database::PersonaSnapshot> {
+        let config = self.config.read().await;
+        let api_url = config.llm_api_url.clone();
+        let model = config.reflection_model.clone()
+            .unwrap_or_else(|| config.llm_model.clone());
+        let api_key = config.llm_api_key.clone();
+        let system_prompt = config.system_prompt.clone();
+        let guiding_principles = config.guiding_principles.clone();
+        drop(config);
+
+        // Get recent important posts as formative experiences
+        let experiences: Vec<String> = {
+            let db_lock = self.database.read().await;
+            if let Some(ref db) = *db_lock {
+                db.get_recent_important_posts(5)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|p| p.why_important)
+                    .collect()
+            } else {
+                vec![]
+            }
+        };
+
+        let snapshot = trajectory::capture_persona_snapshot(
+            &api_url,
+            &model,
+            api_key.as_deref(),
+            &system_prompt,
+            trigger,
+            &experiences,
+            &guiding_principles,
+        ).await?;
+
+        // Save the snapshot
+        {
+            let db_lock = self.database.read().await;
+            if let Some(ref db) = *db_lock {
+                db.save_persona_snapshot(&snapshot)?;
+            }
+        }
+
+        tracing::info!("📸 Captured persona snapshot: {}", snapshot.self_description);
+        Ok(snapshot)
     }
 
     async fn run_cycle(&self) -> Result<()> {

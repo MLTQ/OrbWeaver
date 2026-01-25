@@ -18,13 +18,15 @@ use iroh_blobs::store::fs::FsStore;
 use iroh_blobs::{ticket::BlobTicket, BlobFormat, BlobsProtocol, Hash, ALPN as BLOBS_ALPN};
 use iroh_gossip::api::GossipTopic;
 use iroh_gossip::net::Gossip;
-use iroh_relay::RelayMap;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
+
+// DHT-based topic discovery
+use distributed_topic_tracker::{RecordPublisher, TopicId as DhtTopicId};
 
 const GRAPHCHAN_ALPN: &[u8] = b"graphchan/0";
 const GOSSIP_BUFFER: usize = 128;
@@ -47,6 +49,8 @@ pub struct NetworkHandle {
     topics: Arc<RwLock<HashMap<String, GossipTopic>>>,
     blobs: FsStore,
     database: Database,
+    /// Signing key for DHT-based topic discovery (derived from iroh secret)
+    signing_key: ed25519_dalek::SigningKey,
 }
 
 impl NetworkHandle {
@@ -59,6 +63,11 @@ impl NetworkHandle {
     ) -> Result<Self> {
         let secret = load_iroh_secret(paths)?;
         let endpoint_id = secret.public();
+
+        // Derive ed25519 signing key for DHT-based topic discovery
+        // The iroh SecretKey is ed25519-compatible, so we can use its bytes directly
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret.to_bytes());
+        tracing::info!("derived signing key for DHT topic discovery");
 
         // Determine relay mode
         let relay_mode = if let Some(relay_url) = &config.relay_url {
@@ -169,6 +178,7 @@ impl NetworkHandle {
             topics: event_worker_topics,
             blobs: blob_store.clone(),
             database: database.clone(),
+            signing_key,
         };
         tracing::info!(peer_id = %handle.peer_id(), "iroh endpoint started");
 
@@ -432,34 +442,67 @@ impl NetworkHandle {
 
     /// Subscribe to a user-defined topic for public discovery.
     /// Topics are well-known hashes that anyone can subscribe to.
+    /// Uses DHT-based auto-discovery to find other peers on the same topic.
     pub async fn subscribe_to_topic(&self, topic_name: &str) -> Result<()> {
         use crate::network::topics::derive_topic_id;
+        use distributed_topic_tracker::AutoDiscoveryGossip;
 
+        tracing::info!(topic = %topic_name, "subscribing to user topic with DHT auto-discovery");
+
+        // Create a deterministic shared secret for this topic
+        // This allows peers on the same topic to authenticate each other
+        let topic_secret = {
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(b"graphchan-topic-secret-v1:");
+            hasher.update(topic_name.as_bytes());
+            hasher.finalize().as_bytes().to_vec()
+        };
+
+        // Create the DHT topic ID from the topic name
+        let dht_topic_id = DhtTopicId::new(format!("graphchan:{}", topic_name));
+
+        // Create a RecordPublisher for DHT-based peer discovery
+        let record_publisher = RecordPublisher::new(
+            dht_topic_id,
+            self.signing_key.verifying_key(),
+            self.signing_key.clone(),
+            None, // No secret rotation
+            topic_secret,
+        );
+
+        // Subscribe with auto-discovery via mainline DHT
+        // This publishes our interest to the DHT and discovers other peers
+        let dht_topic = self.gossip
+            .subscribe_and_join_with_auto_discovery(record_publisher)
+            .await
+            .context("failed to subscribe to topic with DHT auto-discovery")?;
+
+        tracing::info!(topic = %topic_name, "🌐 joined topic via DHT - will discover peers automatically");
+
+        // Split into sender and receiver for DHT-discovered peers
+        let (dht_sender, dht_receiver) = dht_topic.split().await?;
+
+        // Also create a standard gossip subscription for broadcasting
+        // This ensures we have a GossipTopic for the event loop to use
         let topic_id = TopicId::from_bytes(derive_topic_id(topic_name));
-
-        tracing::info!(topic = %topic_name, "subscribing to user topic");
-
-        // Create two subscriptions to this topic:
-        // 1. For receiving (consumed by the spawned task below)
-        // 2. For broadcasting (stored in topics map for the event worker)
-        let receiver_topic = self.gossip.subscribe(topic_id, vec![]).await?;
         let broadcaster_topic = self.gossip.subscribe(topic_id, vec![]).await?;
 
-        // Store broadcaster in topics map with "topic:{name}" prefix for routing
+        // Store the standard GossipTopic for broadcasting (used by event loop)
         let topic_key = format!("topic:{}", topic_name);
         {
             let mut topics_guard = self.topics.write().await;
             topics_guard.insert(topic_key.clone(), broadcaster_topic);
         }
 
-        let mut receiver = receiver_topic;
         let inbound_tx = self.inbound_tx.clone();
         let topic_key_clone = topic_key.clone();
 
-        // Spawn a task to forward messages from this topic to the ingest loop
+        // Spawn a task to forward messages from DHT-discovered peers to the ingest loop
         tokio::spawn(async move {
-            use futures_util::StreamExt;
-            while let Some(event_result) = receiver.next().await {
+            // Keep the sender alive so the DHT subscription stays active
+            let _dht_sender = dht_sender;
+
+            while let Some(event_result) = dht_receiver.next().await {
                 match event_result {
                     Ok(iroh_gossip::api::Event::Received(message)) => {
                         match serde_json::from_slice::<events::EventEnvelope>(&message.content) {
@@ -479,10 +522,10 @@ impl NetworkHandle {
                         }
                     }
                     Ok(iroh_gossip::api::Event::NeighborUp(neighbor_id)) => {
-                        tracing::info!(peer = %neighbor_id.fmt_short(), topic = %topic_key_clone, "neighbor up on topic");
+                        tracing::info!(peer = %neighbor_id.fmt_short(), topic = %topic_key_clone, "🎉 DHT peer discovered on topic!");
                     }
                     Ok(iroh_gossip::api::Event::NeighborDown(neighbor_id)) => {
-                        tracing::info!(peer = %neighbor_id.fmt_short(), topic = %topic_key_clone, "neighbor down on topic");
+                        tracing::info!(peer = %neighbor_id.fmt_short(), topic = %topic_key_clone, "peer left topic");
                     }
                     Ok(iroh_gossip::api::Event::Lagged) => {
                         tracing::warn!(topic = %topic_key_clone, "gossip receiver lagged on topic");
@@ -492,7 +535,7 @@ impl NetworkHandle {
                     }
                 }
             }
-            tracing::info!(topic = %topic_key_clone, "topic receiver loop ended");
+            tracing::info!(topic = %topic_key_clone, "DHT topic receiver loop ended");
         });
 
         Ok(())
