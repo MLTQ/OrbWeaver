@@ -1013,6 +1013,7 @@ struct IdentityInfo {
 struct NetworkInfo {
     peer_id: String,
     addresses: Vec<String>,
+    dht_status: String,  // "checking", "connected", or "unreachable"
 }
 
 #[derive(Debug, Deserialize)]
@@ -1284,6 +1285,8 @@ fn map_file_view(file: FileView) -> FileResponse {
 
 impl NetworkInfo {
     fn from_handle(handle: &NetworkHandle) -> Self {
+        use crate::network::DhtStatus;
+
         let addr = handle.current_addr();
         let mut addresses = Vec::new();
         for ip in addr.ip_addrs() {
@@ -1292,9 +1295,17 @@ impl NetworkInfo {
         for relay in addr.relay_urls() {
             addresses.push(relay.to_string());
         }
+
+        let dht_status = match handle.dht_status() {
+            DhtStatus::Checking => "checking",
+            DhtStatus::Connected => "connected",
+            DhtStatus::Unreachable => "unreachable",
+        }.to_string();
+
         Self {
             peer_id: handle.peer_id(),
             addresses,
+            dht_status,
         }
     }
 }

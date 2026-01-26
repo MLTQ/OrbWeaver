@@ -27,6 +27,8 @@ use tokio::task::JoinHandle;
 
 // DHT-based topic discovery
 use distributed_topic_tracker::{RecordPublisher, TopicId as DhtTopicId};
+use mainline::Dht;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const GRAPHCHAN_ALPN: &[u8] = b"graphchan/0";
 const GOSSIP_BUFFER: usize = 128;
@@ -36,6 +38,17 @@ pub use events::ProfileUpdate;
 pub use events::ReactionUpdate;
 
 type TopicId = iroh_gossip::proto::TopicId;
+
+/// Status of DHT connectivity
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DhtStatus {
+    /// DHT check hasn't completed yet
+    Checking,
+    /// DHT is connected and bootstrapped
+    Connected,
+    /// DHT bootstrap failed (network/NAT issue)
+    Unreachable,
+}
 
 #[derive(Clone)]
 pub struct NetworkHandle {
@@ -51,6 +64,9 @@ pub struct NetworkHandle {
     database: Database,
     /// Signing key for DHT-based topic discovery (derived from iroh secret)
     signing_key: ed25519_dalek::SigningKey,
+    /// Whether DHT is reachable (true = connected, false = unreachable, None = still checking)
+    dht_connected: Arc<AtomicBool>,
+    dht_checked: Arc<AtomicBool>,
 }
 
 impl NetworkHandle {
@@ -167,6 +183,9 @@ impl NetworkHandle {
             .spawn();
         let router = Arc::new(router);
 
+        let dht_connected = Arc::new(AtomicBool::new(false));
+        let dht_checked = Arc::new(AtomicBool::new(false));
+
         let handle = Self {
             endpoint,
             gossip,
@@ -179,8 +198,37 @@ impl NetworkHandle {
             blobs: blob_store.clone(),
             database: database.clone(),
             signing_key,
+            dht_connected: dht_connected.clone(),
+            dht_checked: dht_checked.clone(),
         };
         tracing::info!(peer_id = %handle.peer_id(), "iroh endpoint started");
+
+        // Spawn DHT connectivity check in background
+        if config.enable_dht {
+            tokio::spawn(async move {
+                tracing::info!("🔍 checking DHT connectivity...");
+                match check_dht_connectivity().await {
+                    Ok(true) => {
+                        dht_connected.store(true, Ordering::SeqCst);
+                        dht_checked.store(true, Ordering::SeqCst);
+                        tracing::info!("✅ DHT is REACHABLE - topic discovery will work");
+                    }
+                    Ok(false) => {
+                        dht_connected.store(false, Ordering::SeqCst);
+                        dht_checked.store(true, Ordering::SeqCst);
+                        tracing::warn!("❌ DHT is UNREACHABLE - topic discovery will NOT work (check NAT/firewall)");
+                    }
+                    Err(err) => {
+                        dht_connected.store(false, Ordering::SeqCst);
+                        dht_checked.store(true, Ordering::SeqCst);
+                        tracing::error!(error = ?err, "❌ DHT connectivity check failed");
+                    }
+                }
+            });
+        } else {
+            dht_checked.store(true, Ordering::SeqCst);
+            tracing::info!("DHT disabled, skipping connectivity check");
+        }
 
         // Get our own identity to subscribe to our own peer topic
         if let Ok(Some((fingerprint, _, _))) = database.get_identity() {
@@ -445,64 +493,28 @@ impl NetworkHandle {
     /// Uses DHT-based auto-discovery to find other peers on the same topic.
     pub async fn subscribe_to_topic(&self, topic_name: &str) -> Result<()> {
         use crate::network::topics::derive_topic_id;
-        use distributed_topic_tracker::AutoDiscoveryGossip;
 
-        tracing::info!(topic = %topic_name, "subscribing to user topic with DHT auto-discovery");
+        tracing::info!(topic = %topic_name, "subscribing to user topic");
 
-        // Create a deterministic shared secret for this topic
-        // This allows peers on the same topic to authenticate each other
-        let topic_secret = {
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(b"graphchan-topic-secret-v1:");
-            hasher.update(topic_name.as_bytes());
-            hasher.finalize().as_bytes().to_vec()
-        };
-
-        // Create the DHT topic ID from the topic name
-        let dht_topic_id = DhtTopicId::new(format!("graphchan:{}", topic_name));
-
-        // Create a RecordPublisher for DHT-based peer discovery
-        let record_publisher = RecordPublisher::new(
-            dht_topic_id,
-            self.signing_key.verifying_key(),
-            self.signing_key.clone(),
-            None, // No secret rotation
-            topic_secret,
-        );
-
-        // Subscribe with auto-discovery via mainline DHT
-        // This publishes our interest to the DHT and discovers other peers
-        let dht_topic = self.gossip
-            .subscribe_and_join_with_auto_discovery(record_publisher)
-            .await
-            .context("failed to subscribe to topic with DHT auto-discovery")?;
-
-        tracing::info!(topic = %topic_name, "🌐 joined topic via DHT - will discover peers automatically");
-
-        // Split into sender and receiver for DHT-discovered peers
-        let (dht_sender, dht_receiver) = dht_topic.split().await?;
-
-        // Also create a standard gossip subscription for broadcasting
-        // This ensures we have a GossipTopic for the event loop to use
+        // First, subscribe to the standard gossip topic for broadcasting (this is fast)
         let topic_id = TopicId::from_bytes(derive_topic_id(topic_name));
         let broadcaster_topic = self.gossip.subscribe(topic_id, vec![]).await?;
+        let receiver_topic = self.gossip.subscribe(topic_id, vec![]).await?;
 
-        // Store the standard GossipTopic for broadcasting (used by event loop)
+        // Store the GossipTopic for broadcasting (used by event loop)
         let topic_key = format!("topic:{}", topic_name);
         {
             let mut topics_guard = self.topics.write().await;
             topics_guard.insert(topic_key.clone(), broadcaster_topic);
         }
 
+        // Spawn receiver task for standard gossip
         let inbound_tx = self.inbound_tx.clone();
-        let topic_key_clone = topic_key.clone();
-
-        // Spawn a task to forward messages from DHT-discovered peers to the ingest loop
+        let topic_key_for_receiver = topic_key.clone();
         tokio::spawn(async move {
-            // Keep the sender alive so the DHT subscription stays active
-            let _dht_sender = dht_sender;
-
-            while let Some(event_result) = dht_receiver.next().await {
+            use futures_util::StreamExt;
+            let mut receiver = receiver_topic;
+            while let Some(event_result) = receiver.next().await {
                 match event_result {
                     Ok(iroh_gossip::api::Event::Received(message)) => {
                         match serde_json::from_slice::<events::EventEnvelope>(&message.content) {
@@ -512,31 +524,121 @@ impl NetworkHandle {
                                     payload: envelope.payload,
                                 };
                                 if inbound_tx.send(gossip).await.is_err() {
-                                    tracing::warn!(topic = %topic_key_clone, "inbound channel closed, stopping topic receiver");
+                                    tracing::warn!(topic = %topic_key_for_receiver, "inbound channel closed");
                                     break;
                                 }
                             }
                             Err(err) => {
-                                tracing::warn!(error = ?err, topic = %topic_key_clone, "failed to deserialize message on topic");
+                                tracing::warn!(error = ?err, topic = %topic_key_for_receiver, "failed to deserialize message");
                             }
                         }
                     }
                     Ok(iroh_gossip::api::Event::NeighborUp(neighbor_id)) => {
-                        tracing::info!(peer = %neighbor_id.fmt_short(), topic = %topic_key_clone, "🎉 DHT peer discovered on topic!");
+                        tracing::info!(peer = %neighbor_id.fmt_short(), topic = %topic_key_for_receiver, "🎉 peer discovered on topic!");
                     }
                     Ok(iroh_gossip::api::Event::NeighborDown(neighbor_id)) => {
-                        tracing::info!(peer = %neighbor_id.fmt_short(), topic = %topic_key_clone, "peer left topic");
+                        tracing::info!(peer = %neighbor_id.fmt_short(), topic = %topic_key_for_receiver, "peer left topic");
                     }
                     Ok(iroh_gossip::api::Event::Lagged) => {
-                        tracing::warn!(topic = %topic_key_clone, "gossip receiver lagged on topic");
+                        tracing::warn!(topic = %topic_key_for_receiver, "gossip receiver lagged");
                     }
                     Err(err) => {
-                        tracing::warn!(error = ?err, topic = %topic_key_clone, "error in topic receiver");
+                        tracing::warn!(error = ?err, topic = %topic_key_for_receiver, "error in topic receiver");
                     }
                 }
             }
-            tracing::info!(topic = %topic_key_clone, "DHT topic receiver loop ended");
+            tracing::info!(topic = %topic_key_for_receiver, "topic receiver loop ended");
         });
+
+        // Spawn DHT auto-discovery in background (this can take a while)
+        let gossip = self.gossip.clone();
+        let signing_key = self.signing_key.clone();
+        let topic_name_owned = topic_name.to_string();
+        let inbound_tx_dht = self.inbound_tx.clone();
+
+        tokio::spawn(async move {
+            use distributed_topic_tracker::AutoDiscoveryGossip;
+
+            tracing::info!(topic = %topic_name_owned, "🔍 starting DHT auto-discovery in background...");
+
+            // Create a deterministic shared secret for this topic
+            let topic_secret = {
+                let mut hasher = blake3::Hasher::new();
+                hasher.update(b"graphchan-topic-secret-v1:");
+                hasher.update(topic_name_owned.as_bytes());
+                hasher.finalize().as_bytes().to_vec()
+            };
+
+            // Create the DHT topic ID from the topic name
+            let dht_topic_id = DhtTopicId::new(format!("graphchan:{}", topic_name_owned));
+
+            // Create a RecordPublisher for DHT-based peer discovery
+            let record_publisher = RecordPublisher::new(
+                dht_topic_id,
+                signing_key.verifying_key(),
+                signing_key.clone(),
+                None, // No secret rotation
+                topic_secret,
+            );
+
+            // Subscribe with auto-discovery via mainline DHT (can take 30-60+ seconds)
+            match gossip.subscribe_and_join_with_auto_discovery(record_publisher).await {
+                Ok(dht_topic) => {
+                    tracing::info!(topic = %topic_name_owned, "🌐 DHT auto-discovery complete - listening for peers");
+
+                    // Split into sender and receiver for DHT-discovered peers
+                    match dht_topic.split().await {
+                        Ok((dht_sender, dht_receiver)) => {
+                            // Keep the sender alive so the DHT subscription stays active
+                            let _dht_sender = dht_sender;
+                            let topic_key_dht = format!("topic:{}", topic_name_owned);
+
+                            while let Some(event_result) = dht_receiver.next().await {
+                                match event_result {
+                                    Ok(iroh_gossip::api::Event::Received(message)) => {
+                                        match serde_json::from_slice::<events::EventEnvelope>(&message.content) {
+                                            Ok(envelope) => {
+                                                let gossip_msg = events::InboundGossip {
+                                                    peer_id: Some(message.delivered_from.to_string()),
+                                                    payload: envelope.payload,
+                                                };
+                                                if inbound_tx_dht.send(gossip_msg).await.is_err() {
+                                                    break;
+                                                }
+                                            }
+                                            Err(err) => {
+                                                tracing::warn!(error = ?err, topic = %topic_key_dht, "failed to deserialize DHT message");
+                                            }
+                                        }
+                                    }
+                                    Ok(iroh_gossip::api::Event::NeighborUp(neighbor_id)) => {
+                                        tracing::info!(peer = %neighbor_id.fmt_short(), topic = %topic_key_dht, "🎉 DHT peer discovered!");
+                                    }
+                                    Ok(iroh_gossip::api::Event::NeighborDown(neighbor_id)) => {
+                                        tracing::info!(peer = %neighbor_id.fmt_short(), topic = %topic_key_dht, "DHT peer left");
+                                    }
+                                    Ok(iroh_gossip::api::Event::Lagged) => {
+                                        tracing::warn!(topic = %topic_key_dht, "DHT gossip lagged");
+                                    }
+                                    Err(err) => {
+                                        tracing::warn!(error = ?err, topic = %topic_key_dht, "DHT receiver error");
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            tracing::warn!(error = ?err, topic = %topic_name_owned, "failed to split DHT topic");
+                        }
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(error = ?err, topic = %topic_name_owned, "❌ DHT auto-discovery failed");
+                }
+            }
+        });
+
+        tracing::info!(topic = %topic_name, "✓ subscribed to topic (DHT discovery running in background)");
 
         Ok(())
     }
@@ -744,6 +846,54 @@ impl NetworkHandle {
     pub async fn shutdown(&self) {
         let _ = self._router.shutdown().await;
         self.endpoint.close().await;
+    }
+}
+
+impl NetworkHandle {
+    /// Returns the current DHT connectivity status
+    pub fn dht_status(&self) -> DhtStatus {
+        if !self.dht_checked.load(Ordering::SeqCst) {
+            DhtStatus::Checking
+        } else if self.dht_connected.load(Ordering::SeqCst) {
+            DhtStatus::Connected
+        } else {
+            DhtStatus::Unreachable
+        }
+    }
+}
+
+/// Checks if we can connect to the BitTorrent mainline DHT.
+/// Returns true if bootstrapped successfully, false otherwise.
+async fn check_dht_connectivity() -> Result<bool> {
+    // Create a standalone DHT client to test connectivity
+    // Dht::client() uses default bootstrap nodes (router.bittorrent.com, dht.transmissionbt.com, etc.)
+    let dht = Dht::client().context("failed to create DHT client")?;
+    let async_dht = dht.as_async();
+
+    // Wait for bootstrap with a timeout
+    let bootstrap_timeout = std::time::Duration::from_secs(30);
+
+    match tokio::time::timeout(bootstrap_timeout, async_dht.bootstrapped()).await {
+        Ok(success) => {
+            if success {
+                // Bootstrap completed successfully - get info for logging
+                let info = async_dht.info().await;
+                tracing::info!(
+                    id = %info.id(),
+                    local_addr = ?info.local_addr(),
+                    "DHT bootstrapped successfully"
+                );
+                Ok(true)
+            } else {
+                tracing::warn!("DHT bootstrap failed - could not reach any bootstrap nodes");
+                Ok(false)
+            }
+        }
+        Err(_) => {
+            // Timeout - DHT is unreachable
+            tracing::warn!("DHT bootstrap timed out after 30s");
+            Ok(false)
+        }
     }
 }
 
