@@ -147,6 +147,7 @@ pub struct InboundGossip {
 pub async fn run_event_loop(
     gossip: Gossip,
     topics: Arc<RwLock<HashMap<String, GossipTopic>>>,
+    dht_senders: Arc<RwLock<HashMap<String, crate::network::DhtTopicSender>>>,
     mut rx: Receiver<NetworkEvent>,
 ) {
     tracing::info!("network event loop starting with iroh-gossip");
@@ -160,7 +161,7 @@ pub async fn run_event_loop(
                         // Broadcast to all topics
                         for topic_id in &announcement.topics {
                             let topic_name = format!("topic:{}", topic_id);
-                            if let Err(err) = broadcast_to_topic(&gossip, &topics, &topic_name, payload.clone()).await {
+                            if let Err(err) = broadcast_to_topic(&gossip, &topics, &dht_senders, &topic_name, payload.clone()).await {
                                 tracing::warn!(error = ?err, topic = %topic_name, "failed to broadcast thread announcement to topic");
                             }
                         }
@@ -170,7 +171,7 @@ pub async fn run_event_loop(
 
                 // Default routing for all other payloads
                 let topic_name = topic_for_payload(&payload);
-                if let Err(err) = broadcast_to_topic(&gossip, &topics, &topic_name, payload).await {
+                if let Err(err) = broadcast_to_topic(&gossip, &topics, &dht_senders, &topic_name, payload).await {
                     tracing::warn!(error = ?err, topic = %topic_name, "failed to broadcast event");
                 }
             }
@@ -180,7 +181,7 @@ pub async fn run_event_loop(
             } => {
                 // iroh-gossip doesn't support direct messaging, so broadcast instead
                 let topic_name = topic_for_payload(&payload);
-                if let Err(err) = broadcast_to_topic(&gossip, &topics, &topic_name, payload).await {
+                if let Err(err) = broadcast_to_topic(&gossip, &topics, &dht_senders, &topic_name, payload).await {
                     tracing::warn!(error = ?err, topic = %topic_name, "failed to broadcast direct event");
                 }
             }
@@ -193,6 +194,7 @@ pub async fn run_event_loop(
 async fn broadcast_to_topic(
     gossip: &Gossip,
     topics: &Arc<RwLock<HashMap<String, GossipTopic>>>,
+    dht_senders: &Arc<RwLock<HashMap<String, crate::network::DhtTopicSender>>>,
     topic_name: &str,
     payload: EventPayload,
 ) -> Result<()> {
@@ -227,18 +229,46 @@ async fn broadcast_to_topic(
         EventPayload::ReactionUpdate(_) => "ReactionUpdate",
     };
 
-    // Get mutable access to broadcast
+    let mut broadcasted = false;
+
+    // First, try to broadcast via DHT sender (if available for this topic)
+    // DHT senders are connected to peers discovered via mainline DHT
+    {
+        let dht_guard = dht_senders.read().await;
+        if let Some(dht_sender) = dht_guard.get(topic_name) {
+            if let Err(err) = dht_sender.broadcast(Bytes::from(bytes.clone())).await {
+                tracing::warn!(error = ?err, topic = %topic_name, "failed to broadcast via DHT sender");
+            } else {
+                tracing::info!(
+                    topic = %topic_name,
+                    payload_type = %payload_type,
+                    size_bytes = size,
+                    "📡 broadcasted via DHT to discovered peers"
+                );
+                broadcasted = true;
+            }
+        }
+    }
+
+    // Also broadcast via standard gossip topic (for directly connected peers)
     let mut guard = topics.write().await;
     if let Some(topic) = guard.get_mut(topic_name) {
         topic.broadcast(Bytes::from(bytes)).await?;
-        tracing::info!(
-            topic = %topic_name,
-            payload_type = %payload_type,
-            size_bytes = size,
-            "broadcasted message to topic"
-        );
-    } else {
-        tracing::warn!(topic = %topic_name, "attempted to broadcast to non-existent topic");
+        if !broadcasted {
+            tracing::info!(
+                topic = %topic_name,
+                payload_type = %payload_type,
+                size_bytes = size,
+                "broadcasted message to topic"
+            );
+        } else {
+            tracing::debug!(
+                topic = %topic_name,
+                "also broadcasted to standard gossip"
+            );
+        }
+    } else if !broadcasted {
+        tracing::warn!(topic = %topic_name, "attempted to broadcast to non-existent topic (no DHT sender either)");
     }
 
     Ok(())

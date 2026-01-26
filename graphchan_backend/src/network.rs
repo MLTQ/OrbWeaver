@@ -50,6 +50,24 @@ pub enum DhtStatus {
     Unreachable,
 }
 
+/// Wrapper for DHT topic sender to enable Clone
+#[derive(Clone)]
+pub struct DhtTopicSender(Arc<tokio::sync::Mutex<Option<distributed_topic_tracker::GossipSender>>>);
+
+impl DhtTopicSender {
+    fn new(sender: distributed_topic_tracker::GossipSender) -> Self {
+        Self(Arc::new(tokio::sync::Mutex::new(Some(sender))))
+    }
+
+    pub async fn broadcast(&self, data: bytes::Bytes) -> anyhow::Result<()> {
+        let mut guard = self.0.lock().await;
+        if let Some(sender) = guard.as_mut() {
+            sender.broadcast(data.to_vec()).await?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 pub struct NetworkHandle {
     endpoint: Arc<Endpoint>,
@@ -60,6 +78,8 @@ pub struct NetworkHandle {
     _ingest_worker: Arc<JoinHandle<()>>,
     _router: Arc<Router>,
     topics: Arc<RwLock<HashMap<String, GossipTopic>>>,
+    /// DHT topic senders for broadcasting to DHT-discovered peers
+    dht_senders: Arc<RwLock<HashMap<String, DhtTopicSender>>>,
     blobs: FsStore,
     database: Database,
     /// Signing key for DHT-based topic discovery (derived from iroh secret)
@@ -136,13 +156,15 @@ impl NetworkHandle {
         let (tx, rx) = mpsc::channel(GOSSIP_BUFFER);
         let event_worker_gossip = gossip.clone();
         let event_worker_topics = Arc::new(RwLock::new(HashMap::new()));
+        let event_worker_dht_senders: Arc<RwLock<HashMap<String, DhtTopicSender>>> = Arc::new(RwLock::new(HashMap::new()));
 
         // No longer using global topic - peer-based gossip only
         // Each peer will subscribe to their friends' peer-{id} topics
 
         let event_worker_topics_clone = event_worker_topics.clone();
+        let event_worker_dht_senders_clone = event_worker_dht_senders.clone();
         let event_worker = tokio::spawn(async move {
-            events::run_event_loop(event_worker_gossip, event_worker_topics_clone, rx).await;
+            events::run_event_loop(event_worker_gossip, event_worker_topics_clone, event_worker_dht_senders_clone, rx).await;
         });
 
         let (inbound_tx, inbound_rx) = mpsc::channel(GOSSIP_BUFFER);
@@ -195,6 +217,7 @@ impl NetworkHandle {
             _ingest_worker: Arc::new(ingest_worker),
             _router: router.clone(),
             topics: event_worker_topics,
+            dht_senders: event_worker_dht_senders,
             blobs: blob_store.clone(),
             database: database.clone(),
             signing_key,
@@ -555,6 +578,7 @@ impl NetworkHandle {
         let signing_key = self.signing_key.clone();
         let topic_name_owned = topic_name.to_string();
         let inbound_tx_dht = self.inbound_tx.clone();
+        let dht_senders = self.dht_senders.clone();
 
         tokio::spawn(async move {
             use distributed_topic_tracker::AutoDiscoveryGossip;
@@ -589,9 +613,14 @@ impl NetworkHandle {
                     // Split into sender and receiver for DHT-discovered peers
                     match dht_topic.split().await {
                         Ok((dht_sender, dht_receiver)) => {
-                            // Keep the sender alive so the DHT subscription stays active
-                            let _dht_sender = dht_sender;
                             let topic_key_dht = format!("topic:{}", topic_name_owned);
+
+                            // Store the sender so it can be used for broadcasting
+                            {
+                                let mut senders = dht_senders.write().await;
+                                senders.insert(topic_key_dht.clone(), DhtTopicSender::new(dht_sender));
+                                tracing::info!(topic = %topic_key_dht, "📡 DHT sender stored - broadcasts will reach DHT peers");
+                            }
 
                             while let Some(event_result) = dht_receiver.next().await {
                                 match event_result {
