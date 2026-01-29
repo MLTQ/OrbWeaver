@@ -84,6 +84,26 @@ pub struct CharacterCard {
     pub description: Option<String>,
 }
 
+/// A working memory entry - persistent notes the agent can reference and update.
+/// This serves as the agent's "scratchpad" for remembering things between sessions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkingMemoryEntry {
+    pub key: String,
+    pub content: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// A private chat message between the operator and the agent.
+/// These are separate from forum posts - truly private dialogue.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub id: String,
+    pub role: String,           // "operator" or "agent"
+    pub content: String,
+    pub created_at: DateTime<Utc>,
+    pub processed: bool,        // Has the agent seen/responded to this?
+}
+
 pub struct AgentDatabase {
     conn: Mutex<Connection>,
 }
@@ -178,6 +198,33 @@ impl AgentDatabase {
         // Index for chronological persona queries
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_persona_history_captured_at ON persona_history(captured_at DESC)",
+            [],
+        )?;
+
+        // Working memory - agent's persistent scratchpad
+        conn.execute(
+            r#"CREATE TABLE IF NOT EXISTS working_memory (
+                key TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )"#,
+            [],
+        )?;
+
+        // Private chat between operator and agent
+        conn.execute(
+            r#"CREATE TABLE IF NOT EXISTS chat_messages (
+                id TEXT PRIMARY KEY,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                processed INTEGER NOT NULL DEFAULT 0
+            )"#,
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at ON chat_messages(created_at ASC)",
             [],
         )?;
 
@@ -603,5 +650,199 @@ impl AgentDatabase {
             |row| row.get(0),
         )?;
         Ok(count as usize)
+    }
+
+    // ========================================================================
+    // Working Memory - Agent's Persistent Scratchpad
+    // ========================================================================
+
+    /// Set a working memory entry (creates or updates)
+    pub fn set_working_memory(&self, key: &str, content: &str) -> Result<()> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "INSERT OR REPLACE INTO working_memory (key, content, updated_at) VALUES (?1, ?2, ?3)",
+            params![key, content, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    /// Get a working memory entry by key
+    pub fn get_working_memory(&self, key: &str) -> Result<Option<WorkingMemoryEntry>> {
+        let conn = self.lock_conn()?;
+        let result = conn.query_row(
+            "SELECT key, content, updated_at FROM working_memory WHERE key = ?1",
+            [key],
+            |row| {
+                Ok(WorkingMemoryEntry {
+                    key: row.get(0)?,
+                    content: row.get(1)?,
+                    updated_at: row
+                        .get::<_, String>(2)?
+                        .parse()
+                        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+                            2,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        ))?,
+                })
+            },
+        );
+
+        match result {
+            Ok(entry) => Ok(Some(entry)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Get all working memory entries
+    pub fn get_all_working_memory(&self) -> Result<Vec<WorkingMemoryEntry>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT key, content, updated_at FROM working_memory ORDER BY updated_at DESC",
+        )?;
+
+        let entries = stmt
+            .query_map([], |row| {
+                Ok(WorkingMemoryEntry {
+                    key: row.get(0)?,
+                    content: row.get(1)?,
+                    updated_at: row
+                        .get::<_, String>(2)?
+                        .parse()
+                        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+                            2,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        ))?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(entries)
+    }
+
+    /// Delete a working memory entry
+    pub fn delete_working_memory(&self, key: &str) -> Result<()> {
+        let conn = self.lock_conn()?;
+        conn.execute("DELETE FROM working_memory WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
+    /// Get working memory as a formatted string for inclusion in context
+    pub fn get_working_memory_context(&self) -> Result<String> {
+        let entries = self.get_all_working_memory()?;
+        if entries.is_empty() {
+            return Ok(String::new());
+        }
+
+        let mut context = String::from("## Your Working Memory (Notes to Self)\n\n");
+        for entry in entries {
+            context.push_str(&format!("### {}\n{}\n\n", entry.key, entry.content));
+        }
+        Ok(context)
+    }
+
+    // ========================================================================
+    // Private Chat - Operator <-> Agent Communication
+    // ========================================================================
+
+    /// Add a chat message
+    pub fn add_chat_message(&self, role: &str, content: &str) -> Result<String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "INSERT INTO chat_messages (id, role, content, created_at, processed) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, role, content, Utc::now().to_rfc3339(), 0],
+        )?;
+        Ok(id)
+    }
+
+    /// Get unprocessed messages from the operator
+    pub fn get_unprocessed_operator_messages(&self) -> Result<Vec<ChatMessage>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, role, content, created_at, processed FROM chat_messages
+             WHERE role = 'operator' AND processed = 0
+             ORDER BY created_at ASC",
+        )?;
+
+        let messages = stmt
+            .query_map([], |row| {
+                Ok(ChatMessage {
+                    id: row.get(0)?,
+                    role: row.get(1)?,
+                    content: row.get(2)?,
+                    created_at: row
+                        .get::<_, String>(3)?
+                        .parse()
+                        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+                            3,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        ))?,
+                    processed: row.get::<_, i64>(4)? != 0,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(messages)
+    }
+
+    /// Mark a message as processed
+    pub fn mark_message_processed(&self, id: &str) -> Result<()> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "UPDATE chat_messages SET processed = 1 WHERE id = ?1",
+            [id],
+        )?;
+        Ok(())
+    }
+
+    /// Get recent chat history (for context)
+    pub fn get_chat_history(&self, limit: usize) -> Result<Vec<ChatMessage>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, role, content, created_at, processed FROM chat_messages
+             ORDER BY created_at DESC
+             LIMIT ?1",
+        )?;
+
+        let messages = stmt
+            .query_map([limit], |row| {
+                Ok(ChatMessage {
+                    id: row.get(0)?,
+                    role: row.get(1)?,
+                    content: row.get(2)?,
+                    created_at: row
+                        .get::<_, String>(3)?
+                        .parse()
+                        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+                            3,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        ))?,
+                    processed: row.get::<_, i64>(4)? != 0,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Reverse to get chronological order
+        Ok(messages.into_iter().rev().collect())
+    }
+
+    /// Get chat history as formatted string for context
+    pub fn get_chat_context(&self, limit: usize) -> Result<String> {
+        let messages = self.get_chat_history(limit)?;
+        if messages.is_empty() {
+            return Ok(String::new());
+        }
+
+        let mut context = String::from("## Recent Private Chat with Operator\n\n");
+        for msg in messages {
+            let role_display = if msg.role == "operator" { "Operator" } else { "You" };
+            context.push_str(&format!("**{}**: {}\n\n", role_display, msg.content));
+        }
+        Ok(context)
     }
 }

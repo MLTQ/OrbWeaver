@@ -471,6 +471,9 @@ impl Agent {
     }
 
     async fn run_cycle(&self) -> Result<()> {
+        // First, check for and process any private chat messages
+        self.process_chat_messages().await?;
+
         // Read recent posts
         self.set_state(AgentVisualState::Reading).await;
         self.emit(AgentEvent::Observation("📖 Checking for recent posts...".to_string())).await;
@@ -527,13 +530,25 @@ impl Agent {
                     num_already_processed)
         )).await;
 
-        // Reason about posts using LLM
+        // Get working memory and chat context from database
+        let (working_memory_context, chat_context) = {
+            let db_lock = self.database.read().await;
+            if let Some(ref db) = *db_lock {
+                let wm = db.get_working_memory_context().unwrap_or_default();
+                let chat = db.get_chat_context(10).unwrap_or_default();
+                (wm, chat)
+            } else {
+                (String::new(), String::new())
+            }
+        };
+
+        // Reason about posts using LLM with full context
         self.set_state(AgentVisualState::Thinking).await;
         self.emit(AgentEvent::Observation("💭 Asking LLM to analyze posts...".to_string())).await;
 
         let decision = {
             let reasoning = self.reasoning.read().await;
-            reasoning.analyze_posts(&filtered_posts).await?
+            reasoning.analyze_posts_with_context(&filtered_posts, &working_memory_context, &chat_context).await?
         };
 
         match decision {
@@ -603,6 +618,38 @@ impl Agent {
                     }
                 }
             }
+            reasoning::Decision::UpdateMemory { key, content, reasoning } => {
+                // Agent wants to update its working memory
+                self.emit(AgentEvent::ReasoningTrace(reasoning)).await;
+                self.emit(AgentEvent::Observation(
+                    format!("📝 Updating working memory: {}...", key)
+                )).await;
+
+                let db_lock = self.database.read().await;
+                if let Some(ref db) = *db_lock {
+                    if let Err(e) = db.set_working_memory(&key, &content) {
+                        tracing::warn!("Failed to update working memory: {}", e);
+                        self.emit(AgentEvent::Error(format!("Failed to save memory: {}", e))).await;
+                    } else {
+                        self.emit(AgentEvent::ActionTaken {
+                            action: "Updated memory".to_string(),
+                            result: format!("Key: {}", key),
+                        }).await;
+                    }
+                }
+
+                // Mark all analyzed posts as processed
+                let mut state = self.state.write().await;
+                for post_view in &filtered_posts {
+                    state.processed_posts.insert(post_view.post.id.clone());
+                }
+            }
+            reasoning::Decision::ChatReply { content, reasoning, memory_update } => {
+                // This shouldn't happen in run_cycle (it's for process_chat_messages)
+                // but handle it gracefully
+                self.emit(AgentEvent::ReasoningTrace(reasoning)).await;
+                tracing::warn!("Unexpected ChatReply decision in run_cycle, content: {}", content);
+            }
             reasoning::Decision::NoAction { reasoning } => {
                 self.emit(AgentEvent::ReasoningTrace(reasoning)).await;
                 self.emit(AgentEvent::Observation("No action needed at this time.".to_string())).await;
@@ -620,6 +667,97 @@ impl Agent {
         }
 
         self.set_state(AgentVisualState::Idle).await;
+
+        Ok(())
+    }
+
+    /// Process any unprocessed chat messages from the operator
+    async fn process_chat_messages(&self) -> Result<()> {
+        // Get unprocessed operator messages
+        let unprocessed_messages = {
+            let db_lock = self.database.read().await;
+            if let Some(ref db) = *db_lock {
+                db.get_unprocessed_operator_messages().unwrap_or_default()
+            } else {
+                return Ok(());
+            }
+        };
+
+        if unprocessed_messages.is_empty() {
+            return Ok(());
+        }
+
+        self.emit(AgentEvent::Observation(
+            format!("💬 Processing {} private message(s) from operator...", unprocessed_messages.len())
+        )).await;
+        self.set_state(AgentVisualState::Thinking).await;
+
+        // Get working memory context
+        let working_memory_context = {
+            let db_lock = self.database.read().await;
+            if let Some(ref db) = *db_lock {
+                db.get_working_memory_context().unwrap_or_default()
+            } else {
+                String::new()
+            }
+        };
+
+        // Process the chat messages with the LLM
+        let decision = {
+            let reasoning = self.reasoning.read().await;
+            reasoning.process_chat(&unprocessed_messages, &working_memory_context).await?
+        };
+
+        match decision {
+            reasoning::Decision::ChatReply { content, reasoning, memory_update } => {
+                self.emit(AgentEvent::ReasoningTrace(reasoning)).await;
+
+                // Save the agent's response to the chat
+                {
+                    let db_lock = self.database.read().await;
+                    if let Some(ref db) = *db_lock {
+                        // Mark all processed messages as processed
+                        for msg in &unprocessed_messages {
+                            if let Err(e) = db.mark_message_processed(&msg.id) {
+                                tracing::warn!("Failed to mark message as processed: {}", e);
+                            }
+                        }
+
+                        // Save agent's reply
+                        if let Err(e) = db.add_chat_message("agent", &content) {
+                            tracing::warn!("Failed to save agent chat reply: {}", e);
+                        }
+
+                        // Update memory if requested
+                        if let Some((key, value)) = memory_update {
+                            if let Err(e) = db.set_working_memory(&key, &value) {
+                                tracing::warn!("Failed to update working memory: {}", e);
+                            } else {
+                                self.emit(AgentEvent::Observation(
+                                    format!("📝 Also updated memory: {}", key)
+                                )).await;
+                            }
+                        }
+                    }
+                }
+
+                self.emit(AgentEvent::ActionTaken {
+                    action: "Replied to operator".to_string(),
+                    result: format!("Response: {}...", &content[..content.len().min(50)]),
+                }).await;
+                self.set_state(AgentVisualState::Happy).await;
+                sleep(Duration::from_millis(500)).await;
+            }
+            _ => {
+                // Mark messages as processed even if no reply
+                let db_lock = self.database.read().await;
+                if let Some(ref db) = *db_lock {
+                    for msg in &unprocessed_messages {
+                        let _ = db.mark_message_processed(&msg.id);
+                    }
+                }
+            }
+        }
 
         Ok(())
     }

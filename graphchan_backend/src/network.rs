@@ -82,8 +82,6 @@ pub struct NetworkHandle {
     dht_senders: Arc<RwLock<HashMap<String, DhtTopicSender>>>,
     blobs: FsStore,
     database: Database,
-    /// Signing key for DHT-based topic discovery (derived from iroh secret)
-    signing_key: ed25519_dalek::SigningKey,
     /// Whether DHT is reachable (true = connected, false = unreachable, None = still checking)
     dht_connected: Arc<AtomicBool>,
     dht_checked: Arc<AtomicBool>,
@@ -100,10 +98,8 @@ impl NetworkHandle {
         let secret = load_iroh_secret(paths)?;
         let endpoint_id = secret.public();
 
-        // Derive ed25519 signing key for DHT-based topic discovery
-        // The iroh SecretKey is ed25519-compatible, so we can use its bytes directly
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret.to_bytes());
-        tracing::info!("derived signing key for DHT topic discovery");
+        // Note: DHT signing keys are derived per-topic in subscribe_to_topic()
+        // so all peers on the same topic share the same key for verification
 
         // Determine relay mode
         let relay_mode = if let Some(relay_url) = &config.relay_url {
@@ -220,7 +216,6 @@ impl NetworkHandle {
             dht_senders: event_worker_dht_senders,
             blobs: blob_store.clone(),
             database: database.clone(),
-            signing_key,
             dht_connected: dht_connected.clone(),
             dht_checked: dht_checked.clone(),
         };
@@ -314,6 +309,24 @@ impl NetworkHandle {
 
     pub fn current_addr(&self) -> EndpointAddr {
         self.endpoint.addr()
+    }
+
+    /// Get current network addresses (relay URLs and IP addresses) for friend code generation
+    pub fn get_addresses(&self) -> Vec<String> {
+        let addr = self.endpoint.addr();
+        let mut addresses = Vec::new();
+
+        // Add relay URLs first (most important for NAT traversal)
+        for relay in addr.relay_urls() {
+            addresses.push(relay.to_string());
+        }
+
+        // Add direct IP addresses
+        for ip in addr.ip_addrs() {
+            addresses.push(ip.to_string());
+        }
+
+        addresses
     }
 
     pub fn make_blob_ticket(&self, blob_hex: &str) -> Option<BlobTicket> {
@@ -575,7 +588,6 @@ impl NetworkHandle {
 
         // Spawn DHT auto-discovery in background (this can take a while)
         let gossip = self.gossip.clone();
-        let signing_key = self.signing_key.clone();
         let topic_name_owned = topic_name.to_string();
         let inbound_tx_dht = self.inbound_tx.clone();
         let dht_senders = self.dht_senders.clone();
@@ -586,6 +598,7 @@ impl NetworkHandle {
             tracing::info!(topic = %topic_name_owned, "🔍 starting DHT auto-discovery in background...");
 
             // Create a deterministic shared secret for this topic
+            // This must be the same for all peers on the same topic
             let topic_secret = {
                 let mut hasher = blake3::Hasher::new();
                 hasher.update(b"graphchan-topic-secret-v1:");
@@ -593,14 +606,26 @@ impl NetworkHandle {
                 hasher.finalize().as_bytes().to_vec()
             };
 
+            // IMPORTANT: Derive signing key from the TOPIC NAME, not from peer identity
+            // All peers on the same topic must use the same signing key so they can
+            // verify each other's DHT announcements
+            let topic_signing_key = {
+                let mut hasher = blake3::Hasher::new();
+                hasher.update(b"graphchan-topic-signing-key-v1:");
+                hasher.update(topic_name_owned.as_bytes());
+                let hash = hasher.finalize();
+                ed25519_dalek::SigningKey::from_bytes(hash.as_bytes())
+            };
+
             // Create the DHT topic ID from the topic name
             let dht_topic_id = DhtTopicId::new(format!("graphchan:{}", topic_name_owned));
 
             // Create a RecordPublisher for DHT-based peer discovery
+            // All peers on the same topic share the same signing key
             let record_publisher = RecordPublisher::new(
                 dht_topic_id,
-                signing_key.verifying_key(),
-                signing_key.clone(),
+                topic_signing_key.verifying_key(),
+                topic_signing_key,
                 None, // No secret rotation
                 topic_secret,
             );
