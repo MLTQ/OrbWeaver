@@ -37,7 +37,22 @@ pub fn image_preview(
         return ImagePreview::Ready(tex);
     }
     if !app.image_loading.contains(&file.id) {
-        let url = crate::app::resolve_download_url(api_base, file.download_url.as_deref(), &file.id);
+        // Prefer download_url if it's a full URL, otherwise use blob_id for remote files
+        let url = if let Some(download_url) = &file.download_url {
+            if download_url.starts_with("http://") || download_url.starts_with("https://") {
+                download_url.clone()
+            } else if download_url.starts_with('/') {
+                format!("{}{}", api_base, download_url)
+            } else {
+                format!("{}/{}", api_base, download_url)
+            }
+        } else if let Some(blob_id) = &file.blob_id {
+            // For remote files without download_url, use blob endpoint
+            format!("{}/blobs/{}", api_base, blob_id)
+        } else {
+            // Fallback to file endpoint
+            format!("{}/files/{}", api_base, file.id)
+        };
         app.spawn_download_image(&file.id, &url);
     }
     ImagePreview::Loading

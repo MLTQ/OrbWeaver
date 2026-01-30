@@ -922,8 +922,32 @@ async fn list_peers(State(state): State<AppState>) -> ApiResult<Vec<PeerView>> {
 
 async fn get_self_peer(State(state): State<AppState>) -> ApiResult<Option<PeerView>> {
     let service = PeerService::new(state.database.clone());
-    let peer = service.get_local_peer()?;
-    Ok(Json(peer))
+    let mut peer = match service.get_local_peer()? {
+        Some(p) => p,
+        None => return Ok(Json(None)),
+    };
+
+    // Generate a full friend code with network addresses (including relay URL)
+    // This ensures the friend code can be used for NAT traversal
+    if let (Some(iroh_peer_id), Some(gpg_fingerprint)) = (&peer.iroh_peer_id, &peer.gpg_fingerprint) {
+        let addresses = state.network.get_addresses();
+        if !addresses.is_empty() {
+            // Create a friend code payload with addresses
+            let payload = crate::identity::FriendCodePayload {
+                version: 2,
+                peer_id: iroh_peer_id.clone(),
+                gpg_fingerprint: gpg_fingerprint.clone(),
+                x25519_pubkey: peer.x25519_pubkey.clone(),
+                addresses,
+            };
+            if let Ok(json) = serde_json::to_vec(&payload) {
+                use base64::Engine;
+                peer.friendcode = Some(base64::engine::general_purpose::STANDARD.encode(json));
+            }
+        }
+    }
+
+    Ok(Json(Some(peer)))
 }
 
 async fn add_peer(
@@ -1013,6 +1037,7 @@ struct IdentityInfo {
 struct NetworkInfo {
     peer_id: String,
     addresses: Vec<String>,
+    dht_status: String,  // "checking", "connected", or "unreachable"
 }
 
 #[derive(Debug, Deserialize)]
@@ -1284,6 +1309,8 @@ fn map_file_view(file: FileView) -> FileResponse {
 
 impl NetworkInfo {
     fn from_handle(handle: &NetworkHandle) -> Self {
+        use crate::network::DhtStatus;
+
         let addr = handle.current_addr();
         let mut addresses = Vec::new();
         for ip in addr.ip_addrs() {
@@ -1292,9 +1319,17 @@ impl NetworkInfo {
         for relay in addr.relay_urls() {
             addresses.push(relay.to_string());
         }
+
+        let dht_status = match handle.dht_status() {
+            DhtStatus::Checking => "checking",
+            DhtStatus::Connected => "connected",
+            DhtStatus::Unreachable => "unreachable",
+        }.to_string();
+
         Self {
             peer_id: handle.peer_id(),
             addresses,
+            dht_status,
         }
     }
 }

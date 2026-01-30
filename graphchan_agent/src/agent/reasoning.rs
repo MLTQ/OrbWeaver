@@ -111,6 +111,141 @@ impl ReasoningEngine {
             .context("Empty LLM response")
     }
 
+    /// Analyze posts with additional context (working memory, chat history)
+    pub async fn analyze_posts_with_context(
+        &self,
+        posts: &[RecentPostView],
+        working_memory_context: &str,
+        chat_context: &str,
+    ) -> Result<Decision> {
+        if posts.is_empty() {
+            return Ok(Decision::NoAction {
+                reasoning: vec!["No posts to analyze".to_string()],
+            });
+        }
+
+        // Build context from recent posts
+        let mut context = String::new();
+
+        // Add working memory if present
+        if !working_memory_context.is_empty() {
+            context.push_str(working_memory_context);
+            context.push_str("\n---\n\n");
+        }
+
+        // Add recent chat if present
+        if !chat_context.is_empty() {
+            context.push_str(chat_context);
+            context.push_str("\n---\n\n");
+        }
+
+        context.push_str("## Recent Forum Activity\n\n");
+        for (i, post_view) in posts.iter().enumerate().take(10) {
+            context.push_str(&format!(
+                "{}. Thread: \"{}\"\n   Post by {}: {}\n   Post ID: {}\n\n",
+                i + 1,
+                post_view.thread_title,
+                post_view.post.author_peer_id.as_deref().unwrap_or("Anonymous"),
+                post_view.post.body,
+                post_view.post.id
+            ));
+        }
+
+        let user_message = format!(
+            "{}\n\nReview the forum activity and decide what to do.\n\n\
+            IMPORTANT: Respond with ONLY a JSON object in one of these formats:\n\n\
+            To reply to a forum post:\n\
+            {{\"action\": \"reply\", \"post_id\": \"post-id-here\", \"content\": \"your reply\", \"reasoning\": [\"why\"]}}\n\n\
+            To update your working memory (notes to self):\n\
+            {{\"action\": \"update_memory\", \"key\": \"topic-name\", \"content\": \"note content\", \"reasoning\": [\"why\"]}}\n\n\
+            To take no action:\n\
+            {{\"action\": \"none\", \"reasoning\": [\"why\"]}}\n\n\
+            Only reply if you have something genuinely valuable to contribute.\n\
+            Use working memory to track patterns, questions you want to explore, or things to remember.",
+            context
+        );
+
+        let response = self.call_llm(&user_message).await?;
+        self.parse_decision(&response)
+    }
+
+    /// Process private chat messages from the operator
+    pub async fn process_chat(&self, messages: &[crate::database::ChatMessage], working_memory_context: &str) -> Result<Decision> {
+        if messages.is_empty() {
+            return Ok(Decision::NoAction {
+                reasoning: vec!["No chat messages to process".to_string()],
+            });
+        }
+
+        let mut context = String::new();
+
+        // Add working memory if present
+        if !working_memory_context.is_empty() {
+            context.push_str(working_memory_context);
+            context.push_str("\n---\n\n");
+        }
+
+        context.push_str("## New Messages from Operator\n\n");
+        for msg in messages {
+            context.push_str(&format!("**Operator**: {}\n\n", msg.content));
+        }
+
+        let user_message = format!(
+            "{}\n\nThe operator has sent you a private message. Respond thoughtfully.\n\n\
+            IMPORTANT: Respond with ONLY a JSON object:\n\
+            {{\"action\": \"chat_reply\", \"content\": \"your response\", \"reasoning\": [\"your thought process\"], \"memory_update\": null or [\"key\", \"content\"]}}\n\n\
+            You can optionally update your working memory alongside your reply.\n\
+            This is a private conversation - be genuine and direct.",
+            context
+        );
+
+        let response = self.call_llm(&user_message).await?;
+        self.parse_chat_decision(&response)
+    }
+
+    fn parse_chat_decision(&self, llm_response: &str) -> Result<Decision> {
+        tracing::debug!("Raw chat LLM response:\n{}", llm_response);
+
+        let cleaned_json = extract_json(llm_response)?;
+        let json_response: serde_json::Value = serde_json::from_str(&cleaned_json)?;
+
+        let action = json_response["action"].as_str().unwrap_or("none");
+
+        let reasoning: Vec<String> = json_response["reasoning"]
+            .as_array()
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+
+        match action {
+            "chat_reply" => {
+                let content = json_response["content"]
+                    .as_str()
+                    .context("Missing content in chat reply")?
+                    .to_string();
+
+                let memory_update = json_response["memory_update"]
+                    .as_array()
+                    .and_then(|arr| {
+                        if arr.len() >= 2 {
+                            Some((
+                                arr[0].as_str()?.to_string(),
+                                arr[1].as_str()?.to_string(),
+                            ))
+                        } else {
+                            None
+                        }
+                    });
+
+                Ok(Decision::ChatReply {
+                    content,
+                    reasoning,
+                    memory_update,
+                })
+            }
+            _ => Ok(Decision::NoAction { reasoning }),
+        }
+    }
+
     fn parse_decision(&self, llm_response: &str) -> Result<Decision> {
         tracing::debug!("Raw LLM response:\n{}", llm_response);
 
@@ -175,6 +310,25 @@ impl ReasoningEngine {
 
                 Ok(Decision::Reply {
                     post_id,
+                    content,
+                    reasoning,
+                })
+            }
+            "update_memory" => {
+                let key = json_response["key"]
+                    .as_str()
+                    .with_context(|| "Missing key in update_memory decision")?
+                    .to_string();
+
+                let content = json_response["content"]
+                    .as_str()
+                    .with_context(|| "Missing content in update_memory decision")?
+                    .to_string();
+
+                tracing::info!("Decision: Update working memory key '{}': {}", key, &content[..50.min(content.len())]);
+
+                Ok(Decision::UpdateMemory {
+                    key,
                     content,
                     reasoning,
                 })
@@ -429,6 +583,19 @@ pub enum Decision {
     },
     NoAction {
         reasoning: Vec<String>,
+    },
+    /// Update working memory (scratchpad)
+    UpdateMemory {
+        key: String,
+        content: String,
+        reasoning: Vec<String>,
+    },
+    /// Reply to private chat with operator
+    ChatReply {
+        content: String,
+        reasoning: Vec<String>,
+        /// Optional memory update alongside chat reply
+        memory_update: Option<(String, String)>,
     },
 }
 

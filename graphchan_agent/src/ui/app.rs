@@ -4,9 +4,11 @@ use std::sync::Arc;
 
 use crate::agent::{Agent, AgentEvent, AgentVisualState};
 use crate::config::AgentConfig;
+use crate::database::{AgentDatabase, ChatMessage};
 use super::settings::SettingsPanel;
 use super::character::CharacterPanel;
 use super::comfy_settings::ComfySettingsPanel;
+use super::avatar::AvatarSet;
 
 pub struct AgentApp {
     events: Vec<AgentEvent>,
@@ -18,6 +20,11 @@ pub struct AgentApp {
     settings_panel: SettingsPanel,
     character_panel: CharacterPanel,
     comfy_settings_panel: ComfySettingsPanel,
+    avatars: Option<AvatarSet>,
+    database: Option<Arc<AgentDatabase>>,
+    chat_history: Vec<ChatMessage>,
+    last_chat_refresh: std::time::Instant,
+    show_chat_panel: bool,
 }
 
 impl AgentApp {
@@ -25,6 +32,7 @@ impl AgentApp {
         event_rx: Receiver<AgentEvent>,
         agent: Arc<Agent>,
         config: AgentConfig,
+        database: Option<Arc<AgentDatabase>>,
     ) -> Self {
         let mut comfy_settings_panel = ComfySettingsPanel::new();
         comfy_settings_panel.load_workflow_from_config(&config);
@@ -39,12 +47,72 @@ impl AgentApp {
             settings_panel: SettingsPanel::new(config.clone()),
             character_panel: CharacterPanel::new(config),
             comfy_settings_panel,
+            avatars: None, // Will be loaded on first frame when egui context is available
+            database,
+            chat_history: Vec::new(),
+            last_chat_refresh: std::time::Instant::now(),
+            show_chat_panel: false,
+        }
+    }
+
+    fn refresh_chat_history(&mut self) {
+        if let Some(ref db) = self.database {
+            match db.get_chat_history(50) {
+                Ok(history) => {
+                    self.chat_history = history;
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to refresh chat history: {}", e);
+                }
+            }
+        }
+    }
+
+    fn send_chat_message(&mut self, content: &str) {
+        if let Some(ref db) = self.database {
+            match db.add_chat_message("operator", content) {
+                Ok(_) => {
+                    tracing::info!("Sent chat message to agent: {}", content);
+                    self.refresh_chat_history();
+                }
+                Err(e) => {
+                    tracing::error!("Failed to send chat message: {}", e);
+                }
+            }
+        }
+    }
+
+    fn load_avatars(&mut self, ctx: &egui::Context, config: &AgentConfig) {
+        let idle = config.avatar_idle.as_deref();
+        let thinking = config.avatar_thinking.as_deref();
+        let active = config.avatar_active.as_deref();
+
+        let avatars = AvatarSet::load(ctx, idle, thinking, active);
+
+        if avatars.has_avatars() {
+            tracing::info!("Loaded avatars successfully");
+            self.avatars = Some(avatars);
+        } else {
+            tracing::info!("No avatars configured, using emoji fallback");
+            self.avatars = None;
         }
     }
 }
 
 impl eframe::App for AgentApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Load avatars on first frame when context is available
+        if self.avatars.is_none() {
+            let config = self.settings_panel.config.clone();
+            self.load_avatars(ctx, &config);
+        }
+
+        // Periodically refresh chat history
+        if self.last_chat_refresh.elapsed() > std::time::Duration::from_secs(2) {
+            self.refresh_chat_history();
+            self.last_chat_refresh = std::time::Instant::now();
+        }
+
         // Poll for new events from agent (non-blocking)
         while let Ok(event) = self.event_rx.try_recv() {
             match &event {
@@ -55,11 +123,11 @@ impl eframe::App for AgentApp {
             }
             self.events.push(event);
         }
-        
+
         egui::CentralPanel::default().show(ctx, |ui| {
             // Header with agent sprite
             ui.horizontal(|ui| {
-                super::sprite::render_agent_emoji(ui, &self.current_state);
+                super::sprite::render_agent_sprite(ui, &self.current_state, self.avatars.as_mut());
                 ui.vertical(|ui| {
                     ui.heading("Graphchan Agent");
                     ui.label(format!("Status: {:?}", self.current_state));
@@ -85,25 +153,45 @@ impl eframe::App for AgentApp {
                     if ui.button("🎨 Workflow").clicked() {
                         self.comfy_settings_panel.show = true;
                     }
+
+                    // Toggle chat panel button
+                    let chat_btn_text = if self.show_chat_panel { "📋 Activity" } else { "💬 Chat" };
+                    if ui.button(chat_btn_text).clicked() {
+                        self.show_chat_panel = !self.show_chat_panel;
+                        if self.show_chat_panel {
+                            self.refresh_chat_history();
+                        }
+                    }
                 });
             });
-            
+
             ui.separator();
-            
-            // Event log
-            super::chat::render_event_log(ui, &self.events);
-            
+
+            // Show either event log or chat panel
+            if self.show_chat_panel {
+                super::chat::render_private_chat(ui, &self.chat_history);
+            } else {
+                super::chat::render_event_log(ui, &self.events);
+            }
+
             ui.separator();
-            
-            // User input (for future directives)
+
+            // User input - sends private chat message
             ui.horizontal(|ui| {
                 ui.label("💬");
                 let response = ui.text_edit_singleline(&mut self.user_input);
-                
-                if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    // TODO: Send directive to agent
-                    tracing::info!("User directive: {}", self.user_input);
+
+                let enter_pressed = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let send_clicked = ui.button("Send").clicked();
+
+                if (enter_pressed || send_clicked) && !self.user_input.trim().is_empty() {
+                    let msg = self.user_input.trim().to_string();
+                    self.send_chat_message(&msg);
                     self.user_input.clear();
+                    // Switch to chat view to see the message
+                    if !self.show_chat_panel {
+                        self.show_chat_panel = true;
+                    }
                 }
             });
         });

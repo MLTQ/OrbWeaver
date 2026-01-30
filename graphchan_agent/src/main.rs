@@ -4,6 +4,7 @@ mod character_card;
 mod comfy_client;
 mod comfy_workflow;
 mod config;
+mod database;
 mod models;
 mod ui;
 
@@ -13,6 +14,7 @@ use tracing_subscriber::EnvFilter;
 use agent::Agent;
 use api_client::GraphchanClient;
 use config::AgentConfig;
+use database::AgentDatabase;
 use ui::app::AgentApp;
 
 fn main() {
@@ -48,6 +50,15 @@ fn main() {
     // Create event channel
     let (event_tx, event_rx) = flume::unbounded();
 
+    // Create database for UI (shared with agent via same file, WAL mode allows concurrent access)
+    let ui_database = match AgentDatabase::new(&config.database_path) {
+        Ok(db) => Some(Arc::new(db)),
+        Err(e) => {
+            tracing::warn!("Failed to create UI database: {}", e);
+            None
+        }
+    };
+
     // Create agent
     let agent = Arc::new(Agent::new(client, config.clone(), event_tx));
 
@@ -73,7 +84,7 @@ fn main() {
     if let Err(e) = eframe::run_native(
         "Graphchan Agent",
         native_options,
-        Box::new(|_cc| Ok(Box::new(AgentApp::new(event_rx, agent, config)))),
+        Box::new(|_cc| Ok(Box::new(AgentApp::new(event_rx, agent, config, ui_database)))),
     ) {
         tracing::error!("UI error: {}", e);
         std::process::exit(1);

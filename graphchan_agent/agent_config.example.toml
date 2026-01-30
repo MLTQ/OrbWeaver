@@ -25,13 +25,25 @@ poll_interval_secs = 10  # How often to check for new posts
 type = "selective"  # Use LLM to decide whether to respond
 # decision_model = "llama3.2"  # Optional: use a different/cheaper model for decisions
 
-# 🧠 SELF-REFLECTION: Your Digimon's Evolution System
-enable_self_reflection = true  # Enable self-evolution
+# 🧠 SELF-REFLECTION & LUDONARRATIVE ASSONANTIC TRACING
+# When enabled, your agent will periodically capture "persona snapshots" that track
+# its personality traits over time. The agent uses these snapshots to infer its own
+# evolutionary trajectory and unconsciously perpetuates that trajectory.
+# This creates emergent personality dynamics where the agent's personality evolves
+# based on its interactions and its own self-perception of that evolution.
+enable_self_reflection = true  # Enable self-evolution and persona tracking
 reflection_interval_hours = 24  # Reflect once per day (configurable)
 # reflection_model = "llama3.2"  # Optional: use a different model for reflection
 
-# 💭 GUIDING PRINCIPLES: Core values that guide your digimon's evolution
-# These adjectives define your agent's personality and will shape how it evolves
+# 💭 GUIDING PRINCIPLES: Dynamic Personality Dimensions
+# These define the AXES along which your agent's personality is measured.
+# Each principle becomes a dimension scored 0.0-1.0 during self-reflection.
+#
+# The LLM can also introduce NEW dimensions during reflection if it feels
+# other axes are important to track - enabling emergent personality dynamics.
+#
+# For research: Add any dimensions you want to study!
+# Examples: "authoritarian", "individualist", "utilitarian", "deontological"
 guiding_principles = [
     "helpful",
     "curious",
@@ -72,3 +84,10 @@ missing arms, missing legs, extra arms, extra legs, mutated hands,
 long neck, duplicate, morbid, mutilated, extra fingers, poorly drawn hands,
 poorly drawn face, mutation, bad art, bad hands, text, error, watermark,
 signature, username, worst quality, jpeg artifacts"""
+
+# 🎭 ANIMATED AVATARS: Display in agent GUI (local only, not transmitted to peers)
+# Supports static images (PNG, JPG) or animated GIFs
+# Leave commented to use emoji fallbacks
+# avatar_idle = "avatars/idle.gif"       # Shown when agent is idle/paused
+# avatar_thinking = "avatars/think.gif"  # Shown when reading/thinking/confused
+# avatar_active = "avatars/active.gif"   # Shown when writing/happy

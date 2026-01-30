@@ -46,15 +46,28 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                             ui.label(format!("Bio: {}", bio));
                         }
 
-                        // Show short friend code prominently
+                        // Show short friend code prominently (for readability)
+                        // But copy the FULL friend code (with network addresses for NAT traversal)
                         if let Some(short_code) = &peer.short_friendcode {
                             ui.label(egui::RichText::new("Friend Code:").strong());
                             ui.monospace(short_code);
+                            // Prefer full friendcode for copying (includes relay URL for NAT)
+                            let code_to_copy = peer.friendcode.as_ref().unwrap_or(short_code);
                             if ui.small_button("📋 Copy").clicked() {
-                                ui.output_mut(|o| o.copied_text = short_code.clone());
+                                ui.output_mut(|o| o.copied_text = code_to_copy.clone());
                             }
                         } else if let Some(legacy_code) = &peer.friendcode {
-                            ui.label(format!("Friend Code: {}", legacy_code));
+                            ui.label(egui::RichText::new("Friend Code:").strong());
+                            // Show truncated version for readability
+                            let display = if legacy_code.len() > 40 {
+                                format!("{}...", &legacy_code[..40])
+                            } else {
+                                legacy_code.clone()
+                            };
+                            ui.monospace(display);
+                            if ui.small_button("📋 Copy").clicked() {
+                                ui.output_mut(|o| o.copied_text = legacy_code.clone());
+                            }
                         }
 
                         ui.label(format!("Fingerprint: {}", peer.gpg_fingerprint.as_deref().unwrap_or("Unknown")));
@@ -122,16 +135,31 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
                     }
 
                     ui.group(|ui| {
-                        // Show short friend code prominently for local peer
+                        // Show short friend code for readability, but copy FULL code with addresses
                         if let Some(short_code) = &peer.short_friendcode {
                             ui.label(egui::RichText::new("Your Friend Code:").strong());
                             ui.label("Share this with others to connect:");
                             ui.monospace(short_code);
+                            // Always copy the FULL friend code (includes relay URL for NAT traversal)
+                            let code_to_copy = peer.friendcode.as_ref().unwrap_or(short_code);
                             if ui.button("📋 Copy to Clipboard").clicked() {
-                                ui.output_mut(|o| o.copied_text = short_code.clone());
+                                ui.output_mut(|o| o.copied_text = code_to_copy.clone());
+                            }
+                            if peer.friendcode.is_some() && peer.friendcode.as_ref() != peer.short_friendcode.as_ref() {
+                                ui.label(egui::RichText::new("(Full code with network addresses will be copied)").small().weak());
                             }
                         } else if let Some(legacy_code) = &peer.friendcode {
-                            ui.label(format!("Your Friend Code: {}", legacy_code));
+                            ui.label(egui::RichText::new("Your Friend Code:").strong());
+                            // Show truncated for readability
+                            let display = if legacy_code.len() > 50 {
+                                format!("{}...", &legacy_code[..50])
+                            } else {
+                                legacy_code.clone()
+                            };
+                            ui.monospace(display);
+                            if ui.button("📋 Copy to Clipboard").clicked() {
+                                ui.output_mut(|o| o.copied_text = legacy_code.clone());
+                            }
                         }
 
                         ui.label(format!("Fingerprint: {}", peer.gpg_fingerprint.as_deref().unwrap_or("Unknown")));
