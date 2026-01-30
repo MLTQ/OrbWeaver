@@ -5,7 +5,7 @@ on:
     branches:
       - master
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
 
 env:
@@ -56,13 +56,17 @@ jobs:
         run: ./scripts/patch_deps.sh
 
       - name: Build
-        run: cargo build --release --bin graphchan_desktop
+        run: cargo build --release --bin graphchan_desktop --bin graphchan_backend --bin graphchan_agent --bin graphchan_mcp
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: graphchan_desktop-windows
-          path: target/release/graphchan_desktop.exe
+          name: graphchan-windows
+          path: |
+            target/release/graphchan_desktop.exe
+            target/release/graphchan_backend.exe
+            target/release/graphchan_agent.exe
+            target/release/graphchan_mcp.exe
 
   build-macos:
     runs-on: macos-latest
@@ -82,13 +86,17 @@ jobs:
         run: ./scripts/patch_deps.sh
 
       - name: Build
-        run: cargo build --release --bin graphchan_desktop
+        run: cargo build --release --bin graphchan_desktop --bin graphchan_backend --bin graphchan_agent --bin graphchan_mcp
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: graphchan_desktop-macos
-          path: target/release/graphchan_desktop
+          name: graphchan-macos
+          path: |
+            target/release/graphchan_desktop
+            target/release/graphchan_backend
+            target/release/graphchan_agent
+            target/release/graphchan_mcp
 
   build-linux:
     runs-on: ubuntu-latest
@@ -116,11 +124,11 @@ jobs:
              ls -la /usr/lib/x86_64-linux-gnu/pkgconfig || true
              exit 1
           fi
-          
+
           echo "Found alsa.pc at $ALSA_PC"
           export PKG_CONFIG_PATH=$(dirname "$ALSA_PC"):$PKG_CONFIG_PATH
           echo "PKG_CONFIG_PATH is now $PKG_CONFIG_PATH"
-          
+
           echo "Verifying alsa with pkg-config..."
           pkg-config --libs --cflags alsa
 
@@ -130,14 +138,19 @@ jobs:
           echo "Patching dependencies..."
           ./scripts/patch_deps.sh
 
+
           echo "Building..."
-          cargo build --release --bin graphchan_desktop
+          cargo build --release --bin graphchan_desktop --bin graphchan_backend --bin graphchan_agent --bin graphchan_mcp
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: graphchan_desktop-linux
-          path: target/release/graphchan_desktop
+          name: graphchan-linux
+          path: |
+            target/release/graphchan_desktop
+            target/release/graphchan_backend
+            target/release/graphchan_agent
+            target/release/graphchan_mcp
 
   create-release:
     # Run even if some builds fail, but need at least one to succeed
@@ -171,29 +184,32 @@ jobs:
       - name: Prepare binaries for release
         run: |
           cd artifacts
-          # Only copy artifacts that exist (from successful builds)
-          if [ -d "graphchan_desktop-windows" ]; then
-            cp graphchan_desktop-windows/graphchan_desktop.exe ../graphchan_desktop-windows.exe
-            echo "Windows build included"
-          else
-            echo "Windows build not available (build may have failed)"
-          fi
 
-          if [ -d "graphchan_desktop-macos" ]; then
-            cp graphchan_desktop-macos/graphchan_desktop ../graphchan_desktop-macos
-            chmod +x ../graphchan_desktop-macos
-            echo "macOS build included"
-          else
-            echo "macOS build not available (build may have failed)"
-          fi
+          # Helper function to process artifacts
+          process_artifact() {
+            local platform=$1
+            local ext=$2
+            local dir="graphchan-${platform}"
+            
+            if [ -d "$dir" ]; then
+              echo "Processing ${platform} artifacts..."
+              for bin in graphchan_desktop graphchan_backend graphchan_agent graphchan_mcp; do
+                if [ -f "${dir}/${bin}${ext}" ]; then
+                  cp "${dir}/${bin}${ext}" "../${bin}-${platform}${ext}"
+                  if [ -z "$ext" ]; then
+                    chmod +x "../${bin}-${platform}"
+                  fi
+                  echo "Prepared ${bin}-${platform}${ext}"
+                fi
+              done
+            else
+              echo "${platform} build not available"
+            fi
+          }
 
-          if [ -d "graphchan_desktop-linux" ]; then
-            cp graphchan_desktop-linux/graphchan_desktop ../graphchan_desktop-linux
-            chmod +x ../graphchan_desktop-linux
-            echo "Linux build included"
-          else
-            echo "Linux build not available (build may have failed)"
-          fi
+          process_artifact "windows" ".exe"
+          process_artifact "macos" ""
+          process_artifact "linux" ""
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -210,6 +226,15 @@ jobs:
             - Linux: ${{ needs.build-linux.result }}
           files: |
             graphchan_desktop-windows.exe
+            graphchan_backend-windows.exe
+            graphchan_agent-windows.exe
+            graphchan_mcp-windows.exe
             graphchan_desktop-macos
+            graphchan_backend-macos
+            graphchan_agent-macos
+            graphchan_mcp-macos
             graphchan_desktop-linux
+            graphchan_backend-linux
+            graphchan_agent-linux
+            graphchan_mcp-linux
           fail_on_unmatched_files: false
