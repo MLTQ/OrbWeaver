@@ -212,10 +212,21 @@ impl GraphchanApp {
                                 if let Some(texture) = self.image_textures.get(&file.id) {
                                     ui.image((texture.id(), egui::vec2(48.0, 48.0)));
                                 } else if !self.image_loading.contains(&file.id) {
-                                    // Queue image for loading
-                                    if let Some(url) = &file.download_url {
+                                    // Queue image for loading - prefer download_url, fall back to blob_id
+                                    let url = if let Some(download_url) = &file.download_url {
+                                        if download_url.starts_with("http://") || download_url.starts_with("https://") {
+                                            Some(download_url.clone())
+                                        } else {
+                                            Some(format!("{}{}", self.api.base_url(), download_url))
+                                        }
+                                    } else if let Some(blob_id) = &file.blob_id {
+                                        Some(format!("{}/blobs/{}", self.api.base_url(), blob_id))
+                                    } else {
+                                        None
+                                    };
+
+                                    if let Some(url) = url {
                                         let file_id = file.id.clone();
-                                        let url = url.clone();
                                         self.image_loading.insert(file_id.clone());
                                         super::super::tasks::download_image(
                                             self.tx.clone(),
@@ -332,10 +343,21 @@ impl GraphchanApp {
                                         if let Some(texture) = self.image_textures.get(&file.id) {
                                             ui.image((texture.id(), egui::vec2(32.0, 32.0)));
                                         } else if !self.image_loading.contains(&file.id) {
-                                            // Queue image for loading
-                                            if let Some(url) = &file.download_url {
+                                            // Queue image for loading - prefer download_url, fall back to blob_id
+                                            let url = if let Some(download_url) = &file.download_url {
+                                                if download_url.starts_with("http://") || download_url.starts_with("https://") {
+                                                    Some(download_url.clone())
+                                                } else {
+                                                    Some(format!("{}{}", self.api.base_url(), download_url))
+                                                }
+                                            } else if let Some(blob_id) = &file.blob_id {
+                                                Some(format!("{}/blobs/{}", self.api.base_url(), blob_id))
+                                            } else {
+                                                None
+                                            };
+
+                                            if let Some(url) = url {
                                                 let file_id = file.id.clone();
-                                                let url = url.clone();
                                                 self.image_loading.insert(file_id.clone());
                                                 super::super::tasks::download_image(
                                                     self.tx.clone(),
