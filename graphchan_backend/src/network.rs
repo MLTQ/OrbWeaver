@@ -606,15 +606,14 @@ impl NetworkHandle {
                 hasher.finalize().as_bytes().to_vec()
             };
 
-            // IMPORTANT: Derive signing key from the TOPIC NAME, not from peer identity
-            // All peers on the same topic must use the same signing key so they can
-            // verify each other's DHT announcements
+            // IMPORTANT: Use a UNIQUE signing key for this peer's record in the DHT.
+            // If all peers use the same signing key, they will overwrite each other's
+            // mutable records (last writer wins), preventing discovery of more than one peer.
+            // The dht_topic_id (derived above/below) ensures they all publish to the same
+            // "swarm" or location, but each needs their own unique identity signature.
             let topic_signing_key = {
-                let mut hasher = blake3::Hasher::new();
-                hasher.update(b"graphchan-topic-signing-key-v1:");
-                hasher.update(topic_name_owned.as_bytes());
-                let hash = hasher.finalize();
-                ed25519_dalek::SigningKey::from_bytes(hash.as_bytes())
+                let mut rng = rand::rng();
+                ed25519_dalek::SigningKey::generate(&mut rng)
             };
 
             // Create the DHT topic ID from the topic name
