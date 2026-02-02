@@ -1,6 +1,7 @@
+use std::f32::consts::PI;
 use eframe::egui;
 use crate::app::GraphchanApp;
-use crate::app::state::{ViewState, ThreadState};
+use crate::app::state::{ViewState, ThreadState, ThreadDisplayMode};
 
 pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
     // Only handle keyboard input when viewing a thread
@@ -222,6 +223,100 @@ pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
                 }
             }
 
+            // RADIAL VIEW ARROW KEY NAVIGATION
+            // Build data structures from radial_nodes directly (not posts) to avoid borrow conflicts
+            if state.display_mode == ThreadDisplayMode::Radial {
+                // Build ring groupings from radial_nodes
+                let mut posts_by_ring: std::collections::HashMap<usize, Vec<(String, f32)>> = std::collections::HashMap::new();
+                for (post_id, node) in &state.radial_nodes {
+                    posts_by_ring.entry(node.ring).or_default().push((post_id.clone(), node.angle));
+                }
+                // Sort posts within each ring by angle
+                for posts_in_ring in posts_by_ring.values_mut() {
+                    posts_in_ring.sort_by(|a, b| {
+                        a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                }
+
+                let current_ring = state.radial_nodes.get(&current_id).map(|n| n.ring).unwrap_or(0);
+                let current_angle = state.radial_nodes.get(&current_id).map(|n| n.angle).unwrap_or(0.0);
+                let max_ring = state.radial_nodes.values().map(|n| n.ring).max().unwrap_or(0);
+
+                // LEFT: Previous post on same ring (rotate counter-clockwise)
+                if consume_key(ctx, egui::Key::ArrowLeft, egui::Modifiers::NONE) {
+                    if let Some(ring_posts) = posts_by_ring.get(&current_ring) {
+                        if let Some(idx) = ring_posts.iter().position(|(id, _)| id == &current_id) {
+                            let new_idx = if idx == 0 { ring_posts.len() - 1 } else { idx - 1 };
+                            if let Some((new_id, _)) = ring_posts.get(new_idx) {
+                                state.selected_post = Some(new_id.clone());
+                                state.secondary_selected_post = None;
+                                center_on = Some(new_id.clone());
+                                handled = true;
+                            }
+                        }
+                    }
+                }
+
+                // RIGHT: Next post on same ring (rotate clockwise)
+                if consume_key(ctx, egui::Key::ArrowRight, egui::Modifiers::NONE) {
+                    if let Some(ring_posts) = posts_by_ring.get(&current_ring) {
+                        if let Some(idx) = ring_posts.iter().position(|(id, _)| id == &current_id) {
+                            let new_idx = (idx + 1) % ring_posts.len();
+                            if let Some((new_id, _)) = ring_posts.get(new_idx) {
+                                state.selected_post = Some(new_id.clone());
+                                state.secondary_selected_post = None;
+                                center_on = Some(new_id.clone());
+                                handled = true;
+                            }
+                        }
+                    }
+                }
+
+                // UP: Move to inner ring (lower ring number)
+                if consume_key(ctx, egui::Key::ArrowUp, egui::Modifiers::NONE) {
+                    if current_ring > 0 {
+                        let target_ring = current_ring - 1;
+                        if let Some(ring_posts) = posts_by_ring.get(&target_ring) {
+                            // Find the post on the target ring closest in angle to current
+                            let closest = ring_posts.iter()
+                                .min_by(|(_, angle_a), (_, angle_b)| {
+                                    let diff_a = (*angle_a - current_angle).abs();
+                                    let diff_b = (*angle_b - current_angle).abs();
+                                    diff_a.partial_cmp(&diff_b).unwrap_or(std::cmp::Ordering::Equal)
+                                });
+                            if let Some((new_id, _)) = closest {
+                                state.selected_post = Some(new_id.clone());
+                                state.secondary_selected_post = None;
+                                center_on = Some(new_id.clone());
+                                handled = true;
+                            }
+                        }
+                    }
+                }
+
+                // DOWN: Move to outer ring (higher ring number)
+                if consume_key(ctx, egui::Key::ArrowDown, egui::Modifiers::NONE) {
+                    if current_ring < max_ring {
+                        let target_ring = current_ring + 1;
+                        if let Some(ring_posts) = posts_by_ring.get(&target_ring) {
+                            // Find the post on the target ring closest in angle to current
+                            let closest = ring_posts.iter()
+                                .min_by(|(_, angle_a), (_, angle_b)| {
+                                    let diff_a = (*angle_a - current_angle).abs();
+                                    let diff_b = (*angle_b - current_angle).abs();
+                                    diff_a.partial_cmp(&diff_b).unwrap_or(std::cmp::Ordering::Equal)
+                                });
+                            if let Some((new_id, _)) = closest {
+                                state.selected_post = Some(new_id.clone());
+                                state.secondary_selected_post = None;
+                                center_on = Some(new_id.clone());
+                                handled = true;
+                            }
+                        }
+                    }
+                }
+            }
+
             // Apply viewport centering after releasing posts borrow
             if let Some(post_id) = center_on {
                 center_viewport_on_post(state, &post_id, ctx);
@@ -259,7 +354,11 @@ fn should_auto_select_op(ctx: &egui::Context) -> bool {
         i.key_pressed(egui::Key::J) ||
         i.key_pressed(egui::Key::K) ||
         i.key_pressed(egui::Key::L) ||
-        i.key_pressed(egui::Key::Semicolon)
+        i.key_pressed(egui::Key::Semicolon) ||
+        i.key_pressed(egui::Key::ArrowUp) ||
+        i.key_pressed(egui::Key::ArrowDown) ||
+        i.key_pressed(egui::Key::ArrowLeft) ||
+        i.key_pressed(egui::Key::ArrowRight)
     })
 }
 
@@ -277,6 +376,10 @@ fn consume_navigation_keys(ctx: &egui::Context) {
         i.consume_key(egui::Modifiers::NONE, egui::Key::K);
         i.consume_key(egui::Modifiers::NONE, egui::Key::L);
         i.consume_key(egui::Modifiers::NONE, egui::Key::Semicolon);
+        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp);
+        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown);
+        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft);
+        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight);
     });
 }
 
@@ -293,8 +396,6 @@ fn consume_key(ctx: &egui::Context, key: egui::Key, modifiers: egui::Modifiers) 
 
 /// Center the viewport on a specific post based on the current display mode
 fn center_viewport_on_post(state: &mut ThreadState, post_id: &str, ctx: &egui::Context) {
-    use crate::app::state::ThreadDisplayMode;
-
     match state.display_mode {
         ThreadDisplayMode::Graph => {
             if let Some(node) = state.graph_nodes.get(post_id) {
@@ -325,6 +426,15 @@ fn center_viewport_on_post(state: &mut ThreadState, post_id: &str, ctx: &egui::C
                 // We want ScreenPos approx CenterScreen
                 // Offset = CenterScreen - Pos * Zoom
                 state.graph_offset = center_screen - (node.pos.to_vec2() * zoom);
+            }
+        },
+        ThreadDisplayMode::Radial => {
+            // For radial view, "centering" means rotating to bring the post to the front
+            if let Some(node) = state.radial_nodes.get(post_id) {
+                if node.ring > 0 {
+                    // Rotate so the post is at the bottom (PI/2 = pointing down)
+                    state.radial_target_rotation = PI / 2.0 - node.angle;
+                }
             }
         },
         _ => {}
