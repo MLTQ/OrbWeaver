@@ -57,7 +57,10 @@ pub async fn run_cli(
     };
 
     println!("Graphchan CLI ready. Type 'help' for a list of commands.");
-    println!("Your friend code: {}", session.identity.short_friendcode);
+    println!("\n📋 Your Friend Code (share this for others to connect):");
+    let addresses = session.network.get_addresses();
+    let full_friendcode = session.generate_full_friendcode(&addresses);
+    println!("{}", full_friendcode);
     session.print_addresses();
 
     let stdin = tokio::io::stdin();
@@ -123,10 +126,17 @@ impl CliSession {
                 Ok(LoopAction::Continue)
             }
             "friendcode" => {
-                println!("\nYour Friend Code (share this with others):");
+                // Generate a full friend code with current network addresses (including relay URL)
+                let addresses = self.network.get_addresses();
+                let full_friendcode = self.generate_full_friendcode(&addresses);
+
+                println!("\n📋 Your Friend Code (share this with others):");
+                println!("   This includes your relay URL for NAT traversal.\n");
+                println!("{}", full_friendcode);
+
+                println!("\n📝 Short format (display only, may not work behind NAT):");
                 println!("{}", self.identity.short_friendcode);
-                println!("\nLegacy format (for compatibility):");
-                println!("{}", self.identity.friendcode);
+
                 self.print_addresses();
                 Ok(LoopAction::Continue)
             }
@@ -240,10 +250,29 @@ impl CliSession {
         let addr = self.network.current_addr();
         let addresses = advertised_addresses(&addr);
         if !addresses.is_empty() {
-            println!("Known addresses:");
+            println!("\nKnown addresses:");
             for entry in addresses {
                 println!("  - {entry}");
             }
+        }
+    }
+
+    /// Generate a full friend code with current network addresses (including relay URL)
+    fn generate_full_friendcode(&self, addresses: &[String]) -> String {
+        use base64::Engine;
+        use crate::identity::FriendCodePayload;
+
+        let payload = FriendCodePayload {
+            version: 2,
+            peer_id: self.identity.iroh_peer_id.clone(),
+            gpg_fingerprint: self.identity.gpg_fingerprint.clone(),
+            x25519_pubkey: None, // Will be negotiated on connection
+            addresses: addresses.to_vec(),
+        };
+
+        match serde_json::to_vec(&payload) {
+            Ok(json) => base64::engine::general_purpose::STANDARD.encode(json),
+            Err(_) => self.identity.friendcode.clone(), // Fallback to stored friendcode
         }
     }
 
