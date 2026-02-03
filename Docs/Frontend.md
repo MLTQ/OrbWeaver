@@ -1,7 +1,7 @@
 # Graphchan Frontend Documentation
 
 ## Overview
-The `graphchan_frontend` crate is a desktop GUI implemented with `egui`/`eframe`. It provides a catalog and thread view for the Graphchan network, backed by the REST API served from `graphchan_backend`. Features include multiple view modes (list/graph/timeline), rich attachment viewing (images, videos, text, markdown, PDFs), and interactive post navigation.
+The `graphchan_frontend` crate is a desktop GUI implemented with `egui`/`eframe`. It provides a catalog and thread view for the Graphchan network, backed by the REST API served from `graphchan_backend`. Features include multiple view modes (List, Graph, Timeline, Hierarchical, and Radial), rich attachment viewing (images, videos, text, markdown, PDFs), and interactive post navigation.
 
 ## Repository Layout
 ```
@@ -19,8 +19,12 @@ graphchan_frontend/
 │   │       ├── thread.rs       # Posts list view with floating composer
 │   │       ├── graph.rs        # Force-directed graph layout with physics
 │   │       ├── chronological.rs # Timeline view with time binning
+│   │       ├── sugiyama.rs     # Hierarchical layered graph layout
+│   │       ├── radial.rs       # Radial phylogenetic tree layout
+│   │       ├── node.rs         # Shared node rendering for graph views
 │   │       ├── images.rs       # Image viewer popup windows
 │   │       ├── dialogs.rs      # Create thread & import dialogs
+│   │       ├── input.rs        # Keyboard navigation handlers
 │   │       └── drawer.rs       # Identity sidebar & avatar editor
 │   ├── api.rs            # ApiClient wrapper for backend REST endpoints
 │   ├── models.rs         # Serde models (ThreadSummary, PostView, FileResponse)
@@ -35,7 +39,7 @@ graphchan_frontend/
 - SDL2 audio subsystem is initialized at startup to enable video playback with audio.
 - Users can:
   - Browse threads in a grid catalog view
-  - View threads in three modes: Posts list, Graph, or Timeline
+  - View threads in five modes: List, Graph, Timeline, Hierarchical, or Radial
   - Create new threads with title, body, and file attachments
   - Reply to posts with multi-parent support
   - Upload and view multiple file types (images, videos, text, markdown, PDFs)
@@ -59,49 +63,106 @@ Two ways to start the UI:
 
 ## Thread View Modes
 
-The frontend offers three distinct ways to view and navigate threads:
+The frontend offers five distinct ways to view and navigate threads, each with different node placement algorithms optimized for different use cases:
 
-### 1. Posts List View (thread.rs)
+### 1. List View (thread.rs)
 **Traditional linear discussion view**
-- Posts displayed in chronological order with full content
+- **Algorithm**: Posts displayed in chronological order (sorted by `created_at`)
+- Posts rendered as full-width cards with complete content
 - Floating draft composer window (bottom-right)
 - Inline attachment rendering with file type icons
 - Click images to enlarge, click other files to open in specialized viewers
 - Multi-file attachment support per post
+- Best for: Reading full conversations in order
 
 ### 2. Graph View (graph.rs)
 **Force-directed physics-based layout**
-- Posts rendered as nodes with reply edges between them
-- Physics simulation with configurable repulsion force
+- **Algorithm**: Spring-embedder physics simulation
+  - Repulsive force between all node pairs (inverse square law)
+  - Attractive spring force along reply edges (Hooke's law)
+  - Configurable repulsion strength and desired edge length
+  - Original post (OP) pinned at center as anchor
+  - Velocity damping for stability (0.80 factor)
+  - 5-second initial simulation, then settles
+- Posts rendered as nodes with curved bezier edges
 - Pan with right-click drag, zoom with scroll wheel
-- Orthogonal edge routing with lane-based collision avoidance
-- Click posts to select, edges highlight on hover
-- Supports pinning nodes to lock positions
+- Click posts to select (yellow highlight), neighbors highlighted
+- Pin button on nodes to lock positions
+- Best for: Exploring conversation structure organically
 
-### 3. Sugiyama View (sugiyama.rs)
-**Hierarchical layered graph layout**
-- Posts arranged in layers based on depth/rank
-- Minimizes edge crossings for clearer structure
-- Ideal for understanding conversation flow and branching
-- Same interaction controls as Graph view
-
-### 4. Timeline View (chronological.rs)
-**Chronological horizontal layout with time binning**
-- Posts grouped into time bins (configurable: 1 min - 24 hours)
-- Posts within same time bin stack horizontally
-- Time axis on left margin shows timestamps
+### 3. Timeline View (chronological.rs)
+**Chronological layout with time binning**
+- **Algorithm**: Temporal binning with vertical stacking
+  - Posts grouped into time bins (configurable: 1 min - 24 hours)
+  - Bin index = `(post_time - earliest_time) / bin_size`
+  - X position = bin_index * bin_width
+  - Posts within same bin stack vertically (Y offset by node height)
+  - Time axis on left margin shows bin timestamps
+- Posts rendered as compact cards
 - Same pan/zoom controls as graph view
-- Compact card format optimized for temporal navigation
+- Curved bezier edges connect replies across time
+- Best for: Understanding temporal flow of conversation
+
+### 4. Hierarchical View (sugiyama.rs)
+**Layered directed graph layout (Sugiyama-style)**
+- **Algorithm**: Layer-based hierarchical layout
+  - Layer assignment: BFS from OP, each post on layer = max(parent layers) + 1
+  - Posts sorted within layers to minimize edge crossings
+  - X position based on layer, Y position distributed within layer
+  - Handles multi-parent replies by using deepest parent's layer
+- Posts arranged in clean horizontal layers
+- Edges flow left-to-right showing reply depth
+- Best for: Understanding conversation hierarchy and branching structure
+
+### 5. Radial View (radial.rs)
+**Radial phylogenetic tree layout**
+- **Algorithm**: Ring-based depth assignment inspired by phylogenetic trees
+  - Ring 0 (center): Original post (OP)
+  - Ring N: Posts where `max(ring of each parent) = N - 1`
+  - Multi-parent posts placed based on their DEEPEST parent
+  - Posts distributed angularly within each ring by creation time
+  - Angular position: `(index / count) * 2π - π/2` (starting from top)
+- Concentric ring guides show depth levels
+- Curved bezier edges connect posts to parents (curve toward center)
+- Click post to center viewport on it
+- Manual rotation buttons for exploring different angles
+- Best for: Visualizing conversation evolution and reply depth
+
+## View Comparison
+
+| View | Layout Algorithm | Best For | Multi-Parent Handling |
+|------|-----------------|----------|----------------------|
+| List | Chronological sort | Reading full content | Shows all parent links |
+| Graph | Force-directed physics | Organic exploration | Edges to all parents |
+| Timeline | Time bins + stacking | Temporal analysis | Edges to all parents |
+| Hierarchical | BFS layering | Structure clarity | Deepest parent determines layer |
+| Radial | Ring-based depth | Evolution visualization | Deepest parent determines ring |
 
 ## Keyboard Navigation
 
 The application supports full keyboard navigation for efficiency:
 
+### Global Navigation
 - **Tab**: Select next post (chronological order)
 - **Shift+Tab**: Select previous post
-- **Arrow Keys**: Navigate graph structure (Up/Down/Left/Right based on visual layout)
-- **Enter**: Open selected post details or expand attachments
+- **Space**: Re-center viewport on selected post
 - **Esc**: Deselect post
+
+### Graph/Hierarchical/Timeline Views
+- **Arrow Keys**: Navigate based on visual layout
+
+### Radial View Navigation
+- **Left/Right Arrow**: Move between posts on the same ring
+- **Up Arrow**: Move to inner ring (toward center/OP)
+- **Down Arrow**: Move to outer ring (away from center)
+- Navigation finds the angularly closest post when changing rings
+
+### VIM-Style Navigation (All Graph Views)
+- **U/P**: Move cursor through parent posts
+- **I**: Select parent at cursor (secondary selection)
+- **J/;**: Move cursor through reply posts
+- **K**: Select reply at cursor (secondary selection)
+- **O/L**: Alternative keys for cursor movement
 
 ## File Attachment System
 
