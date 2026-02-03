@@ -104,32 +104,41 @@ pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
             }
 
             // SPACE: Smart selection based on last navigation mode
+            // In Radial mode: re-center view on currently selected post
             if consume_key(ctx, egui::Key::Space, egui::Modifiers::NONE) {
-                use crate::app::state::NavigationMode;
-
-                let target_post = match state.last_navigation_mode {
-                    NavigationMode::Parent => {
-                        // User was navigating parents - select parent at cursor
-                        parent_ids.get(state.parent_cursor_index).cloned()
-                    },
-                    NavigationMode::Reply => {
-                        // User was navigating replies - select reply at cursor
-                        reply_ids.get(state.reply_cursor_index).cloned()
-                    },
-                    NavigationMode::None => {
-                        // No navigation yet - default to first reply
-                        reply_ids.first().cloned()
-                    }
-                };
-
-                if let Some(target_id) = target_post {
-                    state.selected_post = Some(target_id.clone());
-                    state.secondary_selected_post = None;
-                    state.parent_cursor_index = 0;
-                    state.reply_cursor_index = 0;
-                    state.last_navigation_mode = NavigationMode::None; // Reset after selection
-                    center_on = Some(target_id);
+                if state.display_mode == ThreadDisplayMode::Radial {
+                    // In Radial mode, Space re-centers viewport on the currently selected post
+                    center_on = Some(current_id.clone());
                     handled = true;
+                    ctx.request_repaint();
+                } else {
+                    // Other modes: smart selection based on last navigation mode
+                    use crate::app::state::NavigationMode;
+
+                    let target_post = match state.last_navigation_mode {
+                        NavigationMode::Parent => {
+                            // User was navigating parents - select parent at cursor
+                            parent_ids.get(state.parent_cursor_index).cloned()
+                        },
+                        NavigationMode::Reply => {
+                            // User was navigating replies - select reply at cursor
+                            reply_ids.get(state.reply_cursor_index).cloned()
+                        },
+                        NavigationMode::None => {
+                            // No navigation yet - default to first reply
+                            reply_ids.first().cloned()
+                        }
+                    };
+
+                    if let Some(target_id) = target_post {
+                        state.selected_post = Some(target_id.clone());
+                        state.secondary_selected_post = None;
+                        state.parent_cursor_index = 0;
+                        state.reply_cursor_index = 0;
+                        state.last_navigation_mode = NavigationMode::None; // Reset after selection
+                        center_on = Some(target_id);
+                        handled = true;
+                    }
                 }
             }
 
@@ -242,7 +251,7 @@ pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
                 let current_angle = state.radial_nodes.get(&current_id).map(|n| n.angle).unwrap_or(0.0);
                 let max_ring = state.radial_nodes.values().map(|n| n.ring).max().unwrap_or(0);
 
-                // LEFT: Previous post on same ring (rotate counter-clockwise)
+                // LEFT: Previous post on same ring
                 if consume_key(ctx, egui::Key::ArrowLeft, egui::Modifiers::NONE) {
                     if let Some(ring_posts) = posts_by_ring.get(&current_ring) {
                         if let Some(idx) = ring_posts.iter().position(|(id, _)| id == &current_id) {
@@ -257,7 +266,7 @@ pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
                     }
                 }
 
-                // RIGHT: Next post on same ring (rotate clockwise)
+                // RIGHT: Next post on same ring
                 if consume_key(ctx, egui::Key::ArrowRight, egui::Modifiers::NONE) {
                     if let Some(ring_posts) = posts_by_ring.get(&current_ring) {
                         if let Some(idx) = ring_posts.iter().position(|(id, _)| id == &current_id) {
@@ -429,11 +438,25 @@ fn center_viewport_on_post(state: &mut ThreadState, post_id: &str, ctx: &egui::C
             }
         },
         ThreadDisplayMode::Radial => {
-            // For radial view, "centering" means rotating to bring the post to the front
+            // For radial view, center viewport on the post using X/Y translation
             if let Some(node) = state.radial_nodes.get(post_id) {
-                if node.ring > 0 {
-                    // Rotate so the post is at the bottom (PI/2 = pointing down)
-                    state.radial_target_rotation = PI / 2.0 - node.angle;
+                if node.ring == 0 {
+                    // OP is at center, just reset offset
+                    state.graph_offset = egui::vec2(0.0, 0.0);
+                } else {
+                    // Calculate post position relative to center
+                    let ring_spacing = 400.0; // Must match RING_SPACING in radial.rs
+                    let center_radius = 200.0; // Must match CENTER_RADIUS in radial.rs
+                    let radius = center_radius + (node.ring as f32) * ring_spacing;
+                    let adjusted_angle = node.angle + state.radial_rotation;
+
+                    // Position relative to center (before zoom)
+                    let pos_x = radius * adjusted_angle.cos();
+                    let pos_y = radius * adjusted_angle.sin();
+
+                    // Set offset to center on this position (scaled by zoom)
+                    let zoom = state.graph_zoom;
+                    state.graph_offset = egui::vec2(-pos_x * zoom, -pos_y * zoom);
                 }
             }
         },

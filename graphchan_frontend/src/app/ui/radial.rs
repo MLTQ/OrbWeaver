@@ -178,10 +178,15 @@ pub fn render_radial(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Thre
     let thread_id = state.summary.id.clone();
 
     // Initialize radial layout if empty
-    if state.radial_nodes.is_empty() || state.radial_nodes.len() != posts.len() {
+    // Only reset rotation when FIRST initializing (empty), not on size mismatch
+    let was_empty = state.radial_nodes.is_empty();
+    if was_empty || state.radial_nodes.len() != posts.len() {
         state.radial_nodes = build_radial_layout(&posts);
-        state.radial_rotation = 0.0;
-        state.radial_target_rotation = 0.0;
+        // Only reset rotation on first initialization, not when posts change
+        if was_empty {
+            state.radial_rotation = 0.0;
+            state.radial_target_rotation = 0.0;
+        }
     }
 
     // Update node sizes
