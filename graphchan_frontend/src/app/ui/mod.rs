@@ -10,6 +10,7 @@ pub mod friends;
 pub mod import;
 pub mod node;
 pub mod sugiyama;
+pub mod radial;
 pub mod input;
 pub mod settings;
 pub mod reaction_colors;

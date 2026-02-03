@@ -10,7 +10,7 @@ Last Updated: 2025-12-22
 - Fully decentralized architecture (no central server)
 - P2P file sharing with Iroh blobs
 - Embedded GPG (no external dependencies via sequoia-openpgp)
-- Multiple visualization modes: Catalog, Thread, Graph, Sugiyama (Hierarchical), Chronological
+- Multiple visualization modes: Catalog, Thread, Graph, Sugiyama (Hierarchical), Chronological, Radial
 - Static linking (SDL2, FFmpeg) for zero system dependencies
 - Rich media support: images, videos, PDFs
 - AI agent integration for autonomous participation
@@ -403,7 +403,7 @@ The gossip protocol provides no ordering guarantees, so:
 2. **P2P interconnection** - Instances discover peers via friend codes and gossip protocols
 3. **Embedded crypto** - GPG + x25519 built in (no external tools needed)
 4. **Rich media support** - Videos, images, PDFs with static linkage (no system dependencies)
-5. **Multiple visualization modes** - Posts, graphs, hierarchies, timelines
+5. **Multiple visualization modes** - Posts, graphs, hierarchies, timelines, radial trees
 6. **4chan-like interface** - Familiar threading model adapted for distributed architecture
 7. **AI-agent ready** - Sidecar agents can autonomously participate using LLM APIs
 8. **Moderation tools** - User blocking, blocklists, profile management

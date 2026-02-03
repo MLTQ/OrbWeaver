@@ -6,7 +6,7 @@ use crate::models::ThreadSummary;
 
 use super::super::state::{ThreadDisplayMode, ThreadState, ViewState};
 use super::super::{format_timestamp, GraphchanApp};
-use super::{chronological, graph};
+use super::{chronological, graph, radial};
 
 pub enum ThreadAction {
     None,
@@ -204,11 +204,13 @@ impl GraphchanApp {
                 "Timeline",
             );
             ui.selectable_value(&mut state.display_mode, ThreadDisplayMode::Sugiyama, "Hierarchical");
+            ui.selectable_value(&mut state.display_mode, ThreadDisplayMode::Radial, "Radial");
         });
 
         // Clear layout if mode changed
         if state.last_layout_mode != Some(state.display_mode) {
             state.graph_nodes.clear();
+            state.radial_nodes.clear();
             state.last_layout_mode = Some(state.display_mode);
         }
 
@@ -237,6 +239,17 @@ impl GraphchanApp {
         } else if state.display_mode == ThreadDisplayMode::Sugiyama {
             use super::sugiyama;
             sugiyama::render_sugiyama(self, ui, state);
+        } else if state.display_mode == ThreadDisplayMode::Radial {
+            if state.radial_nodes.is_empty() {
+                if let Some(details) = &state.details {
+                    state.radial_nodes = radial::build_radial_layout(&details.posts);
+                    state.radial_rotation = 0.0;
+                    state.radial_target_rotation = 0.0;
+                    state.graph_zoom = 0.5; // Start zoomed out to see more rings
+                    state.graph_offset = egui::vec2(0.0, 0.0);
+                }
+            }
+            radial::render_radial(self, ui, state);
         } else if state.display_mode == ThreadDisplayMode::List {
             if let Some(details) = &state.details {
             let posts_clone = details.posts.clone();

@@ -1,6 +1,7 @@
+use std::f32::consts::PI;
 use eframe::egui;
 use crate::app::GraphchanApp;
-use crate::app::state::{ViewState, ThreadState};
+use crate::app::state::{ViewState, ThreadState, ThreadDisplayMode};
 
 pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
     // Only handle keyboard input when viewing a thread
@@ -103,32 +104,41 @@ pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
             }
 
             // SPACE: Smart selection based on last navigation mode
+            // In Radial mode: re-center view on currently selected post
             if consume_key(ctx, egui::Key::Space, egui::Modifiers::NONE) {
-                use crate::app::state::NavigationMode;
-
-                let target_post = match state.last_navigation_mode {
-                    NavigationMode::Parent => {
-                        // User was navigating parents - select parent at cursor
-                        parent_ids.get(state.parent_cursor_index).cloned()
-                    },
-                    NavigationMode::Reply => {
-                        // User was navigating replies - select reply at cursor
-                        reply_ids.get(state.reply_cursor_index).cloned()
-                    },
-                    NavigationMode::None => {
-                        // No navigation yet - default to first reply
-                        reply_ids.first().cloned()
-                    }
-                };
-
-                if let Some(target_id) = target_post {
-                    state.selected_post = Some(target_id.clone());
-                    state.secondary_selected_post = None;
-                    state.parent_cursor_index = 0;
-                    state.reply_cursor_index = 0;
-                    state.last_navigation_mode = NavigationMode::None; // Reset after selection
-                    center_on = Some(target_id);
+                if state.display_mode == ThreadDisplayMode::Radial {
+                    // In Radial mode, Space re-centers viewport on the currently selected post
+                    center_on = Some(current_id.clone());
                     handled = true;
+                    ctx.request_repaint();
+                } else {
+                    // Other modes: smart selection based on last navigation mode
+                    use crate::app::state::NavigationMode;
+
+                    let target_post = match state.last_navigation_mode {
+                        NavigationMode::Parent => {
+                            // User was navigating parents - select parent at cursor
+                            parent_ids.get(state.parent_cursor_index).cloned()
+                        },
+                        NavigationMode::Reply => {
+                            // User was navigating replies - select reply at cursor
+                            reply_ids.get(state.reply_cursor_index).cloned()
+                        },
+                        NavigationMode::None => {
+                            // No navigation yet - default to first reply
+                            reply_ids.first().cloned()
+                        }
+                    };
+
+                    if let Some(target_id) = target_post {
+                        state.selected_post = Some(target_id.clone());
+                        state.secondary_selected_post = None;
+                        state.parent_cursor_index = 0;
+                        state.reply_cursor_index = 0;
+                        state.last_navigation_mode = NavigationMode::None; // Reset after selection
+                        center_on = Some(target_id);
+                        handled = true;
+                    }
                 }
             }
 
@@ -222,6 +232,100 @@ pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
                 }
             }
 
+            // RADIAL VIEW ARROW KEY NAVIGATION
+            // Build data structures from radial_nodes directly (not posts) to avoid borrow conflicts
+            if state.display_mode == ThreadDisplayMode::Radial {
+                // Build ring groupings from radial_nodes
+                let mut posts_by_ring: std::collections::HashMap<usize, Vec<(String, f32)>> = std::collections::HashMap::new();
+                for (post_id, node) in &state.radial_nodes {
+                    posts_by_ring.entry(node.ring).or_default().push((post_id.clone(), node.angle));
+                }
+                // Sort posts within each ring by angle
+                for posts_in_ring in posts_by_ring.values_mut() {
+                    posts_in_ring.sort_by(|a, b| {
+                        a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                }
+
+                let current_ring = state.radial_nodes.get(&current_id).map(|n| n.ring).unwrap_or(0);
+                let current_angle = state.radial_nodes.get(&current_id).map(|n| n.angle).unwrap_or(0.0);
+                let max_ring = state.radial_nodes.values().map(|n| n.ring).max().unwrap_or(0);
+
+                // LEFT: Previous post on same ring
+                if consume_key(ctx, egui::Key::ArrowLeft, egui::Modifiers::NONE) {
+                    if let Some(ring_posts) = posts_by_ring.get(&current_ring) {
+                        if let Some(idx) = ring_posts.iter().position(|(id, _)| id == &current_id) {
+                            let new_idx = if idx == 0 { ring_posts.len() - 1 } else { idx - 1 };
+                            if let Some((new_id, _)) = ring_posts.get(new_idx) {
+                                state.selected_post = Some(new_id.clone());
+                                state.secondary_selected_post = None;
+                                center_on = Some(new_id.clone());
+                                handled = true;
+                            }
+                        }
+                    }
+                }
+
+                // RIGHT: Next post on same ring
+                if consume_key(ctx, egui::Key::ArrowRight, egui::Modifiers::NONE) {
+                    if let Some(ring_posts) = posts_by_ring.get(&current_ring) {
+                        if let Some(idx) = ring_posts.iter().position(|(id, _)| id == &current_id) {
+                            let new_idx = (idx + 1) % ring_posts.len();
+                            if let Some((new_id, _)) = ring_posts.get(new_idx) {
+                                state.selected_post = Some(new_id.clone());
+                                state.secondary_selected_post = None;
+                                center_on = Some(new_id.clone());
+                                handled = true;
+                            }
+                        }
+                    }
+                }
+
+                // UP: Move to inner ring (lower ring number)
+                if consume_key(ctx, egui::Key::ArrowUp, egui::Modifiers::NONE) {
+                    if current_ring > 0 {
+                        let target_ring = current_ring - 1;
+                        if let Some(ring_posts) = posts_by_ring.get(&target_ring) {
+                            // Find the post on the target ring closest in angle to current
+                            let closest = ring_posts.iter()
+                                .min_by(|(_, angle_a), (_, angle_b)| {
+                                    let diff_a = (*angle_a - current_angle).abs();
+                                    let diff_b = (*angle_b - current_angle).abs();
+                                    diff_a.partial_cmp(&diff_b).unwrap_or(std::cmp::Ordering::Equal)
+                                });
+                            if let Some((new_id, _)) = closest {
+                                state.selected_post = Some(new_id.clone());
+                                state.secondary_selected_post = None;
+                                center_on = Some(new_id.clone());
+                                handled = true;
+                            }
+                        }
+                    }
+                }
+
+                // DOWN: Move to outer ring (higher ring number)
+                if consume_key(ctx, egui::Key::ArrowDown, egui::Modifiers::NONE) {
+                    if current_ring < max_ring {
+                        let target_ring = current_ring + 1;
+                        if let Some(ring_posts) = posts_by_ring.get(&target_ring) {
+                            // Find the post on the target ring closest in angle to current
+                            let closest = ring_posts.iter()
+                                .min_by(|(_, angle_a), (_, angle_b)| {
+                                    let diff_a = (*angle_a - current_angle).abs();
+                                    let diff_b = (*angle_b - current_angle).abs();
+                                    diff_a.partial_cmp(&diff_b).unwrap_or(std::cmp::Ordering::Equal)
+                                });
+                            if let Some((new_id, _)) = closest {
+                                state.selected_post = Some(new_id.clone());
+                                state.secondary_selected_post = None;
+                                center_on = Some(new_id.clone());
+                                handled = true;
+                            }
+                        }
+                    }
+                }
+            }
+
             // Apply viewport centering after releasing posts borrow
             if let Some(post_id) = center_on {
                 center_viewport_on_post(state, &post_id, ctx);
@@ -259,7 +363,11 @@ fn should_auto_select_op(ctx: &egui::Context) -> bool {
         i.key_pressed(egui::Key::J) ||
         i.key_pressed(egui::Key::K) ||
         i.key_pressed(egui::Key::L) ||
-        i.key_pressed(egui::Key::Semicolon)
+        i.key_pressed(egui::Key::Semicolon) ||
+        i.key_pressed(egui::Key::ArrowUp) ||
+        i.key_pressed(egui::Key::ArrowDown) ||
+        i.key_pressed(egui::Key::ArrowLeft) ||
+        i.key_pressed(egui::Key::ArrowRight)
     })
 }
 
@@ -277,6 +385,10 @@ fn consume_navigation_keys(ctx: &egui::Context) {
         i.consume_key(egui::Modifiers::NONE, egui::Key::K);
         i.consume_key(egui::Modifiers::NONE, egui::Key::L);
         i.consume_key(egui::Modifiers::NONE, egui::Key::Semicolon);
+        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp);
+        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown);
+        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft);
+        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight);
     });
 }
 
@@ -293,8 +405,6 @@ fn consume_key(ctx: &egui::Context, key: egui::Key, modifiers: egui::Modifiers) 
 
 /// Center the viewport on a specific post based on the current display mode
 fn center_viewport_on_post(state: &mut ThreadState, post_id: &str, ctx: &egui::Context) {
-    use crate::app::state::ThreadDisplayMode;
-
     match state.display_mode {
         ThreadDisplayMode::Graph => {
             if let Some(node) = state.graph_nodes.get(post_id) {
@@ -325,6 +435,29 @@ fn center_viewport_on_post(state: &mut ThreadState, post_id: &str, ctx: &egui::C
                 // We want ScreenPos approx CenterScreen
                 // Offset = CenterScreen - Pos * Zoom
                 state.graph_offset = center_screen - (node.pos.to_vec2() * zoom);
+            }
+        },
+        ThreadDisplayMode::Radial => {
+            // For radial view, center viewport on the post using X/Y translation
+            if let Some(node) = state.radial_nodes.get(post_id) {
+                if node.ring == 0 {
+                    // OP is at center, just reset offset
+                    state.graph_offset = egui::vec2(0.0, 0.0);
+                } else {
+                    // Calculate post position relative to center
+                    let ring_spacing = 400.0; // Must match RING_SPACING in radial.rs
+                    let center_radius = 200.0; // Must match CENTER_RADIUS in radial.rs
+                    let radius = center_radius + (node.ring as f32) * ring_spacing;
+                    let adjusted_angle = node.angle + state.radial_rotation;
+
+                    // Position relative to center (before zoom)
+                    let pos_x = radius * adjusted_angle.cos();
+                    let pos_y = radius * adjusted_angle.sin();
+
+                    // Set offset to center on this position (scaled by zoom)
+                    let zoom = state.graph_zoom;
+                    state.graph_offset = egui::vec2(-pos_x * zoom, -pos_y * zoom);
+                }
             }
         },
         _ => {}

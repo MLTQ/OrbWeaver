@@ -97,6 +97,9 @@ pub struct ThreadState {
     pub graph_nodes: HashMap<String, GraphNode>,
     pub chronological_nodes: HashMap<String, GraphNode>,
     pub sugiyama_nodes: HashMap<String, GraphNode>,
+    pub radial_nodes: HashMap<String, RadialNode>,
+    pub radial_rotation: f32,        // Current rotation angle (radians) for "table spin" effect
+    pub radial_target_rotation: f32, // Target rotation for smooth animation
     #[serde(skip)]
     pub sim_start_time: Option<std::time::Instant>,      // Track simulation time per thread
     #[serde(skip)]
@@ -142,6 +145,7 @@ pub enum ThreadDisplayMode {
     Graph,
     Chronological,
     Sugiyama,
+    Radial,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -151,6 +155,13 @@ pub struct GraphNode {
     pub size: egui::Vec2,
     pub dragging: bool,
     pub pinned: bool,
+}
+
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct RadialNode {
+    pub ring: usize,           // Which ring (0 = center/OP, 1 = first ring, etc.)
+    pub angle: f32,            // Angular position on the ring (radians)
+    pub size: egui::Vec2,      // Node size for rendering
 }
 
 #[derive(Clone)]
