@@ -755,15 +755,23 @@ impl NetworkHandle {
         // Spawn Schelling point BEP44 discovery alongside DTT.
         // This publishes our full EndpointAddr (relay + direct addrs) to the DHT
         // and discovers peers who know the same topic name.
+        //
+        // We create a lightweight subscription just to get a GossipSender for join_peers().
+        // The receiver is dropped immediately — the topic's protocol state is shared with
+        // the main subscription above, so discovered peers mesh into the same gossip swarm.
+        let schelling_sender = {
+            let schelling_sub = self.gossip.subscribe(topic_id, vec![]).await?;
+            let (sender, _receiver) = schelling_sub.split();
+            sender
+        };
         let schelling_endpoint = self.endpoint.clone();
-        let schelling_gossip = self.gossip.clone();
         let schelling_static_provider = self.static_provider.clone();
         let schelling_topic = topic_name.to_string();
         tokio::spawn(async move {
             schelling::run_schelling_loop(
                 schelling_topic,
                 schelling_endpoint,
-                schelling_gossip,
+                schelling_sender,
                 schelling_static_provider,
             )
             .await;

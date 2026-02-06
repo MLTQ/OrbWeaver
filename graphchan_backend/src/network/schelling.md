@@ -21,12 +21,18 @@ All peers who know a topic name can derive the same BEP44 signing key for a give
 - `direct_addrs`: Direct socket addresses from `endpoint.addr()`
 
 ### Discovery Loop (`run_schelling_loop`)
+Takes a `GossipSender` (cloned from the topic's existing subscription) to call
+`join_peers()` on discovered peers without creating redundant subscription handles.
+
 Every 30 seconds:
 1. Query BEP44 for current minute and previous minute slots
 2. Decrypt records → extract SchellingRecord
 3. Skip own node_id
-4. For each new peer: inject EndpointAddr into StaticProvider + add to gossip topic
+4. For each new peer: inject EndpointAddr into StaticProvider + `join_peers()` on gossip
 5. Publish own record to current minute slot
+
+The `join_peers()` call triggers: HyParView Join → Dialer → `endpoint.connect(peer)` →
+iroh resolves via StaticProvider (finds the relay URL we just injected) → QUIC connection.
 
 ## Components
 
