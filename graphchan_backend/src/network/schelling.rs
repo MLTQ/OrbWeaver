@@ -24,7 +24,7 @@ use hkdf::Hkdf;
 use iroh::discovery::static_provider::StaticProvider;
 use iroh::endpoint::Endpoint;
 use iroh_base::{EndpointAddr, PublicKey, RelayUrl};
-use iroh_gossip::net::Gossip;
+use iroh_gossip::api::GossipSender;
 use mainline::{MutableItem, SigningKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha512};
@@ -237,10 +237,14 @@ fn query_records(
 
 /// Main discovery loop. Publishes our endpoint info and discovers peers on the
 /// same topic via BEP44 shared keys. Runs until the task is cancelled.
+///
+/// Takes a `GossipSender` for the topic's existing subscription so we can
+/// call `join_peers()` to add discovered peers without creating redundant
+/// subscription handles.
 pub async fn run_schelling_loop(
     topic_name: String,
     endpoint: Arc<Endpoint>,
-    gossip: Gossip,
+    gossip_sender: GossipSender,
     static_provider: StaticProvider,
 ) {
     tracing::info!(topic = %topic_name, "starting schelling point discovery loop");
@@ -259,11 +263,6 @@ pub async fn run_schelling_loop(
 
     // Track which peers we've already injected to avoid redundant work
     let mut known_peers: HashSet<String> = HashSet::new();
-
-    // Derive the gossip topic ID (same as subscribe_to_topic uses)
-    let gossip_topic_id = iroh_gossip::proto::TopicId::from_bytes(
-        crate::network::topics::derive_topic_id(&topic_name),
-    );
 
     loop {
         let minute = current_minute();
@@ -306,10 +305,12 @@ pub async fn run_schelling_loop(
                             "schelling: discovered new peer, injected into static provider"
                         );
 
-                        // Add as bootstrap peer to the gossip topic so we mesh with them
+                        // Add peer to the existing gossip topic via join_peers()
+                        // This triggers HyParView Join → Dialer → endpoint.connect()
+                        // which resolves via StaticProvider to find the relay URL we just injected
                         if let Ok(pub_key) = record.node_id.parse::<PublicKey>() {
-                            if let Err(err) = gossip
-                                .subscribe(gossip_topic_id, vec![pub_key])
+                            if let Err(err) = gossip_sender
+                                .join_peers(vec![pub_key])
                                 .await
                             {
                                 tracing::warn!(
