@@ -284,6 +284,35 @@ async fn handle_message(
                 seen.insert(msg_id)
             };
 
+            // Download avatar blob if a ticket is provided and we don't have it locally
+            if let (Some(ref avatar_id), Some(ref ticket)) = (&update.avatar_file_id, &update.ticket) {
+                let hash = ticket.hash();
+                let has_blob = blobs.has(hash).await.unwrap_or(false);
+                if !has_blob {
+                    tracing::info!(
+                        peer_id = %update.peer_id,
+                        avatar_id = %avatar_id,
+                        hash = %hash.fmt_short(),
+                        "downloading avatar blob from peer"
+                    );
+                    let blob_store = blobs.clone();
+                    let ep = endpoint.clone();
+                    let peer = update.peer_id.clone();
+                    let ticket = ticket.clone();
+                    tokio::spawn(async move {
+                        let downloader = blob_store.downloader(&ep);
+                        match downloader.download(hash, Some(ticket.addr().id)).await {
+                            Ok(_) => {
+                                tracing::info!(peer_id = %peer, hash = %hash.fmt_short(), "avatar blob downloaded");
+                            }
+                            Err(err) => {
+                                tracing::warn!(peer_id = %peer, error = ?err, "failed to download avatar blob");
+                            }
+                        }
+                    });
+                }
+            }
+
             apply_profile_update(database, update.clone())?;
 
             // Re-broadcast profile updates only if first time seeing this update

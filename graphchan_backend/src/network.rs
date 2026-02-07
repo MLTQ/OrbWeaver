@@ -1,6 +1,7 @@
 use crate::config::{GraphchanPaths, NetworkConfig};
 mod events;
 pub mod ingest;
+pub mod schelling;
 pub mod topics;
 
 use crate::database::Database;
@@ -12,6 +13,7 @@ use events::{EventPayload, NetworkEvent};
 use iroh::endpoint::{Endpoint, RelayMode};
 use iroh::discovery::pkarr::dht::DhtDiscovery;
 use iroh::discovery::mdns::MdnsDiscovery;
+use iroh::discovery::static_provider::StaticProvider;
 use iroh::protocol::Router;
 use iroh_base::{EndpointAddr, PublicKey, RelayUrl};
 use iroh_blobs::store::fs::FsStore;
@@ -85,6 +87,12 @@ pub struct NetworkHandle {
     /// Whether DHT is reachable (true = connected, false = unreachable, None = still checking)
     dht_connected: Arc<AtomicBool>,
     dht_checked: Arc<AtomicBool>,
+    /// Iroh endpoint secret key bytes for DHT record signing.
+    /// Using the real endpoint key ensures record.node_id() = iroh endpoint ID,
+    /// so DHT bootstrap can actually connect to discovered peers.
+    iroh_secret_bytes: [u8; 32],
+    /// StaticProvider for injecting out-of-band peer addresses (from Schelling discovery)
+    static_provider: StaticProvider,
 }
 
 impl NetworkHandle {
@@ -96,10 +104,8 @@ impl NetworkHandle {
         local_peer_id: String,
     ) -> Result<Self> {
         let secret = load_iroh_secret(paths)?;
+        let iroh_secret_bytes = secret.to_bytes();
         let endpoint_id = secret.public();
-
-        // Note: DHT signing keys are derived per-topic in subscribe_to_topic()
-        // so all peers on the same topic share the same key for verification
 
         // Determine relay mode
         let relay_mode = if let Some(relay_url) = &config.relay_url {
@@ -114,8 +120,14 @@ impl NetworkHandle {
             RelayMode::Default
         };
 
+        // Create StaticProvider for injecting peer addresses discovered out-of-band
+        // (e.g., from Schelling point BEP44 records)
+        let static_provider = StaticProvider::new();
+
         // Create endpoint builder with relay mode
-        let mut builder = Endpoint::empty_builder(relay_mode).secret_key(secret);
+        let mut builder = Endpoint::empty_builder(relay_mode)
+            .secret_key(secret)
+            .discovery(static_provider.clone());
 
         // Conditionally add DHT discovery if enabled
         if config.enable_dht {
@@ -218,6 +230,8 @@ impl NetworkHandle {
             database: database.clone(),
             dht_connected: dht_connected.clone(),
             dht_checked: dht_checked.clone(),
+            iroh_secret_bytes,
+            static_provider,
         };
         tracing::info!(peer_id = %handle.peer_id(), "iroh endpoint started");
 
@@ -305,6 +319,24 @@ impl NetworkHandle {
 
     pub fn peer_id(&self) -> String {
         self.endpoint.id().to_string()
+    }
+
+    /// Gather all known friends' iroh public keys for use as gossip bootstrap peers.
+    /// Friends who are online can serve as bootstrap nodes for any gossip topic,
+    /// enabling direct discovery without DHT.
+    fn gather_friend_bootstrap_peers(&self) -> Vec<iroh::PublicKey> {
+        let peer_service = crate::peers::PeerService::new(self.database.clone());
+        let mut peers = Vec::new();
+        if let Ok(all_peers) = peer_service.list_peers() {
+            for peer in all_peers {
+                if let Some(iroh_id) = &peer.iroh_peer_id {
+                    if let Ok(pub_key) = iroh_id.parse::<iroh::PublicKey>() {
+                        peers.push(pub_key);
+                    }
+                }
+            }
+        }
+        peers
     }
 
     pub fn current_addr(&self) -> EndpointAddr {
@@ -465,13 +497,19 @@ impl NetworkHandle {
         let topic_name = GLOBAL_TOPIC_NAME.to_string();
         let topic_id = TopicId::from_bytes(derive_global_topic());
 
-        tracing::info!(topic = %topic_name, "subscribing to global discovery topic");
+        let bootstrap_peers = self.gather_friend_bootstrap_peers();
+
+        tracing::info!(
+            topic = %topic_name,
+            friend_bootstrap_count = bootstrap_peers.len(),
+            "subscribing to global discovery topic"
+        );
 
         // Create two subscriptions to this topic:
         // 1. For receiving (consumed by the spawned task below)
         // 2. For broadcasting (stored in topics map for the event worker)
-        let receiver_topic = self.gossip.subscribe(topic_id, vec![]).await?;
-        let broadcaster_topic = self.gossip.subscribe(topic_id, vec![]).await?;
+        let receiver_topic = self.gossip.subscribe(topic_id, bootstrap_peers.clone()).await?;
+        let broadcaster_topic = self.gossip.subscribe(topic_id, bootstrap_peers).await?;
 
         // Store broadcaster in topics map
         {
@@ -526,16 +564,28 @@ impl NetworkHandle {
 
     /// Subscribe to a user-defined topic for public discovery.
     /// Topics are well-known hashes that anyone can subscribe to.
-    /// Uses DHT-based auto-discovery to find other peers on the same topic.
+    /// Uses friend-bootstrapping (fast, reliable) + DHT auto-discovery (slow, for strangers).
     pub async fn subscribe_to_topic(&self, topic_name: &str) -> Result<()> {
         use crate::network::topics::derive_topic_id;
 
         tracing::info!(topic = %topic_name, "subscribing to user topic");
 
-        // First, subscribe to the standard gossip topic for broadcasting (this is fast)
+        // Gather all known friends' iroh IDs as bootstrap peers.
+        // This is the PRIMARY discovery mechanism: if your friend is online and on
+        // the same topic, iroh-gossip connects directly via the bootstrap list.
+        // No DHT needed. iroh resolves addresses via DhtDiscovery/Pkarr.
+        let bootstrap_peers = self.gather_friend_bootstrap_peers();
+
+        tracing::info!(
+            topic = %topic_name,
+            friend_bootstrap_count = bootstrap_peers.len(),
+            "bootstrapping topic subscription with known friends"
+        );
+
+        // Subscribe to the standard gossip topic with friend bootstrapping
         let topic_id = TopicId::from_bytes(derive_topic_id(topic_name));
-        let broadcaster_topic = self.gossip.subscribe(topic_id, vec![]).await?;
-        let receiver_topic = self.gossip.subscribe(topic_id, vec![]).await?;
+        let broadcaster_topic = self.gossip.subscribe(topic_id, bootstrap_peers.clone()).await?;
+        let receiver_topic = self.gossip.subscribe(topic_id, bootstrap_peers).await?;
 
         // Store the GossipTopic for broadcasting (used by event loop)
         let topic_key = format!("topic:{}", topic_name);
@@ -586,11 +636,14 @@ impl NetworkHandle {
             tracing::info!(topic = %topic_key_for_receiver, "topic receiver loop ended");
         });
 
-        // Spawn DHT auto-discovery in background (this can take a while)
+        // Spawn DHT auto-discovery in background
+        // This is the PRIMARY discovery mechanism for user topics since the standard
+        // gossip subscription above has no bootstrap peers and can't find anyone on its own.
         let gossip = self.gossip.clone();
         let topic_name_owned = topic_name.to_string();
         let inbound_tx_dht = self.inbound_tx.clone();
         let dht_senders = self.dht_senders.clone();
+        let iroh_secret_bytes = self.iroh_secret_bytes;
 
         tokio::spawn(async move {
             use distributed_topic_tracker::AutoDiscoveryGossip;
@@ -606,21 +659,24 @@ impl NetworkHandle {
                 hasher.finalize().as_bytes().to_vec()
             };
 
-            // IMPORTANT: Use a UNIQUE signing key for this peer's record in the DHT.
-            // If all peers use the same signing key, they will overwrite each other's
-            // mutable records (last writer wins), preventing discovery of more than one peer.
-            // The dht_topic_id (derived above/below) ensures they all publish to the same
-            // "swarm" or location, but each needs their own unique identity signature.
-            let topic_signing_key = {
-                let mut rng = rand::rng();
-                ed25519_dalek::SigningKey::generate(&mut rng)
-            };
+            // Use the iroh endpoint's secret key for DHT record signing.
+            // CRITICAL: record.node_id() = signing_key.verifying_key() = iroh endpoint public key.
+            // When other peers discover our DHT record during bootstrap, they extract node_id
+            // and call join_peers() with it. If node_id doesn't match a real iroh endpoint,
+            // the connection will always fail. Using the iroh key ensures discoverability.
+            let topic_signing_key = ed25519_dalek::SigningKey::from_bytes(&iroh_secret_bytes);
+
+            tracing::info!(
+                topic = %topic_name_owned,
+                endpoint_id = ?topic_signing_key.verifying_key(),
+                "DHT record will advertise our iroh endpoint ID"
+            );
 
             // Create the DHT topic ID from the topic name
             let dht_topic_id = DhtTopicId::new(format!("graphchan:{}", topic_name_owned));
 
             // Create a RecordPublisher for DHT-based peer discovery
-            // All peers on the same topic share the same signing key
+            // pub_key = iroh endpoint ID, so bootstrap can find and connect to us
             let record_publisher = RecordPublisher::new(
                 dht_topic_id,
                 topic_signing_key.verifying_key(),
@@ -629,23 +685,28 @@ impl NetworkHandle {
                 topic_secret,
             );
 
-            // Subscribe with auto-discovery via mainline DHT (can take 30-60+ seconds)
-            match gossip.subscribe_and_join_with_auto_discovery(record_publisher).await {
+            // Use _no_wait so bootstrap proceeds in background without blocking.
+            // The blocking variant hangs forever if no peers are found (e.g., you're the
+            // first peer on the topic). With _no_wait, the Topic is returned immediately
+            // and we can store the sender/receiver while bootstrap continues searching.
+            match gossip.subscribe_and_join_with_auto_discovery_no_wait(record_publisher).await {
                 Ok(dht_topic) => {
-                    tracing::info!(topic = %topic_name_owned, "🌐 DHT auto-discovery complete - listening for peers");
+                    tracing::info!(topic = %topic_name_owned, "🌐 DHT topic created - bootstrap running in background");
 
-                    // Split into sender and receiver for DHT-discovered peers
+                    // Split into sender and receiver immediately (don't wait for bootstrap)
                     match dht_topic.split().await {
                         Ok((dht_sender, dht_receiver)) => {
                             let topic_key_dht = format!("topic:{}", topic_name_owned);
 
-                            // Store the sender so it can be used for broadcasting
+                            // Store the sender immediately so broadcasts can queue
+                            // Once bootstrap finds peers, queued messages will be delivered
                             {
                                 let mut senders = dht_senders.write().await;
                                 senders.insert(topic_key_dht.clone(), DhtTopicSender::new(dht_sender));
-                                tracing::info!(topic = %topic_key_dht, "📡 DHT sender stored - broadcasts will reach DHT peers");
+                                tracing::info!(topic = %topic_key_dht, "📡 DHT sender stored - broadcasts will reach DHT peers once connected");
                             }
 
+                            // Receiver loop for DHT-discovered peers
                             while let Some(event_result) = dht_receiver.next().await {
                                 match event_result {
                                     Ok(iroh_gossip::api::Event::Received(message)) => {
@@ -691,7 +752,32 @@ impl NetworkHandle {
             }
         });
 
-        tracing::info!(topic = %topic_name, "✓ subscribed to topic (DHT discovery running in background)");
+        // Spawn Schelling point BEP44 discovery alongside DTT.
+        // This publishes our full EndpointAddr (relay + direct addrs) to the DHT
+        // and discovers peers who know the same topic name.
+        //
+        // We create a lightweight subscription just to get a GossipSender for join_peers().
+        // The receiver is dropped immediately — the topic's protocol state is shared with
+        // the main subscription above, so discovered peers mesh into the same gossip swarm.
+        let schelling_sender = {
+            let schelling_sub = self.gossip.subscribe(topic_id, vec![]).await?;
+            let (sender, _receiver) = schelling_sub.split();
+            sender
+        };
+        let schelling_endpoint = self.endpoint.clone();
+        let schelling_static_provider = self.static_provider.clone();
+        let schelling_topic = topic_name.to_string();
+        tokio::spawn(async move {
+            schelling::run_schelling_loop(
+                schelling_topic,
+                schelling_endpoint,
+                schelling_sender,
+                schelling_static_provider,
+            )
+            .await;
+        });
+
+        tracing::info!(topic = %topic_name, "✓ subscribed to topic (DTT + Schelling discovery running in background)");
 
         Ok(())
     }
@@ -700,11 +786,22 @@ impl NetworkHandle {
     /// Call this when adding a friend or on startup for existing friends.
     ///
     /// If bootstrap_peer is provided, it will be used to help discover gossip neighbors.
+    /// Additionally, all known friends' iroh IDs are added as bootstrap peers.
     pub async fn subscribe_to_peer(&self, peer_id: &str, bootstrap_peer: Option<iroh::PublicKey>) -> Result<()> {
         let topic_name = format!("peer-{}", peer_id);
         let topic_id = TopicId::from_bytes(*blake3::hash(topic_name.as_bytes()).as_bytes());
 
-        let bootstrap_peers = bootstrap_peer.map(|p| vec![p]).unwrap_or_default();
+        // Start with the explicitly provided bootstrap peer (if any)
+        let mut bootstrap_peers = bootstrap_peer.map(|p| vec![p]).unwrap_or_default();
+
+        // Also add all known friends' iroh IDs as bootstrap candidates.
+        // On peer topics, the target peer is the primary bootstrap node, but other
+        // friends who also follow this peer can serve as relay/bridge nodes.
+        for pub_key in self.gather_friend_bootstrap_peers() {
+            if !bootstrap_peers.contains(&pub_key) {
+                bootstrap_peers.push(pub_key);
+            }
+        }
 
         tracing::info!(
             peer_id = %peer_id,
