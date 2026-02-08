@@ -78,21 +78,12 @@ pub(crate) async fn block_peer_handler(
     Json(payload): Json<BlockPeerRequest>,
 ) -> Result<StatusCode, ApiError> {
     let checker = BlockChecker::new(state.database.clone());
-    let reason = payload.reason;
     checker
-        .block_peer(&peer_id, reason.clone())
+        .block_peer(&peer_id, payload.reason)
         .map_err(ApiError::Internal)?;
 
-    // Broadcast block action to network for shared blocklist subscribers
-    let block_event = crate::network::BlockActionEvent {
-        blocker_peer_id: state.identity.iroh_peer_id.clone(),
-        blocked_peer_id: peer_id,
-        reason,
-        is_unblock: false,
-    };
-    if let Err(err) = state.network.publish_block_action(block_event).await {
-        tracing::warn!(error = ?err, "failed to broadcast block action");
-    }
+    // NOTE: Block action broadcasting disabled pending privacy redesign (OrbWeaver-9rc).
+    // Broadcasting who you block to your peer topic is a privacy/safety concern.
 
     Ok(StatusCode::OK)
 }
