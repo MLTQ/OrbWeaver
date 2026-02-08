@@ -98,3 +98,5 @@ Sender                              Recipient
 - Forward secrecy not implemented (same shared secret per pair)
 - Messages stored encrypted, decrypted on each read
 - Conversation ID deterministic for deduplication
+- **Missing X25519 key handling**: Peers added via short friendcode lack X25519 keys.
+  `get_messages` returns empty list gracefully; `send_dm` returns descriptive error.

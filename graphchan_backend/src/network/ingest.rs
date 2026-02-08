@@ -432,7 +432,7 @@ async fn handle_message(
 
 fn apply_profile_update(database: &Database, update: ProfileUpdate) -> Result<()> {
     let service = PeerService::new(database.clone());
-    service.update_profile(&update.peer_id, update.avatar_file_id, update.username, update.bio, update.agents)?;
+    service.update_profile(&update.peer_id, update.avatar_file_id, update.username, update.bio, update.agents, update.x25519_pubkey)?;
     Ok(())
 }
 

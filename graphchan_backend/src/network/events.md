@@ -35,9 +35,9 @@ Defines gossip message types and handles outbound event publishing. Contains the
 - **Note**: Replaced by Iroh blob tickets but kept for compatibility
 
 ### `ProfileUpdate`
-- **Does**: Peer profile changes (username, bio, avatar)
-- **Fields**: peer_id, username, bio, avatar_file_id
-- **Use case**: Profile sync across network
+- **Does**: Peer profile changes (username, bio, avatar, X25519 key)
+- **Fields**: peer_id, username, bio, avatar_file_id, agents, x25519_pubkey
+- **Use case**: Profile sync across network; X25519 key propagation enables DMs with short-friendcode peers
 
 ### `ReactionUpdate`
 - **Does**: Emoji reaction add/remove

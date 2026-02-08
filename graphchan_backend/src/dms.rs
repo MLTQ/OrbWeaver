@@ -53,7 +53,7 @@ impl DmService {
 
             let pubkey_str = peer
                 .x25519_pubkey
-                .ok_or_else(|| anyhow!("peer {} has no X25519 public key", to_peer_id))?;
+                .ok_or_else(|| anyhow!("Cannot send DM: peer {} has no X25519 public key. They may have been added via short friendcode. Ask them to share their full friendcode.", to_peer_id))?;
 
             // Decode base64 public key
             let pubkey_bytes = BASE64_STANDARD.decode(&pubkey_str)
@@ -253,16 +253,20 @@ impl DmService {
         // Load our X25519 secret key
         let my_secret = load_x25519_secret(&self.paths)?;
 
-        // Get peer's X25519 public key
+        // Get peer's X25519 public key (may not exist for short-friendcode peers)
         let their_pubkey = self.database.with_repositories(|repos| {
             let peer = repos
                 .peers()
                 .get(peer_id)?
                 .ok_or_else(|| anyhow!("peer not found: {}", peer_id))?;
 
-            let pubkey_str = peer
-                .x25519_pubkey
-                .ok_or_else(|| anyhow!("peer {} has no X25519 public key", peer_id))?;
+            let pubkey_str = match &peer.x25519_pubkey {
+                Some(pk) => pk.clone(),
+                None => {
+                    // No X25519 key — can't decrypt any messages, return empty
+                    return Ok::<Option<PublicKey>, anyhow::Error>(None);
+                }
+            };
 
             let pubkey_bytes = BASE64_STANDARD.decode(&pubkey_str)
                 .with_context(|| "failed to decode X25519 public key")?;
@@ -273,8 +277,13 @@ impl DmService {
 
             let mut key_array = [0u8; 32];
             key_array.copy_from_slice(&pubkey_bytes);
-            Ok::<PublicKey, anyhow::Error>(PublicKey::from(key_array))
+            Ok(Some(PublicKey::from(key_array)))
         })?;
+
+        let their_pubkey = match their_pubkey {
+            Some(pk) => pk,
+            None => return Ok(Vec::new()), // No X25519 key, no messages can be decrypted
+        };
 
         self.database.with_repositories(|repos| {
             let records = repos.direct_messages().list_for_conversation(&conversation_id, limit)?;

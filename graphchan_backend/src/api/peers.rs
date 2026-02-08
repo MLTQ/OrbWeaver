@@ -171,7 +171,7 @@ pub(crate) async fn upload_avatar(
     // We need the local peer ID (fingerprint).
     // We can get it from state.identity.gpg_fingerprint.
     let peer_id = state.identity.gpg_fingerprint.clone();
-    peer_service.update_profile(&peer_id, Some(blob_id.clone()), None, None, None).map_err(ApiError::Internal)?;
+    peer_service.update_profile(&peer_id, Some(blob_id.clone()), None, None, None, None).map_err(ApiError::Internal)?;
 
     // Generate ticket
     let hash = Hash::from_str(&blob_id).map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
@@ -186,6 +186,7 @@ pub(crate) async fn upload_avatar(
         username: None,
         bio: None,
         agents: None,
+        x25519_pubkey: Some(state.identity.x25519_pubkey.clone()),
     };
     state.network.publish_profile_update(update).await.map_err(ApiError::Internal)?;
 
@@ -199,7 +200,7 @@ pub(crate) async fn update_profile_handler(
     let peer_service = PeerService::new(state.database.clone());
     let peer_id = state.identity.gpg_fingerprint.clone();
 
-    peer_service.update_profile(&peer_id, None, payload.username.clone(), payload.bio.clone(), None)
+    peer_service.update_profile(&peer_id, None, payload.username.clone(), payload.bio.clone(), None, None)
         .map_err(ApiError::Internal)?;
 
     // Broadcast ProfileUpdate
@@ -219,6 +220,7 @@ pub(crate) async fn update_profile_handler(
         username: payload.username,
         bio: payload.bio,
         agents: None,
+        x25519_pubkey: Some(state.identity.x25519_pubkey.clone()),
     };
     state.network.publish_profile_update(update).await.map_err(ApiError::Internal)?;
 
@@ -252,7 +254,7 @@ pub(crate) async fn add_agent_handler(
         agents.push(payload.name.clone());
 
         // Update profile with new agents list
-        peer_service.update_profile(&peer_id, None, None, None, Some(agents.clone()))
+        peer_service.update_profile(&peer_id, None, None, None, Some(agents.clone()), None)
             .map_err(ApiError::Internal)?;
 
         // Broadcast ProfileUpdate
@@ -263,6 +265,7 @@ pub(crate) async fn add_agent_handler(
             username: None,
             bio: None,
             agents: Some(agents),
+            x25519_pubkey: Some(state.identity.x25519_pubkey.clone()),
         };
         state.network.publish_profile_update(update).await.map_err(ApiError::Internal)?;
     }
@@ -286,7 +289,7 @@ pub(crate) async fn remove_agent_handler(
         agents.retain(|a| a != &name);
 
         // Update profile with new agents list
-        peer_service.update_profile(&peer_id, None, None, None, Some(agents.clone()))
+        peer_service.update_profile(&peer_id, None, None, None, Some(agents.clone()), None)
             .map_err(ApiError::Internal)?;
 
         // Broadcast ProfileUpdate
@@ -297,6 +300,7 @@ pub(crate) async fn remove_agent_handler(
             username: None,
             bio: None,
             agents: Some(agents),
+            x25519_pubkey: Some(state.identity.x25519_pubkey.clone()),
         };
         state.network.publish_profile_update(update).await.map_err(ApiError::Internal)?;
     }
