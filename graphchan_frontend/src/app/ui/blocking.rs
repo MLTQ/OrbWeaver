@@ -30,9 +30,9 @@ pub fn render_blocking_page(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
 }
 
 fn render_blocked_peers_tab(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut BlockingState) {
-    // Two-column layout: Blocked Peers | Block Form
+    // Two-column layout: Blocked Peers | Block/Import Form
     ui.columns(2, |columns| {
-        // Column 1: Blocked Peers
+        // Column 1: Blocked Peers List
         columns[0].vertical(|ui| {
             ui.heading("Blocked Peers");
             ui.add_space(10.0);
@@ -50,10 +50,36 @@ fn render_blocked_peers_tab(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
 
             render_blocked_peers_list(app, ui, state);
 
-            ui.add_space(20.0);
-            ui.separator();
             ui.add_space(10.0);
 
+            // Export/Import buttons
+            ui.horizontal(|ui| {
+                if ui.add_enabled(!state.exporting_peers, egui::Button::new("Export CSV")).clicked() {
+                    app.spawn_export_peer_blocks();
+                }
+                if state.exporting_peers {
+                    ui.add(egui::Spinner::new());
+                }
+            });
+
+            // Show export text if available
+            if let Some(export_text) = &state.peer_export_text.clone() {
+                ui.separator();
+                ui.label(RichText::new("Exported CSV (select all and copy):").size(11.0));
+                let mut text = export_text.clone();
+                ui.add(
+                    egui::TextEdit::multiline(&mut text)
+                        .desired_rows(6)
+                        .interactive(true)
+                );
+                if ui.small_button("Close").clicked() {
+                    state.peer_export_text = None;
+                }
+            }
+        });
+
+        // Column 2: Block/Import Form
+        columns[1].vertical(|ui| {
             // Block new peer form
             ui.heading("Block a Peer");
             ui.horizontal(|ui| {
@@ -83,75 +109,30 @@ fn render_blocked_peers_tab(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
             if state.blocking_in_progress {
                 ui.add(egui::Spinner::new());
             }
-        });
-
-        // Column 2: Blocklists
-        columns[1].vertical(|ui| {
-            ui.heading("Subscribed Blocklists");
-            ui.add_space(10.0);
-
-            if state.blocklists_loading && state.blocklists.is_empty() {
-                ui.add(egui::Spinner::new());
-            }
-
-            if let Some(err) = &state.blocklists_error {
-                ui.colored_label(Color32::LIGHT_RED, format!("Error: {}", err));
-                if ui.button("Retry").clicked() {
-                    app.spawn_load_blocklists();
-                }
-            }
-
-            render_blocklists_list(app, ui, state);
 
             ui.add_space(20.0);
             ui.separator();
             ui.add_space(10.0);
 
-            // Subscribe to blocklist form
-            ui.heading("Subscribe to Blocklist");
-            ui.horizontal(|ui| {
-                ui.label("Blocklist ID:");
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.new_blocklist_id)
-                        .hint_text("Enter blocklist ID...")
-                );
-            });
+            // Import section
+            ui.heading("Import Blocked Peers");
+            ui.label("Paste CSV (peer_id,reason per line):");
 
-            ui.horizontal(|ui| {
-                ui.label("Maintainer:");
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.new_blocklist_maintainer)
-                        .hint_text("Maintainer peer ID...")
-                );
-            });
+            ui.add(
+                egui::TextEdit::multiline(&mut state.peer_import_text)
+                    .desired_rows(6)
+                    .hint_text("peer_id,reason\nabc123,Spammer\ndef456,Harassment")
+            );
 
-            ui.horizontal(|ui| {
-                ui.label("Name:");
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.new_blocklist_name)
-                        .hint_text("Blocklist name...")
-                );
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("Description:");
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.new_blocklist_description)
-                        .hint_text("Optional description...")
-                );
-            });
-
-            ui.checkbox(&mut state.new_blocklist_auto_apply, "Auto-apply blocks from this list");
-
-            if ui.add_enabled(!state.subscribing_in_progress, egui::Button::new("Subscribe")).clicked() {
-                app.spawn_subscribe_blocklist(state);
+            if ui.add_enabled(!state.importing_peers, egui::Button::new("Import")).clicked() {
+                app.spawn_import_peer_blocks(state);
             }
 
-            if let Some(err) = &state.subscribe_error {
+            if let Some(err) = &state.peer_import_error {
                 ui.colored_label(Color32::LIGHT_RED, format!("Error: {}", err));
             }
 
-            if state.subscribing_in_progress {
+            if state.importing_peers {
                 ui.add(egui::Spinner::new());
             }
         });
@@ -268,13 +249,32 @@ fn render_ip_blocks_tab(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut B
 
             ui.add_space(10.0);
 
-            // Clear all button
-            if ui.add_enabled(!state.ip_blocks.is_empty(), egui::Button::new("Clear All IP Blocks")).clicked() {
-                state.showing_clear_all_confirmation = true;
-            }
+            // Clear all / Export buttons
+            ui.horizontal(|ui| {
+                if ui.add_enabled(!state.ip_blocks.is_empty(), egui::Button::new("Clear All")).clicked() {
+                    state.showing_clear_all_confirmation = true;
+                }
+                if ui.add_enabled(!state.exporting_ips, egui::Button::new("Export Blocklist")).clicked() {
+                    app.spawn_export_ip_blocks();
+                }
+                if state.exporting_ips {
+                    ui.add(egui::Spinner::new());
+                }
+            });
 
-            if ui.button("Export Blocklist").clicked() {
-                app.spawn_export_ip_blocks();
+            // Show export text if available
+            if let Some(export_text) = &state.ip_export_text.clone() {
+                ui.separator();
+                ui.label(RichText::new("Exported blocklist (select all and copy):").size(11.0));
+                let mut text = export_text.clone();
+                ui.add(
+                    egui::TextEdit::multiline(&mut text)
+                        .desired_rows(6)
+                        .interactive(true)
+                );
+                if ui.small_button("Close").clicked() {
+                    state.ip_export_text = None;
+                }
             }
         });
 

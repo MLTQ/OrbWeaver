@@ -360,6 +360,9 @@ impl eframe::App for GraphchanApp {
                 if ui.button("Topics").clicked() {
                     self.show_topic_manager = true;
                 }
+                if ui.button("Blocking").clicked() {
+                    self.view = ViewState::Blocking;
+                }
                 if ui.selectable_label(self.show_identity, "Identity").clicked() {
                     self.show_identity = !self.show_identity;
                 }

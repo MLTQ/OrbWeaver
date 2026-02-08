@@ -591,6 +591,26 @@ pub fn remove_ip_block(client: ApiClient, tx: Sender<AppMessage>, block_id: i64)
     });
 }
 
+pub fn export_peer_blocks(client: ApiClient, tx: Sender<AppMessage>) {
+    thread::spawn(move || {
+        let result = client.export_peer_blocks();
+        let message = AppMessage::PeerBlocksExported { result };
+        if tx.send(message).is_err() {
+            error!("failed to send PeerBlocksExported message");
+        }
+    });
+}
+
+pub fn import_peer_blocks(client: ApiClient, tx: Sender<AppMessage>, import_text: String) {
+    thread::spawn(move || {
+        let result = client.import_peer_blocks(&import_text);
+        let message = AppMessage::PeerBlocksImported { result };
+        if tx.send(message).is_err() {
+            error!("failed to send PeerBlocksImported message");
+        }
+    });
+}
+
 pub fn import_ip_blocks(client: ApiClient, tx: Sender<AppMessage>, import_text: String) {
     thread::spawn(move || {
         let result = client.import_ip_blocks(&import_text);

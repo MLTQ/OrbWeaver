@@ -12,7 +12,7 @@ Defines gossip message types and handles outbound event publishing. Contains the
 
 ### `EventPayload`
 - **Does**: Enum of all message types
-- **Variants**: ThreadAnnouncement, PostUpdate, FileAvailable, FileRequest, FileChunk, ProfileUpdate, ReactionUpdate
+- **Variants**: ThreadAnnouncement, PostUpdate, FileAvailable, FileRequest, FileChunk, ProfileUpdate, ReactionUpdate, DirectMessage, BlockAction
 
 ## Message Types
 
@@ -42,6 +42,16 @@ Defines gossip message types and handles outbound event publishing. Contains the
 ### `ReactionUpdate`
 - **Does**: Emoji reaction add/remove
 - **Fields**: post_id, emoji, reactor_peer_id, action (add/remove), signature
+
+### `DirectMessageEvent`
+- **Does**: Encrypted DM delivery via gossip
+- **Fields**: from_peer_id, to_peer_id, encrypted_body, nonce, message_id, conversation_id, created_at
+- **Routing**: `peer-{to_peer_id}` topic (point-to-point, not re-broadcast)
+
+### `BlockActionEvent`
+- **Does**: Block/unblock action broadcast for shared blocklist features
+- **Fields**: blocker_peer_id, blocked_peer_id, reason, is_unblock
+- **Routing**: `peer-{blocker_peer_id}` topic (subscribers with auto_apply receive and enforce)
 
 ## Contracts
 

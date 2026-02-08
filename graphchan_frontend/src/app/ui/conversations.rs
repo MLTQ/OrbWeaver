@@ -111,9 +111,97 @@ pub fn render_conversations_list(
     ui: &mut egui::Ui,
     conversations: &[crate::models::ConversationView],
 ) {
+    // Header with "New Message" button
+    ui.horizontal(|ui| {
+        ui.heading("Messages");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("+ New Message").clicked() {
+                app.dm_state.show_new_conversation_picker = !app.dm_state.show_new_conversation_picker;
+                app.dm_state.new_conversation_filter.clear();
+            }
+        });
+    });
+
+    // Peer picker (shown when toggled)
+    let mut peer_to_open: Option<crate::models::PeerView> = None;
+
+    if app.dm_state.show_new_conversation_picker {
+        let existing_peer_ids: std::collections::HashSet<&str> = conversations
+            .iter()
+            .map(|c| c.peer_id.as_str())
+            .collect();
+
+        egui::Frame::group(ui.style())
+            .inner_margin(egui::vec2(12.0, 8.0))
+            .show(ui, |ui| {
+                ui.label(RichText::new("Select a friend").strong());
+                ui.add_space(4.0);
+
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.dm_state.new_conversation_filter)
+                        .hint_text("Filter friends...")
+                );
+                ui.add_space(4.0);
+
+                let filter = app.dm_state.new_conversation_filter.to_lowercase();
+                let mut any_shown = false;
+
+                // Collect peers to avoid borrow issues
+                let peers: Vec<_> = app.peers.values().cloned().collect();
+
+                for peer in &peers {
+                    // Filter by search text
+                    let name = peer.username.as_deref()
+                        .or(peer.alias.as_deref())
+                        .unwrap_or(&peer.id);
+                    if !filter.is_empty() && !name.to_lowercase().contains(&filter) {
+                        continue;
+                    }
+
+                    any_shown = true;
+                    let has_conversation = existing_peer_ids.contains(peer.id.as_str());
+
+                    ui.horizontal(|ui| {
+                        ui.label(name);
+                        if has_conversation {
+                            ui.label(RichText::new("(existing)").weak().size(10.0));
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Message").clicked() {
+                                peer_to_open = Some(peer.clone());
+                            }
+                        });
+                    });
+                }
+
+                if !any_shown {
+                    if app.peers.is_empty() {
+                        ui.label(RichText::new("No friends yet. Add peers from the Following page.").weak());
+                    } else {
+                        ui.label(RichText::new("No matching friends.").weak());
+                    }
+                }
+            });
+
+        ui.add_space(8.0);
+    }
+
+    // Open selected peer conversation (after UI rendering to avoid borrow conflict)
+    if let Some(peer) = peer_to_open {
+        app.dm_state.show_new_conversation_picker = false;
+        app.dm_state.new_conversation_filter.clear();
+        open_conversation_with_peer(app, peer);
+        return;
+    }
+
+    ui.separator();
+
     if conversations.is_empty() {
-        ui.label("No conversations yet.");
-        ui.label("Start a conversation from the Following page.");
+        ui.add_space(20.0);
+        ui.vertical_centered(|ui| {
+            ui.label("No conversations yet.");
+            ui.label(RichText::new("Use \"+ New Message\" above to start one.").weak());
+        });
         return;
     }
 

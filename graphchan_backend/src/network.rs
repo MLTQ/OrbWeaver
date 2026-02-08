@@ -35,6 +35,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 const GRAPHCHAN_ALPN: &[u8] = b"graphchan/0";
 const GOSSIP_BUFFER: usize = 128;
 
+pub use events::BlockActionEvent;
+pub use events::DirectMessageEvent;
 pub use events::FileAnnouncement;
 pub use events::ProfileUpdate;
 pub use events::ReactionUpdate;
@@ -473,6 +475,18 @@ impl NetworkHandle {
 
     pub async fn publish_reaction_update(&self, update: ReactionUpdate) -> Result<()> {
         let event = NetworkEvent::Broadcast(EventPayload::ReactionUpdate(update));
+        self.publisher.send(event).await.ok();
+        Ok(())
+    }
+
+    pub async fn publish_direct_message(&self, dm: events::DirectMessageEvent) -> Result<()> {
+        let event = NetworkEvent::Broadcast(EventPayload::DirectMessage(dm));
+        self.publisher.send(event).await.ok();
+        Ok(())
+    }
+
+    pub async fn publish_block_action(&self, action: events::BlockActionEvent) -> Result<()> {
+        let event = NetworkEvent::Broadcast(EventPayload::BlockAction(action));
         self.publisher.send(event).await.ok();
         Ok(())
     }

@@ -33,8 +33,8 @@ impl DmService {
             .collect()
     }
 
-    /// Send a direct message to a peer.
-    pub fn send_dm(&self, to_peer_id: &str, body: &str) -> Result<DirectMessageView> {
+    /// Send a direct message to a peer. Returns (view, ciphertext, nonce) for gossip broadcast.
+    pub fn send_dm(&self, to_peer_id: &str, body: &str) -> Result<(DirectMessageView, Vec<u8>, Vec<u8>)> {
         // Load our X25519 secret key
         let my_secret = load_x25519_secret(&self.paths)?;
 
@@ -83,7 +83,7 @@ impl DmService {
             conversation_id: conversation_id.clone(),
             from_peer_id: my_peer_id.clone(),
             to_peer_id: to_peer_id.to_string(),
-            encrypted_body: ciphertext,
+            encrypted_body: ciphertext.clone(),
             nonce: nonce.to_vec(),
             created_at: created_at.clone(),
             read_at: None,
@@ -106,7 +106,7 @@ impl DmService {
             Ok(())
         })?;
 
-        Ok(DirectMessageView {
+        let view = DirectMessageView {
             id: message_id,
             conversation_id,
             from_peer_id: my_peer_id,
@@ -114,7 +114,36 @@ impl DmService {
             body: body.to_string(),
             created_at,
             read_at: None,
-        })
+        };
+
+        Ok((view, ciphertext, nonce.to_vec()))
+    }
+
+    /// Ingest a DM received via gossip. Stores the encrypted record and updates conversation.
+    pub fn ingest_dm(&self, from_peer_id: &str, to_peer_id: &str, encrypted_body: &[u8], nonce: &[u8], message_id: &str, conversation_id: &str, created_at: &str) -> Result<()> {
+        let record = DirectMessageRecord {
+            id: message_id.to_string(),
+            conversation_id: conversation_id.to_string(),
+            from_peer_id: from_peer_id.to_string(),
+            to_peer_id: to_peer_id.to_string(),
+            encrypted_body: encrypted_body.to_vec(),
+            nonce: nonce.to_vec(),
+            created_at: created_at.to_string(),
+            read_at: None,
+        };
+
+        // Store the raw encrypted record
+        self.database.with_repositories(|repos| {
+            repos.direct_messages().create(&record)?;
+            Ok(())
+        })?;
+
+        // Decrypt and update conversation metadata (receive_dm handles conversation upsert)
+        if let Err(err) = self.receive_dm(record) {
+            tracing::warn!(error = ?err, "failed to decrypt ingested DM for preview");
+        }
+
+        Ok(())
     }
 
     /// Receive and decrypt a direct message.

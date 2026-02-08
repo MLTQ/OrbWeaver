@@ -78,11 +78,21 @@ pub(crate) async fn block_peer_handler(
     Json(payload): Json<BlockPeerRequest>,
 ) -> Result<StatusCode, ApiError> {
     let checker = BlockChecker::new(state.database.clone());
+    let reason = payload.reason;
     checker
-        .block_peer(&peer_id, payload.reason)
+        .block_peer(&peer_id, reason.clone())
         .map_err(ApiError::Internal)?;
 
-    // TODO: Broadcast block action to network (optional - for shared blocklists)
+    // Broadcast block action to network for shared blocklist subscribers
+    let block_event = crate::network::BlockActionEvent {
+        blocker_peer_id: state.identity.iroh_peer_id.clone(),
+        blocked_peer_id: peer_id,
+        reason,
+        is_unblock: false,
+    };
+    if let Err(err) = state.network.publish_block_action(block_event).await {
+        tracing::warn!(error = ?err, "failed to broadcast block action");
+    }
 
     Ok(StatusCode::OK)
 }
@@ -128,7 +138,10 @@ pub(crate) async fn subscribe_blocklist_handler(
         )
         .map_err(ApiError::Internal)?;
 
-    // TODO: Subscribe to blocklist updates from maintainer via gossip
+    // Subscribe to blocklist maintainer's peer topic to receive block actions
+    if let Err(err) = state.network.subscribe_to_peer(&payload.maintainer_peer_id, None).await {
+        tracing::warn!(error = ?err, maintainer = %payload.maintainer_peer_id, "failed to subscribe to blocklist maintainer's topic");
+    }
 
     Ok(StatusCode::CREATED)
 }
@@ -381,4 +394,66 @@ pub(crate) async fn get_peer_ip_handler(
         peer_id,
         ips,
     }))
+}
+
+/// Export blocked peers as CSV: peer_id,reason,blocked_at
+pub(crate) async fn export_peer_blocks_handler(
+    State(state): State<AppState>,
+) -> Result<String, ApiError> {
+    let checker = BlockChecker::new(state.database.clone());
+    let blocked = checker.list_blocked_peers().map_err(ApiError::Internal)?;
+
+    let mut output = String::new();
+    output.push_str("peer_id,reason,blocked_at\n");
+
+    for peer in blocked {
+        let reason = peer.reason.unwrap_or_default().replace(',', ";");
+        output.push_str(&format!("{},{},{}\n", peer.peer_id, reason, peer.blocked_at));
+    }
+
+    Ok(output)
+}
+
+/// Import blocked peers from CSV: peer_id,reason (one per line, header optional)
+pub(crate) async fn import_peer_blocks_handler(
+    State(state): State<AppState>,
+    body: String,
+) -> Result<StatusCode, ApiError> {
+    let checker = BlockChecker::new(state.database.clone());
+    let mut added_count = 0;
+    let mut error_count = 0;
+
+    for (i, line) in body.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // Skip CSV header
+        if i == 0 && line.starts_with("peer_id") {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.splitn(3, ',').collect();
+        let peer_id = parts[0].trim();
+        if peer_id.is_empty() {
+            error_count += 1;
+            continue;
+        }
+
+        let reason = parts.get(1)
+            .map(|r| r.trim())
+            .filter(|r| !r.is_empty())
+            .map(|r| r.to_string());
+
+        match checker.block_peer(peer_id, reason) {
+            Ok(_) => added_count += 1,
+            Err(err) => {
+                tracing::warn!(error = ?err, peer_id = %peer_id, "failed to block peer during import");
+                error_count += 1;
+            }
+        }
+    }
+
+    tracing::info!(added = added_count, errors = error_count, "peer block import completed");
+    Ok(StatusCode::OK)
 }

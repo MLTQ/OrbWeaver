@@ -190,6 +190,8 @@ pub struct DmState {
     pub conversations_loading: bool,
     pub conversations_error: Option<String>,
     pub unread_count: usize,
+    pub show_new_conversation_picker: bool,
+    pub new_conversation_filter: String,
 }
 
 // Blocking State
@@ -242,10 +244,21 @@ pub struct BlockingState {
     pub ip_block_stats: Option<crate::models::IpBlockStatsResponse>,
     pub ip_block_stats_loading: bool,
 
-    // Import/Export
+    // IP Import/Export
     pub import_text: String,
     pub importing_ips: bool,
     pub import_error: Option<String>,
+
+    // Peer block Import/Export
+    pub peer_import_text: String,
+    pub importing_peers: bool,
+    pub peer_import_error: Option<String>,
+    pub peer_export_text: Option<String>,
+    pub exporting_peers: bool,
+
+    // IP export
+    pub ip_export_text: Option<String>,
+    pub exporting_ips: bool,
 
     // Clear all confirmation
     pub showing_clear_all_confirmation: bool,

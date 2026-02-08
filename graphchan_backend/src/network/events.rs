@@ -32,6 +32,8 @@ pub enum EventPayload {
     FileChunk(FileChunk),
     ProfileUpdate(ProfileUpdate),
     ReactionUpdate(ReactionUpdate),
+    DirectMessage(DirectMessageEvent),
+    BlockAction(BlockActionEvent),
 }
 
 /// Announces that a thread exists and where to download it.
@@ -126,6 +128,27 @@ pub struct ReactionUpdate {
     pub signature: String,
     pub created_at: String,
     pub is_removal: bool, // true if this is a reaction removal
+}
+
+/// Encrypted DM delivery via gossip (routed to recipient's peer topic).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectMessageEvent {
+    pub from_peer_id: String,
+    pub to_peer_id: String,
+    pub encrypted_body: Vec<u8>,
+    pub nonce: Vec<u8>,
+    pub message_id: String,
+    pub conversation_id: String,
+    pub created_at: String,
+}
+
+/// Block/unblock action broadcast for shared blocklist features.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockActionEvent {
+    pub blocker_peer_id: String,
+    pub blocked_peer_id: String,
+    pub reason: Option<String>,
+    pub is_unblock: bool,
 }
 
 #[derive(Debug)]
@@ -227,6 +250,8 @@ async fn broadcast_to_topic(
         EventPayload::FileChunk(_) => "FileChunk",
         EventPayload::ProfileUpdate(_) => "ProfileUpdate",
         EventPayload::ReactionUpdate(_) => "ReactionUpdate",
+        EventPayload::DirectMessage(_) => "DirectMessage",
+        EventPayload::BlockAction(_) => "BlockAction",
     };
 
     let mut broadcasted = false;
@@ -302,6 +327,8 @@ pub async fn run_gossip_receiver_loop(
                             EventPayload::FileChunk(_) => "FileChunk",
                             EventPayload::ProfileUpdate(_) => "ProfileUpdate",
                             EventPayload::ReactionUpdate(_) => "ReactionUpdate",
+                            EventPayload::DirectMessage(_) => "DirectMessage",
+                            EventPayload::BlockAction(_) => "BlockAction",
                         };
                         tracing::info!(
                             from_peer = %message.delivered_from.fmt_short(),
@@ -379,6 +406,12 @@ fn topic_for_payload(payload: &EventPayload) -> String {
         EventPayload::PostUpdate(post) => format!("thread-{}", post.thread_id),
         EventPayload::FileAvailable(file) => format!("thread-{}", file.thread_id),
         EventPayload::ReactionUpdate(reaction) => format!("thread-{}", reaction.thread_id),
+
+        // DMs route to recipient's peer topic
+        EventPayload::DirectMessage(dm) => format!("peer-{}", dm.to_peer_id),
+
+        // Block actions route to blocker's peer topic (for shared blocklist subscribers)
+        EventPayload::BlockAction(action) => format!("peer-{}", action.blocker_peer_id),
 
         // These shouldn't be used with the current blob-based file transfer
         EventPayload::FileRequest(_) => "deprecated-file-request".to_string(),

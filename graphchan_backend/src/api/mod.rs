@@ -201,6 +201,8 @@ pub async fn serve_http(
         .route("/blocking/peers", get(blocking::list_blocked_peers_handler))
         .route("/blocking/peers/:peer_id", post(blocking::block_peer_handler))
         .route("/blocking/peers/:peer_id", delete(blocking::unblock_peer_handler))
+        .route("/blocking/peers/export", get(blocking::export_peer_blocks_handler))
+        .route("/blocking/peers/import", post(blocking::import_peer_blocks_handler))
         .route("/blocking/blocklists", get(blocking::list_blocklists_handler))
         .route("/blocking/blocklists", post(blocking::subscribe_blocklist_handler))
         .route("/blocking/blocklists/:id", delete(blocking::unsubscribe_blocklist_handler))

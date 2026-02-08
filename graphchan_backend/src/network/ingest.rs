@@ -356,6 +356,77 @@ async fn handle_message(
 
             Ok(None)
         }
+
+        EventPayload::DirectMessage(dm) => {
+            let msg_id = format!("dm:{}", dm.message_id);
+            {
+                let mut seen = seen_messages.lock().await;
+                if !seen.insert(msg_id) {
+                    return Ok(None); // Already processed
+                }
+            }
+
+            tracing::info!(
+                from = %dm.from_peer_id,
+                to = %dm.to_peer_id,
+                message_id = %dm.message_id,
+                "received DM via gossip"
+            );
+
+            // Store the DM using DmService
+            let service = crate::dms::DmService::new(database.clone(), paths.clone());
+            if let Err(err) = service.ingest_dm(
+                &dm.from_peer_id,
+                &dm.to_peer_id,
+                &dm.encrypted_body,
+                &dm.nonce,
+                &dm.message_id,
+                &dm.conversation_id,
+                &dm.created_at,
+            ) {
+                tracing::warn!(error = ?err, "failed to ingest DM from gossip");
+            }
+
+            // Don't re-broadcast DMs - they're point-to-point
+            Ok(None)
+        }
+
+        EventPayload::BlockAction(action) => {
+            let msg_id = format!(
+                "block:{}:{}:{}",
+                action.blocker_peer_id, action.blocked_peer_id, action.is_unblock
+            );
+            {
+                let mut seen = seen_messages.lock().await;
+                if !seen.insert(msg_id) {
+                    return Ok(None);
+                }
+            }
+
+            tracing::info!(
+                blocker = %action.blocker_peer_id,
+                blocked = %action.blocked_peer_id,
+                is_unblock = action.is_unblock,
+                "received block action via gossip"
+            );
+
+            // Apply block action if we're subscribed to this peer's blocklist with auto_apply
+            let checker = crate::blocking::BlockChecker::new(database.clone());
+            if let Ok(subscriptions) = checker.list_blocklist_subscriptions() {
+                for sub in &subscriptions {
+                    if sub.maintainer_peer_id == action.blocker_peer_id && sub.auto_apply {
+                        if action.is_unblock {
+                            let _ = checker.unblock_peer(&action.blocked_peer_id);
+                        } else {
+                            let _ = checker.block_peer(&action.blocked_peer_id, action.reason.clone());
+                        }
+                        break;
+                    }
+                }
+            }
+
+            Ok(None)
+        }
     }
 }
 
@@ -567,7 +638,7 @@ fn apply_thread_snapshot(
                 last_seen: peer.last_seen.clone(),
                 avatar_file_id: peer.avatar_file_id.clone(),
                 trust_state: peer.trust_state.clone(),
-                agents: None, // TODO: Add agents to PeerView and include here
+                agents: peer.agents.as_ref().and_then(|a| serde_json::to_string(a).ok()),
             };
             peers_repo.upsert(&record)?;
         }

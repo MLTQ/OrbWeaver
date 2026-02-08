@@ -41,6 +41,16 @@ Processes inbound gossip messages, validating and storing them in the database. 
 - **Validates**: Signature matches reactor, not blocked
 - **Dedup**: `reaction:{post_id}:{emoji}:{reactor}`
 
+### DirectMessage
+- **Does**: Stores encrypted DM via `DmService::ingest_dm`, does not re-broadcast
+- **Dedup**: `dm:{message_id}`
+- **Interacts with**: `DmService` for storage and decryption
+
+### BlockAction
+- **Does**: Applies block/unblock if subscribed to blocker's blocklist with `auto_apply`
+- **Dedup**: `block:{blocker}:{blocked}:{is_unblock}`
+- **Interacts with**: `BlockChecker` for subscription lookup and block enforcement
+
 ## Helper Functions
 
 ### `download_thread_snapshot_blob`

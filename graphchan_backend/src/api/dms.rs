@@ -39,12 +39,23 @@ pub(crate) async fn send_dm_handler(
     Json(payload): Json<SendDmRequest>,
 ) -> Result<(StatusCode, Json<DirectMessageView>), ApiError> {
     let service = DmService::new(state.database.clone(), state.config.paths.clone());
-    let message = service
+    let (message, ciphertext, nonce) = service
         .send_dm(&payload.to_peer_id, &payload.body)
         .map_err(ApiError::Internal)?;
 
-    // TODO: Broadcast DM over gossip to recipient
-    // This will be implemented when DM gossip events are added
+    // Broadcast encrypted DM over gossip to recipient
+    let dm_event = crate::network::DirectMessageEvent {
+        from_peer_id: message.from_peer_id.clone(),
+        to_peer_id: message.to_peer_id.clone(),
+        encrypted_body: ciphertext,
+        nonce,
+        message_id: message.id.clone(),
+        conversation_id: message.conversation_id.clone(),
+        created_at: message.created_at.clone(),
+    };
+    if let Err(err) = state.network.publish_direct_message(dm_event).await {
+        tracing::warn!(error = ?err, "failed to broadcast DM over gossip");
+    }
 
     Ok((StatusCode::CREATED, Json(message)))
 }

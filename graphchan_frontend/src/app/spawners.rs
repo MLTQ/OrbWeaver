@@ -279,7 +279,24 @@ impl GraphchanApp {
     }
 
     pub(super) fn spawn_export_ip_blocks(&mut self) {
+        self.blocking_state.exporting_ips = true;
         tasks::export_ip_blocks(self.api.clone(), self.tx.clone());
+    }
+
+    pub(super) fn spawn_export_peer_blocks(&mut self) {
+        self.blocking_state.exporting_peers = true;
+        tasks::export_peer_blocks(self.api.clone(), self.tx.clone());
+    }
+
+    pub(super) fn spawn_import_peer_blocks(&mut self, state: &mut state::BlockingState) {
+        if state.peer_import_text.trim().is_empty() {
+            state.peer_import_error = Some("Import text cannot be empty".into());
+            return;
+        }
+
+        state.importing_peers = true;
+        state.peer_import_error = None;
+        tasks::import_peer_blocks(self.api.clone(), self.tx.clone(), state.peer_import_text.clone());
     }
 
     pub(super) fn spawn_clear_all_ip_blocks(&mut self) {

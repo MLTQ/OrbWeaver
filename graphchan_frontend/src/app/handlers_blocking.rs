@@ -181,15 +181,41 @@ impl GraphchanApp {
     }
 
     pub(super) fn handle_ip_blocks_exported(&mut self, result: Result<String, anyhow::Error>) {
+        self.blocking_state.exporting_ips = false;
         match result {
             Ok(export_text) => {
-                // Copy to clipboard or save to file
-                // For now, just log it
                 info!("IP blocks exported: {} bytes", export_text.len());
-                // TODO: Add clipboard or save dialog
+                self.blocking_state.ip_export_text = Some(export_text);
             }
             Err(err) => {
                 error!("Failed to export IP blocks: {}", err);
+            }
+        }
+    }
+
+    pub(super) fn handle_peer_blocks_exported(&mut self, result: Result<String, anyhow::Error>) {
+        self.blocking_state.exporting_peers = false;
+        match result {
+            Ok(export_text) => {
+                info!("Peer blocks exported: {} bytes", export_text.len());
+                self.blocking_state.peer_export_text = Some(export_text);
+            }
+            Err(err) => {
+                error!("Failed to export peer blocks: {}", err);
+            }
+        }
+    }
+
+    pub(super) fn handle_peer_blocks_imported(&mut self, result: Result<(), anyhow::Error>) {
+        self.blocking_state.importing_peers = false;
+        match result {
+            Ok(_) => {
+                self.blocking_state.peer_import_text.clear();
+                self.blocking_state.peer_import_error = None;
+                self.spawn_load_blocked_peers();
+            }
+            Err(err) => {
+                self.blocking_state.peer_import_error = Some(format!("{}", err));
             }
         }
     }

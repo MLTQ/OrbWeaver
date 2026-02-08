@@ -16,13 +16,20 @@ Direct messaging service with end-to-end encryption using X25519 key exchange. H
 - **Rationale**: Same ID regardless of who initiates, stable for lookups
 
 ### `send_dm`
-- **Does**: Encrypts and stores outgoing DM
+- **Does**: Encrypts and stores outgoing DM, returns ciphertext for gossip broadcast
+- **Returns**: `(DirectMessageView, Vec<u8>, Vec<u8>)` — (view, ciphertext, nonce)
 - **Flow**:
   1. Load our X25519 secret key
   2. Get recipient's X25519 public key from database
   3. `encrypt_dm(body, our_secret, their_pubkey)`
   4. Store encrypted record with nonce
   5. Update conversation metadata
+  6. Return view + raw ciphertext/nonce for gossip broadcast
+
+### `ingest_dm`
+- **Does**: Stores an encrypted DM received via gossip and attempts decryption
+- **Flow**: Store raw encrypted record → call `receive_dm` for preview/conversation update
+- **Interacts with**: Called from `network/ingest.rs` when gossip delivers a DirectMessage event
 
 ### `receive_dm`
 - **Does**: Decrypts and stores incoming DM
@@ -60,8 +67,9 @@ Direct messaging service with end-to-end encryption using X25519 key exchange. H
 
 | Dependent | Expects | Breaking changes |
 |-----------|---------|------------------|
-| `api.rs` | `send_dm`, `list_conversations`, `get_messages` | Method changes |
-| `network/events.rs` | `receive_dm` for incoming gossip DMs | Signature changes |
+| `api/dms.rs` | `send_dm` returns `(view, ciphertext, nonce)` tuple | Return type |
+| `network/ingest.rs` | `ingest_dm` for incoming gossip DMs | Method signature |
+| `api/dms.rs` | `list_conversations`, `get_messages`, `mark_as_read`, `count_unread` | Method changes |
 
 ## Encryption Flow
 

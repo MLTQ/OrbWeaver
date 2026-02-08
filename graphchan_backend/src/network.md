@@ -66,6 +66,20 @@ P2P networking layer built on Iroh, providing gossip-based message propagation a
 - **Used by**: Schelling discovery loop to inject discovered peer addresses
 - **Pattern**: `add_endpoint_info(EndpointAddr)` merges relay URLs and direct addrs for a peer
 
+### Publishing Methods
+
+#### `publish_direct_message`
+- **Does**: Broadcasts encrypted DM event over gossip
+- **Routing**: Goes to `peer-{to_peer_id}` topic
+
+#### `publish_block_action`
+- **Does**: Broadcasts block/unblock action over gossip
+- **Routing**: Goes to `peer-{blocker_peer_id}` topic for blocklist subscribers
+
+## Re-exports
+
+- `BlockActionEvent`, `DirectMessageEvent`, `FileAnnouncement`, `ProfileUpdate`, `ReactionUpdate` — from `events` submodule
+
 ## Submodules
 
 - **events** - Event types and gossip message handling

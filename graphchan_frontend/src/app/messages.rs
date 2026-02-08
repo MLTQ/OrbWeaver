@@ -119,6 +119,12 @@ pub enum AppMessage {
     IpBlocksExported {
         result: Result<String, anyhow::Error>,
     },
+    PeerBlocksExported {
+        result: Result<String, anyhow::Error>,
+    },
+    PeerBlocksImported {
+        result: Result<(), anyhow::Error>,
+    },
     IpBlocksCleared {
         result: Result<(), anyhow::Error>,
     },
@@ -208,6 +214,8 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
             AppMessage::IpBlockRemoved { block_id, result } => app.handle_ip_block_removed(block_id, result),
             AppMessage::IpBlocksImported { result } => app.handle_ip_blocks_imported(result),
             AppMessage::IpBlocksExported { result } => app.handle_ip_blocks_exported(result),
+            AppMessage::PeerBlocksExported { result } => app.handle_peer_blocks_exported(result),
+            AppMessage::PeerBlocksImported { result } => app.handle_peer_blocks_imported(result),
             AppMessage::IpBlocksCleared { result } => app.handle_ip_blocks_cleared(result),
             AppMessage::PeerIpBlocked { peer_id, blocked_ips } => app.handle_peer_ip_blocked(peer_id, blocked_ips),
             AppMessage::PeerIpBlockFailed { peer_id, error } => app.handle_peer_ip_block_failed(peer_id, error),

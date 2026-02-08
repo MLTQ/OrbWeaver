@@ -389,6 +389,18 @@ impl ApiClient {
         Ok(())
     }
 
+    pub fn export_peer_blocks(&self) -> Result<String> {
+        let url = self.url("/blocking/peers/export")?;
+        let response = self.client.get(url).send()?.error_for_status()?;
+        Ok(response.text()?)
+    }
+
+    pub fn import_peer_blocks(&self, import_text: &str) -> Result<()> {
+        let url = self.url("/blocking/peers/import")?;
+        self.client.post(url).body(import_text.to_string()).send()?.error_for_status()?;
+        Ok(())
+    }
+
     pub fn import_ip_blocks(&self, import_text: &str) -> Result<()> {
         let url = self.url("/blocking/ips/import")?;
         self.client.post(url).body(import_text.to_string()).send()?.error_for_status()?;
