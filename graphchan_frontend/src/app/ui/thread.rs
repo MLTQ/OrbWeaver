@@ -143,6 +143,7 @@ impl GraphchanApp {
         let mut action = ThreadAction::None;
         let mut should_retry = false;
         let mut should_create_post = false;
+        let mut should_refresh_source = false;
 
         ui.horizontal(|ui| {
             if ui.button("← Back to catalog").clicked() {
@@ -173,8 +174,36 @@ impl GraphchanApp {
                 } else {
                     ui.label(RichText::new("Not broadcasting (lurking)").small().color(Color32::GRAY));
                 }
+
+                // Refresh from source button (only for imported threads)
+                if state.summary.source_url.is_some() {
+                    ui.separator();
+                    if state.refreshing_source {
+                        ui.add(egui::Spinner::new());
+                        ui.label(RichText::new("Refreshing...").small().color(Color32::GRAY));
+                    } else {
+                        let platform = state.summary.source_platform.as_deref().unwrap_or("source");
+                        let label = format!("Refresh from {}", platform);
+                        if ui.button(label).clicked() {
+                            should_refresh_source = true;
+                        }
+                        if let Some(last) = &state.summary.last_refreshed_at {
+                            ui.label(RichText::new(format!("Last: {}", format_timestamp(last))).small().color(Color32::GRAY));
+                        }
+                    }
+                    if let Some(err) = &state.refresh_error {
+                        ui.colored_label(Color32::LIGHT_RED, err);
+                    }
+                }
             });
         });
+
+        if should_refresh_source {
+            state.refreshing_source = true;
+            state.refresh_error = None;
+            let thread_id = state.summary.id.clone();
+            self.spawn_refresh_thread_source(&thread_id);
+        }
 
         if state.is_loading {
             ui.add(egui::Spinner::new());
@@ -219,7 +248,7 @@ impl GraphchanApp {
                 if let Some(details) = &state.details {
                     state.graph_nodes = graph::build_initial_graph(&details.posts);
                     state.chronological_nodes = HashMap::new();
-                    state.sim_start_time = None;
+                    state.sim_running = true;
                     state.graph_zoom = 1.0;
                     state.graph_offset = egui::vec2(0.0, 0.0);
                     state.graph_dragging = false;

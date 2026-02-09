@@ -1,4 +1,5 @@
 mod files;
+mod import_post_map;
 mod ip_blocks;
 mod peer_ips;
 mod peers;
@@ -35,6 +36,13 @@ pub trait ThreadRepository {
     fn delete(&self, thread_id: &str) -> Result<()>;
     fn set_ignored(&self, thread_id: &str, ignored: bool) -> Result<()>;
     fn is_ignored(&self, thread_id: &str) -> Result<bool>;
+    fn set_source_info(&self, thread_id: &str, source_url: &str, platform: &str) -> Result<()>;
+    fn set_last_refreshed(&self, thread_id: &str) -> Result<()>;
+}
+
+pub trait ImportPostMapRepository {
+    fn insert(&self, thread_id: &str, external_id: &str, internal_id: &str) -> Result<()>;
+    fn get_map(&self, thread_id: &str) -> Result<HashMap<String, String>>;
 }
 
 pub trait PostRepository {
@@ -220,6 +228,10 @@ impl<'conn> SqliteRepositories<'conn> {
         topics::SqliteTopicRepository { conn: self.conn }
     }
 
+    pub fn import_post_map(&self) -> impl ImportPostMapRepository + '_ {
+        import_post_map::SqliteImportPostMapRepository { conn: self.conn }
+    }
+
     pub fn conn(&self) -> &'conn Connection {
         self.conn
     }
@@ -272,6 +284,10 @@ mod tests {
             thread_hash: None,
             visibility: "social".into(),
             topic_secret: None,
+            sync_status: "downloaded".into(),
+            source_url: None,
+            source_platform: None,
+            last_refreshed_at: None,
         };
         repos.threads().create(&thread).unwrap();
 
@@ -324,6 +340,10 @@ mod tests {
             thread_hash: None,
             visibility: "social".into(),
             topic_secret: None,
+            sync_status: "downloaded".into(),
+            source_url: None,
+            source_platform: None,
+            last_refreshed_at: None,
         };
         repos.threads().create(&thread).unwrap();
 

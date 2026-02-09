@@ -30,8 +30,9 @@ Spawns background threads for async API operations. Each function takes an `ApiC
 - `send_dm` - Sends encrypted DM
 
 ### Import Operations
-- `import_fourchan` - Imports 4chan thread via backend
-- `import_reddit` - Imports Reddit thread via backend
+- `import_fourchan` - Imports 4chan thread via backend (with topic selection)
+- `import_reddit` - Imports Reddit thread via backend (with topic selection)
+- `refresh_thread_source` - Re-fetches an imported thread from its source URL for new posts
 
 ### UI Helpers
 - `pick_files` - Opens native file picker dialog

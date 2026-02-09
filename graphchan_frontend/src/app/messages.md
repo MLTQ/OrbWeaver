@@ -24,7 +24,7 @@ Defines the `AppMessage` enum for async communication and a thin `process_messag
 - `ImageLoaded`, `TextFileLoaded`, `MediaFileLoaded`, `PdfFileLoaded`, `FileSaved`
 
 **Import Operations** → `handlers_misc.rs`
-- `ImportFinished`, `ThreadImported`, `ImportError`
+- `ImportFinished`, `ThreadImported`, `ImportError`, `ThreadSourceRefreshed`
 
 **Identity/Peer Operations** → `handlers_misc.rs`
 - `IdentityLoaded`, `PeersLoaded`, `PeerAdded`, `AvatarUploaded`, `ProfileUpdated`, `ThreadFilesSelected`

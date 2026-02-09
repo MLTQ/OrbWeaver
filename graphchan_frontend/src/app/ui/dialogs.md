@@ -57,7 +57,30 @@ Renders modal dialog windows for thread creation and other popup interactions. P
 └─────────────────────────────────────────────┘
 ```
 
+### `render_import_dialog`
+- **Does**: Modal window for importing a 4chan thread with URL input and topic selector
+- **Interacts with**: `ImporterState`, `spawn_import_fourchan`
+- **Controls**: `importer.open` boolean toggles visibility
+- **Topic selector**: Same pattern as create thread dialog — checkboxes from `subscribed_topics`, stored in `importer.selected_topics`
+
+## Layout (Import Dialog)
+
+```
+┌─ Import from 4chan ──────────────────────────┐
+│ Paste a thread URL (e.g. https://...)        │
+│ [________________________________]           │
+│                                              │
+│ ┌─ Announce to Topics ──────────────────────┐│
+│ │ [x] tech                                 ││
+│ │ [ ] art                                  ││
+│ │ Will announce to 1 topic(s)              ││
+│ └──────────────────────────────────────────┘│
+│                                              │
+│ [Import] [Close]                             │
+└──────────────────────────────────────────────┘
+```
+
 ## Notes
-- Dialog anchored to center of screen
+- Dialogs anchored to center of screen
 - Topic Manager can be opened from within dialog if no topics subscribed
 - Files picked via native OS dialog (`rfd` crate)

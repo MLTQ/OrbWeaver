@@ -33,6 +33,12 @@ pub struct ThreadSummary {
     pub visibility: Option<String>,
     #[serde(default)]
     pub topics: Vec<String>,
+    #[serde(default)]
+    pub source_url: Option<String>,
+    #[serde(default)]
+    pub source_platform: Option<String>,
+    #[serde(default)]
+    pub last_refreshed_at: Option<String>,
 }
 
 fn default_sync_status() -> String {

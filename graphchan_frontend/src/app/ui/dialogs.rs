@@ -1,6 +1,6 @@
 use eframe::egui::{self, Align2, Color32, Context};
 
-use super::super::state::CreateThreadState;
+use super::super::state::{CreateThreadState, ImportPlatform};
 
 use super::super::{tasks, GraphchanApp};
 
@@ -116,17 +116,72 @@ impl GraphchanApp {
         let mut should_import = false;
         let mut should_close = false;
 
-        egui::Window::new("Import from 4chan")
+        egui::Window::new("Import Thread")
             .open(&mut self.importer.open)
             .resizable(false)
             .default_width(420.0)
             .anchor(Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
-                ui.label("Paste a thread URL (e.g. https://boards.4chan.org/g/thread/123456789)");
+                // Platform selector
+                ui.horizontal(|ui| {
+                    ui.label("Platform:");
+                    ui.selectable_value(&mut self.importer.platform, ImportPlatform::FourChan, "4chan");
+                    ui.selectable_value(&mut self.importer.platform, ImportPlatform::Reddit, "Reddit");
+                });
+
+                ui.add_space(4.0);
+
+                let hint = match self.importer.platform {
+                    ImportPlatform::FourChan => "https://boards.4chan.org/g/thread/123456789",
+                    ImportPlatform::Reddit => "https://www.reddit.com/r/sub/comments/abc123/title",
+                };
+                ui.label(format!("Paste a thread URL (e.g. {hint})"));
                 ui.text_edit_singleline(&mut self.importer.url);
                 if let Some(err) = &self.importer.error {
                     ui.colored_label(Color32::LIGHT_RED, err);
                 }
+
+                ui.add_space(8.0);
+
+                // Topic selector (same pattern as create thread dialog)
+                ui.group(|ui| {
+                    ui.label("Announce to Topics");
+                    ui.label("Select which topics to announce this import on:");
+                    ui.add_space(4.0);
+
+                    if self.subscribed_topics.is_empty() {
+                        ui.colored_label(Color32::GRAY, "No topics subscribed.");
+                        ui.horizontal(|ui| {
+                            ui.label("Subscribe to topics in the");
+                            if ui.button("Topic Manager").clicked() {
+                                self.show_topic_manager = true;
+                            }
+                        });
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .max_height(100.0)
+                            .show(ui, |ui| {
+                                for topic_id in &self.subscribed_topics.clone() {
+                                    let mut is_selected = self.importer.selected_topics.contains(topic_id);
+                                    if ui.checkbox(&mut is_selected, topic_id).clicked() {
+                                        if is_selected {
+                                            self.importer.selected_topics.insert(topic_id.clone());
+                                        } else {
+                                            self.importer.selected_topics.remove(topic_id);
+                                        }
+                                    }
+                                }
+                            });
+                    }
+
+                    ui.add_space(4.0);
+                    if self.importer.selected_topics.is_empty() {
+                        ui.colored_label(Color32::YELLOW, "No topics selected - thread will be friends-only");
+                    } else {
+                        ui.label(format!("Will announce to {} topic(s)", self.importer.selected_topics.len()));
+                    }
+                });
+
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if self.importer.importing {
@@ -141,10 +196,14 @@ impl GraphchanApp {
             });
 
         if should_import {
-            self.spawn_import_fourchan();
+            match self.importer.platform {
+                ImportPlatform::FourChan => self.spawn_import_fourchan(),
+                ImportPlatform::Reddit => self.spawn_import_reddit(),
+            }
         }
         if should_close {
             self.importer.open = false;
+            self.importer.selected_topics.clear();
         }
     }
 }

@@ -45,7 +45,13 @@ Renders threads in traditional linear list view and provides the main thread vie
 - `>>>thread_id` rendered as clickable links (cross-thread navigation)
 - Lines processed individually with tight spacing (2.0px) matching 4chan style
 
+### Refresh Button (imported threads)
+- **Does**: Shows a "Refresh from [platform]" button in the thread header when `source_url` is present
+- **Interacts with**: `spawn_refresh_thread_source`, `ThreadState.refreshing_source`
+- **Behavior**: Shows spinner while refreshing, displays last refresh timestamp, error message on failure
+
 ## Notes
 - List view is the default/fallback when display_mode is Posts
 - Floating draft composer window rendered separately
 - Thread loading is async via message channel
+- Imported threads show refresh controls in the header (right-to-left layout)

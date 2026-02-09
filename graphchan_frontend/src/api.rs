@@ -208,11 +208,13 @@ impl ApiClient {
         Ok(())
     }
 
-    pub fn import_thread(&self, url: &str) -> Result<String> {
+    pub fn import_thread(&self, url: &str, topics: Vec<String>) -> Result<String> {
         let api_url = self.url("/import")?;
         #[derive(serde::Serialize)]
         struct ImportRequest {
             url: String,
+            #[serde(skip_serializing_if = "Vec::is_empty")]
+            topics: Vec<String>,
         }
         #[derive(serde::Deserialize)]
         struct ImportResponse {
@@ -221,6 +223,7 @@ impl ApiClient {
 
         let request = ImportRequest {
             url: url.to_string(),
+            topics,
         };
         let response = self
             .client
@@ -231,6 +234,17 @@ impl ApiClient {
             .error_for_status()?;
         let wrapper: ImportResponse = response.json()?;
         Ok(wrapper.id)
+    }
+
+    pub fn refresh_thread(&self, thread_id: &str) -> Result<crate::models::ThreadDetails> {
+        let url = self.url(&format!("/threads/{thread_id}/refresh"))?;
+        let response = self
+            .client
+            .post(url)
+            .timeout(Duration::from_secs(300))
+            .send()?
+            .error_for_status()?;
+        Ok(response.json()?)
     }
 
     pub fn post_json<T: serde::Serialize>(&self, path: &str, json: &T) -> Result<reqwest::blocking::Response> {

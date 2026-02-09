@@ -30,11 +30,9 @@ impl GraphchanApp {
 
     pub(super) fn handle_thread_imported(&mut self, thread_id: String) {
         self.importer.importing = false;
-        self.reddit_importer.importing = false;
         self.importer.error = None;
-        self.reddit_importer.error = None;
         self.importer.url.clear();
-        self.reddit_importer.url.clear();
+        self.importer.open = false;
 
         // Switch to the new thread
         self.view = ViewState::Thread(ThreadState::default());
@@ -46,13 +44,25 @@ impl GraphchanApp {
 
     pub(super) fn handle_import_error(&mut self, err: String) {
         self.importer.importing = false;
-        self.reddit_importer.importing = false;
+        self.importer.error = Some(err);
+    }
 
-        if !self.importer.url.is_empty() {
-             self.importer.error = Some(err.clone());
-        }
-        if !self.reddit_importer.url.is_empty() {
-             self.reddit_importer.error = Some(err);
+    pub(super) fn handle_thread_source_refreshed(&mut self, thread_id: String, result: Result<crate::models::ThreadDetails, anyhow::Error>) {
+        if let ViewState::Thread(ref mut state) = self.view {
+            if state.summary.id == thread_id {
+                state.refreshing_source = false;
+                match result {
+                    Ok(details) => {
+                        state.summary = details.thread.clone();
+                        state.details = Some(details);
+                        state.refresh_error = None;
+                        self.info_banner = Some("Thread refreshed from source".into());
+                    }
+                    Err(err) => {
+                        state.refresh_error = Some(format!("{err:#}"));
+                    }
+                }
+            }
         }
     }
 

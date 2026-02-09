@@ -106,6 +106,8 @@ impl NetworkInfo {
 pub(crate) struct ImportRequest {
     url: String,
     platform: Option<String>,
+    #[serde(default)]
+    topics: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -558,16 +560,31 @@ pub(crate) async fn import_thread_handler(
     State(state): State<AppState>,
     Json(request): Json<ImportRequest>,
 ) -> Result<(StatusCode, Json<ImportResponse>), ApiError> {
+    let topics = request.topics;
     let result = if request.platform.as_deref() == Some("reddit") {
-        crate::importer::import_reddit_thread(&state, &request.url).await
+        crate::importer::import_reddit_thread(&state, &request.url, topics).await
     } else {
-        crate::importer::import_fourchan_thread(&state, &request.url).await
+        crate::importer::import_fourchan_thread(&state, &request.url, topics).await
     };
 
     match result {
         Ok(id) => Ok((StatusCode::CREATED, Json(ImportResponse { id }))),
         Err(e) => {
             tracing::error!("Import failed: {}", e);
+            Err(ApiError::Internal(e))
+        }
+    }
+}
+
+pub(crate) async fn refresh_thread_handler(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ThreadDetails>, ApiError> {
+    let result = crate::importer::refresh_thread(&state, &id).await;
+    match result {
+        Ok(details) => Ok(Json(details)),
+        Err(e) => {
+            tracing::error!("Refresh failed for thread {}: {}", id, e);
             Err(ApiError::Internal(e))
         }
     }

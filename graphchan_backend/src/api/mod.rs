@@ -169,6 +169,7 @@ pub async fn serve_http(
         .route("/threads", get(threads::list_threads).post(threads::create_thread))
         .route("/threads/:id", get(threads::get_thread))
         .route("/threads/:id/download", post(threads::download_thread))
+        .route("/threads/:id/refresh", post(threads::refresh_thread_handler))
         .route("/threads/:id/delete", post(threads::delete_thread))
         .route("/threads/:id/ignore", post(threads::set_thread_ignored))
         .route("/threads/:id/posts", post(threads::create_post))

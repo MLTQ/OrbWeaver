@@ -28,6 +28,9 @@ pub struct ThreadRecord {
     pub visibility: String,  // 'social' or 'private'
     pub topic_secret: Option<String>,  // base64-encoded 32-byte secret for private threads
     pub sync_status: String,  // 'announced', 'downloading', 'downloaded', 'failed'
+    pub source_url: Option<String>,       // Original import URL (4chan/Reddit)
+    pub source_platform: Option<String>,  // "4chan" or "reddit"
+    pub last_refreshed_at: Option<String>, // ISO timestamp of last refresh
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -111,9 +111,9 @@ pub fn create_post(
     });
 }
 
-pub fn import_fourchan(client: ApiClient, tx: Sender<AppMessage>, url: String) {
+pub fn import_fourchan(client: ApiClient, tx: Sender<AppMessage>, url: String, topics: Vec<String>) {
     thread::spawn(move || {
-        let result = importer::import_fourchan_thread(&client, &url);
+        let result = importer::import_fourchan_thread(&client, &url, topics);
         if tx.send(AppMessage::ImportFinished(result)).is_err() {
             error!("failed to send ImportFinished message");
         }
@@ -124,9 +124,10 @@ pub fn import_reddit(
     api: ApiClient,
     tx: Sender<AppMessage>,
     url: String,
+    topics: Vec<String>,
 ) {
     std::thread::spawn(move || {
-        let result = crate::importer::import_reddit_thread(&api, &url);
+        let result = crate::importer::import_reddit_thread(&api, &url, topics);
         match result {
             Ok(thread_id) => {
                 let _ = tx.send(AppMessage::ThreadImported(thread_id));
@@ -134,6 +135,15 @@ pub fn import_reddit(
             Err(err) => {
                 let _ = tx.send(AppMessage::ImportError(err.to_string()));
             }
+        }
+    });
+}
+
+pub fn refresh_thread_source(client: ApiClient, tx: Sender<AppMessage>, thread_id: String) {
+    thread::spawn(move || {
+        let result = client.refresh_thread(&thread_id);
+        if tx.send(AppMessage::ThreadSourceRefreshed { thread_id, result }).is_err() {
+            error!("failed to send ThreadSourceRefreshed message");
         }
     });
 }

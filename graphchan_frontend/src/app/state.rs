@@ -19,12 +19,21 @@ pub struct CreateThreadState {
     pub files: Vec<std::path::PathBuf>,
 }
 
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+pub enum ImportPlatform {
+    #[default]
+    FourChan,
+    Reddit,
+}
+
 #[derive(Default)]
 pub struct ImporterState {
     pub open: bool,
     pub url: String,
     pub importing: bool,
     pub error: Option<String>,
+    pub selected_topics: HashSet<String>,
+    pub platform: ImportPlatform,
 }
 
 pub enum ViewState {
@@ -33,18 +42,10 @@ pub enum ViewState {
     Thread(ThreadState),
     Following,
     FollowingCatalog(PeerView),
-    Import,
     Settings,
     Conversation(ConversationState),
     Blocking,
     SearchResults(SearchState),
-}
-
-#[derive(Default)]
-pub struct RedditImporterState {
-    pub url: String,
-    pub importing: bool,
-    pub error: Option<String>,
 }
 
 #[derive(Default)]
@@ -100,8 +101,7 @@ pub struct ThreadState {
     pub radial_nodes: HashMap<String, RadialNode>,
     pub radial_rotation: f32,        // Current rotation angle (radians) for "table spin" effect
     pub radial_target_rotation: f32, // Target rotation for smooth animation
-    #[serde(skip)]
-    pub sim_start_time: Option<std::time::Instant>,      // Track simulation time per thread
+    pub sim_running: bool,      // True = simulation active, False = paused
     #[serde(skip)]
     pub secondary_selected_post: Option<String>,
     #[serde(skip)]
@@ -121,9 +121,10 @@ pub struct ThreadState {
     pub locked_hover_post: Option<String>, // "Locked" hover for tracing conversations
     pub repulsion_force: f32,
     pub desired_edge_length: f32,
-    pub sim_paused: bool,
     pub draft_attachments: Vec<std::path::PathBuf>,
     pub is_hosting: bool, // True = Host (rebroadcast), False = Leech (don't rebroadcast)
+    pub refreshing_source: bool, // True while refreshing from source URL
+    pub refresh_error: Option<String>,
 
     // Audio State
     #[serde(skip)]
