@@ -74,7 +74,7 @@ The following were extracted from this file to reduce its size (1407 → 637 lin
    - Process incoming messages via `process_messages()`
    - Auto-refresh threads (5s interval) and recent posts (configurable)
    - Route to current view renderer
-   - Render overlay dialogs (create thread, import, topic manager, identity drawer, file viewers)
+   - Render overlay dialogs (create thread, import popup, topic manager, identity drawer, file viewers)
 3. Background tasks communicate via `tx`/`rx` channel
 
 ## Notes

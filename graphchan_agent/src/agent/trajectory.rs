@@ -502,12 +502,16 @@ fn extract_json(response: &str) -> Result<String> {
 
 fn strip_thinking_tags(text: &str) -> String {
     let mut result = text.to_string();
-    while let Some(start) = result.find("<think>") {
-        if let Some(end) = result[start..].find("</think>") {
-            let end_pos = start + end + "</think>".len();
-            result.replace_range(start..end_pos, "");
-        } else {
-            result.replace_range(start..start + "<think>".len(), "");
+    // Strip both <think> and <thinking> variants (used by different models)
+    for (open_tag, close_tag) in [("<thinking>", "</thinking>"), ("<think>", "</think>")] {
+        while let Some(start) = result.find(open_tag) {
+            if let Some(end) = result[start..].find(close_tag) {
+                let end_pos = start + end + close_tag.len();
+                result.replace_range(start..end_pos, "");
+            } else {
+                // Unclosed tag — strip from tag to end of string
+                result.replace_range(start.., "");
+            }
         }
     }
     result.trim().to_string()

@@ -55,3 +55,4 @@ Renders threads as a timeline with posts grouped into configurable time bins. Po
 - Bin size configurable: 1 min, 5 min, 15 min, 1 hour, 24 hours
 - Edges curve between posts across time bins
 - Good for analyzing discussion patterns and response times
+- After rendering, cached node heights are updated with actual rendered heights to fix edge attachment accuracy (estimates oversize; actual `render_node` output is the source of truth)

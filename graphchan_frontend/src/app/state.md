@@ -8,7 +8,7 @@ Defines all UI state structures for the frontend application. Central source of 
 ### `ViewState`
 - **Does**: Enum representing current top-level view (Catalog, Thread, Messages, etc.)
 - **Interacts with**: Main app loop for view switching
-- **Variants**: `Catalog`, `Messages`, `Thread(ThreadState)`, `Following`, `FollowingCatalog`, `Import`, `Settings`, `Conversation`, `Blocking`, `SearchResults`
+- **Variants**: `Catalog`, `Messages`, `Thread(ThreadState)`, `Following`, `FollowingCatalog`, `Settings`, `Conversation`, `Blocking`, `SearchResults`
 
 ### `ThreadDisplayMode`
 - **Does**: Enum for thread visualization mode selection
@@ -45,9 +45,14 @@ Defines all UI state structures for the frontend application. Central source of 
 - **Does**: Local user identity and profile editing state
 - **Interacts with**: Drawer, avatar cropper
 
+### `ImportPlatform`
+- **Does**: Enum selecting between `FourChan` and `Reddit` for the unified import dialog
+- **Interacts with**: `ImporterState`, `dialogs.rs`
+
 ### `CreateThreadState`, `ImporterState`
 - **Does**: Dialog state for thread creation and import
-- **Interacts with**: `dialogs.rs`, `import.rs`
+- **Interacts with**: `dialogs.rs`
+- **Note**: `ImporterState` now handles both 4chan and Reddit via the `platform` field (previously had a separate `RedditImporterState`)
 
 ## Contracts
 

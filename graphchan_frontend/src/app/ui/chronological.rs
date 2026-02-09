@@ -460,7 +460,15 @@ pub fn render_chronological(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
 
         let is_secondary = state.secondary_selected_post.as_ref() == Some(&layout.post.id);
 
-        render_node(app, ui, state, &layout, &api_base, rect, state.graph_zoom, &children, is_neighbor, is_secondary);
+        let node_response = render_node(app, ui, state, &layout, &api_base, rect, state.graph_zoom, &children, is_neighbor, is_secondary);
+
+        // Update cached node size with actual rendered height for accurate edge connections
+        let actual_height = node_response.rect.height() / state.graph_zoom;
+        if let Some(node) = state.chronological_nodes.get_mut(&layout.post.id) {
+            if (node.size.y - actual_height).abs() > 1.0 {
+                node.size.y = actual_height;
+            }
+        }
     }
     
     // Restore clip rect

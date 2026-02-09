@@ -6,9 +6,9 @@ Handles async message responses for imports, identity/peers, reactions, DMs, sea
 ## Components
 
 ### Import Handlers
-- `handle_import_finished` - Closes importer dialog, shows banner, triggers catalog refresh
-- `handle_thread_imported` - Switches view to new thread, triggers load
-- `handle_import_error` - Sets error on whichever importer (4chan or Reddit) had a URL
+- `handle_import_finished` - Closes importer dialog, shows banner, triggers catalog refresh (4chan path via `ImportFinished` message)
+- `handle_thread_imported` - Closes dialog, switches view to new thread, triggers load (Reddit path via `ThreadImported` message)
+- `handle_import_error` - Sets error on the unified `self.importer` state
 
 ### Identity/Peer Handlers
 - `handle_identity_loaded` - Updates `identity_state.local_peer`
@@ -51,6 +51,6 @@ Handles async message responses for imports, identity/peers, reactions, DMs, sea
 
 ## Notes
 - `handle_dm_sent` reloads the full conversation list to update unread counts
-- `handle_import_error` distinguishes which importer errored by checking which has a non-empty URL
+- `handle_import_error` sets error directly on unified `self.importer` (previously dispatched to separate 4chan/Reddit importers)
 - `handle_theme_color_loaded` falls back to default blue `(64, 128, 255)` on error
 - Reaction handlers always reload rather than optimistically updating, ensuring consistency

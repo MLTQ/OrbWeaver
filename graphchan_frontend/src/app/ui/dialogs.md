@@ -58,15 +58,18 @@ Renders modal dialog windows for thread creation and other popup interactions. P
 ```
 
 ### `render_import_dialog`
-- **Does**: Modal window for importing a 4chan thread with URL input and topic selector
-- **Interacts with**: `ImporterState`, `spawn_import_fourchan`
-- **Controls**: `importer.open` boolean toggles visibility
+- **Does**: Modal window for importing threads from 4chan or Reddit, with platform selector, URL input, and topic selector
+- **Interacts with**: `ImporterState`, `ImportPlatform`, `spawn_import_fourchan`, `spawn_import_reddit`
+- **Controls**: `importer.open` boolean toggles visibility, `importer.platform` selects 4chan vs Reddit
 - **Topic selector**: Same pattern as create thread dialog — checkboxes from `subscribed_topics`, stored in `importer.selected_topics`
+- **Rationale**: Consolidated from a separate full-page Import view (`import.rs`, now deleted) and a separate `RedditImporterState` into a single unified dialog
 
 ## Layout (Import Dialog)
 
 ```
-┌─ Import from 4chan ──────────────────────────┐
+┌─ Import Thread ──────────────────────────────┐
+│ Platform: [4chan] [Reddit]                    │
+│                                              │
 │ Paste a thread URL (e.g. https://...)        │
 │ [________________________________]           │
 │                                              │

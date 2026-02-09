@@ -48,3 +48,4 @@ Renders threads as a layered hierarchical graph using Sugiyama-style layout. Pos
 - Shares `GraphNode` struct with force-directed view for state consistency
 - Handles cycles by BFS ordering (later nodes get higher ranks)
 - Good for threads with clear hierarchical structure
+- After rendering, cached node heights and center positions are updated with actual rendered heights to fix edge attachment accuracy (pos is center-based, so both `size.y` and `pos.y` are adjusted to keep the top edge stable)
