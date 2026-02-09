@@ -324,9 +324,14 @@ impl GraphchanApp {
 
                     ui.add_space(4.0);
 
-                    // Post preview - truncate to ~200 characters
+                    // Post preview - truncate to ~200 characters (char-safe)
                     let preview = if post.body.len() > 200 {
-                        format!("{}...", &post.body[..200])
+                        let end = post.body.char_indices()
+                            .map(|(i, _)| i)
+                            .take_while(|&i| i <= 200)
+                            .last()
+                            .unwrap_or(0);
+                        format!("{}...", &post.body[..end])
                     } else {
                         post.body.clone()
                     };

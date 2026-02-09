@@ -31,7 +31,6 @@ Module declaration file for the UI subsystem. Re-exports all view modules and es
 - **settings** - App settings panel
 - **topics** - Topic subscription management
 - **search** - Search functionality
-- **import** - 4chan/Reddit import UI
 - **drawer** - Identity sidebar
 
 ## Contracts

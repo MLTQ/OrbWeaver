@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use std::time::Instant;
-
 use eframe::egui::{self, Color32};
 use log::debug;
 use rand::rngs::StdRng;
@@ -153,7 +151,7 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
     // Initialize graph if empty
     if state.graph_nodes.is_empty() || state.graph_nodes.len() != posts.len() {
         state.graph_nodes = build_initial_graph(&posts);
-        state.sim_start_time = Some(Instant::now());
+        state.sim_running = true;
     }
 
     // Pre-calculate children for each node
@@ -197,13 +195,7 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
         }
     }
 
-    // Run simulation for a bit longer initially, or continuously if needed
-    let sim_active = state.sim_start_time
-        .get_or_insert_with(Instant::now)
-        .elapsed()
-        .as_secs_f32() < 5.0;
-
-    if sim_active && !state.graph_dragging && !state.sim_paused {
+    if state.sim_running && !state.graph_dragging {
         for _ in 0..2 { // Reduced from 10 to 2 for performance
             step_graph_layout(&mut state.graph_nodes, &ids, &edges, scale, &thread_id, state.repulsion_force, state.desired_edge_length);
         }
@@ -426,25 +418,16 @@ pub(crate) fn render_graph(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
 
             ui.separator();
             
-            let sim_active = state.sim_start_time
-                .get_or_insert_with(Instant::now)
-                .elapsed()
-                .as_secs_f32() < 5.0;
-            let running = sim_active && !state.sim_paused && !state.graph_dragging;
+            let running = state.sim_running && !state.graph_dragging;
 
             let icon = if running { "⏸" } else { "▶" };
             if ui.button(icon).clicked() {
-                if running {
-                    state.sim_paused = true;
-                } else {
-                    state.sim_paused = false;
-                    state.sim_start_time = Some(Instant::now());
-                }
+                state.sim_running = !state.sim_running;
             }
 
             if ui.button("Reset Layout").clicked() {
                 state.graph_nodes = build_initial_graph(&posts);
-                state.sim_start_time = Some(Instant::now());
+                state.sim_running = true;
                 state.graph_offset = egui::vec2(0.0, 0.0);
                 state.graph_zoom = 1.0;
             }

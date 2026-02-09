@@ -31,7 +31,7 @@ use messages::AppMessage;
 pub use file_viewer::{FileType, FileDownloadState, FileViewerState, FileViewerContent};
 use state::{
     BlockingState, ConversationState, CreateThreadState, DmState, ImporterState, LoadedImage,
-    RedditImporterState, ThreadDisplayMode, ThreadState, ViewState,
+    ThreadDisplayMode, ThreadState, ViewState,
 };
 
 pub struct GraphchanApp {
@@ -47,7 +47,6 @@ pub struct GraphchanApp {
     base_url_input: String,
     info_banner: Option<String>,
     importer: ImporterState,
-    reddit_importer: RedditImporterState,
     pending_thread_focus: Option<String>,
     image_textures: HashMap<String, TextureHandle>,
     image_loading: HashSet<String>,
@@ -170,7 +169,6 @@ impl GraphchanApp {
             base_url_input: default_url,
             info_banner: None,
             importer: ImporterState::default(),
-            reddit_importer: RedditImporterState::default(),
             pending_thread_focus: None,
             image_textures: HashMap::new(),
             image_loading: HashSet::new(),
@@ -352,7 +350,7 @@ impl eframe::App for GraphchanApp {
                     self.show_create_thread = true;
                 }
                 if ui.button("Import").clicked() {
-                    self.view = ViewState::Import;
+                    self.importer.open = true;
                 }
                 if ui.button("Following").clicked() {
                     self.view = ViewState::Following;
@@ -478,7 +476,6 @@ impl eframe::App for GraphchanApp {
             ViewState::Thread(_) => "thread",
             ViewState::Following => "following",
             ViewState::FollowingCatalog(_) => "following_catalog",
-            ViewState::Import => "import",
             ViewState::Settings => "settings",
             ViewState::Conversation(_) => "conversation",
             ViewState::Blocking => "blocking",
@@ -492,10 +489,6 @@ impl eframe::App for GraphchanApp {
         } else if view_type == "messages" {
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui::conversations::render_conversations_list(self, ui, &self.dm_state.conversations.clone());
-            });
-        } else if view_type == "import" {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui::import::render_import_page(self, ui);
             });
         } else if view_type == "following" {
             egui::CentralPanel::default().show(ctx, |ui| {

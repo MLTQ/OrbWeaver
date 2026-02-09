@@ -519,7 +519,7 @@ impl AgentDatabase {
 
         let conn = self.lock_conn()?;
         conn.execute(
-            "INSERT INTO persona_history (id, captured_at, traits_json, system_prompt, trigger, self_description, inferred_trajectory, formative_experiences_json)
+            "INSERT OR REPLACE INTO persona_history (id, captured_at, traits_json, system_prompt, trigger, self_description, inferred_trajectory, formative_experiences_json)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 snapshot.id,

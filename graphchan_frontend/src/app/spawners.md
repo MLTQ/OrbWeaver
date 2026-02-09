@@ -14,6 +14,7 @@ Centralizes all background task spawning methods for `GraphchanApp`. Extracted f
 
 ### Import Spawners
 - `spawn_import_fourchan` - Imports a 4chan thread by URL
+- `spawn_import_reddit` - Imports a Reddit thread by URL (reads from unified `self.importer` state)
 
 ### Identity/Peer Spawners
 - `spawn_load_identity` - Fetches local peer identity

@@ -154,6 +154,7 @@ impl Database {
             self.ensure_post_metadata_column(conn)?;
             self.ensure_peers_agents_column(conn)?;
             self.ensure_topic_tables(conn)?;
+            self.ensure_import_tracking(conn)?;
             Ok(())
         })?;
         Ok(self.newly_created)
@@ -821,6 +822,53 @@ impl Database {
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_ip_blocks_active ON ip_blocks(active)",
+            [],
+        )?;
+
+        Ok(())
+    }
+
+    fn ensure_import_tracking(&self, conn: &Connection) -> Result<()> {
+        // Add source tracking columns to threads table
+        let mut stmt = conn.prepare("PRAGMA table_info(threads)")?;
+        let mut has_source_url = false;
+        let mut has_source_platform = false;
+        let mut has_last_refreshed_at = false;
+        let rows = stmt.query_map([], |row| {
+            let name: String = row.get(1)?;
+            Ok(name)
+        })?;
+        for row in rows {
+            let name = row?;
+            match name.as_str() {
+                "source_url" => has_source_url = true,
+                "source_platform" => has_source_platform = true,
+                "last_refreshed_at" => has_last_refreshed_at = true,
+                _ => {}
+            }
+        }
+        if !has_source_url {
+            conn.execute("ALTER TABLE threads ADD COLUMN source_url TEXT", [])?;
+        }
+        if !has_source_platform {
+            conn.execute("ALTER TABLE threads ADD COLUMN source_platform TEXT", [])?;
+        }
+        if !has_last_refreshed_at {
+            conn.execute("ALTER TABLE threads ADD COLUMN last_refreshed_at TEXT", [])?;
+        }
+
+        // Create import_post_map table for dedup during refresh
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS import_post_map (
+                thread_id TEXT NOT NULL,
+                external_id TEXT NOT NULL,
+                internal_id TEXT NOT NULL,
+                PRIMARY KEY (thread_id, external_id),
+                FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE,
+                FOREIGN KEY (internal_id) REFERENCES posts(id) ON DELETE CASCADE
+            )
+            "#,
             [],
         )?;
 

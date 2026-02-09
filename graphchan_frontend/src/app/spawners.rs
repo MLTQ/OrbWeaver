@@ -72,7 +72,24 @@ impl GraphchanApp {
         }
         self.importer.importing = true;
         self.importer.error = None;
-        tasks::import_fourchan(self.api.clone(), self.tx.clone(), url);
+        let topics: Vec<String> = self.importer.selected_topics.iter().cloned().collect();
+        tasks::import_fourchan(self.api.clone(), self.tx.clone(), url, topics);
+    }
+
+    pub(super) fn spawn_import_reddit(&mut self) {
+        let url = self.importer.url.trim().to_string();
+        if url.is_empty() {
+            self.importer.error = Some("Paste a full Reddit thread URL".into());
+            return;
+        }
+        self.importer.importing = true;
+        self.importer.error = None;
+        let topics: Vec<String> = self.importer.selected_topics.iter().cloned().collect();
+        tasks::import_reddit(self.api.clone(), self.tx.clone(), url, topics);
+    }
+
+    pub(super) fn spawn_refresh_thread_source(&mut self, thread_id: &str) {
+        tasks::refresh_thread_source(self.api.clone(), self.tx.clone(), thread_id.to_string());
     }
 
     pub(super) fn spawn_load_identity(&mut self) {

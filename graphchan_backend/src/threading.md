@@ -46,6 +46,7 @@ Business logic for thread and post management. Provides `ThreadService` for CRUD
 
 #### `ThreadSummary`
 - Lightweight thread info: id, title, creator, timestamps, topics, first_image
+- Import fields: `source_url`, `source_platform`, `last_refreshed_at` (all optional, populated for imported threads)
 
 #### `ThreadDetails`
 - Full thread: summary + posts + participating peers

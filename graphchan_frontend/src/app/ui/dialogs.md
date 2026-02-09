@@ -57,7 +57,33 @@ Renders modal dialog windows for thread creation and other popup interactions. P
 └─────────────────────────────────────────────┘
 ```
 
+### `render_import_dialog`
+- **Does**: Modal window for importing threads from 4chan or Reddit, with platform selector, URL input, and topic selector
+- **Interacts with**: `ImporterState`, `ImportPlatform`, `spawn_import_fourchan`, `spawn_import_reddit`
+- **Controls**: `importer.open` boolean toggles visibility, `importer.platform` selects 4chan vs Reddit
+- **Topic selector**: Same pattern as create thread dialog — checkboxes from `subscribed_topics`, stored in `importer.selected_topics`
+- **Rationale**: Consolidated from a separate full-page Import view (`import.rs`, now deleted) and a separate `RedditImporterState` into a single unified dialog
+
+## Layout (Import Dialog)
+
+```
+┌─ Import Thread ──────────────────────────────┐
+│ Platform: [4chan] [Reddit]                    │
+│                                              │
+│ Paste a thread URL (e.g. https://...)        │
+│ [________________________________]           │
+│                                              │
+│ ┌─ Announce to Topics ──────────────────────┐│
+│ │ [x] tech                                 ││
+│ │ [ ] art                                  ││
+│ │ Will announce to 1 topic(s)              ││
+│ └──────────────────────────────────────────┘│
+│                                              │
+│ [Import] [Close]                             │
+└──────────────────────────────────────────────┘
+```
+
 ## Notes
-- Dialog anchored to center of screen
+- Dialogs anchored to center of screen
 - Topic Manager can be opened from within dialog if no topics subscribed
 - Files picked via native OS dialog (`rfd` crate)

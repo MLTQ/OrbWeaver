@@ -21,6 +21,7 @@ pub struct AgentApp {
     character_panel: CharacterPanel,
     comfy_settings_panel: ComfySettingsPanel,
     avatars: Option<AvatarSet>,
+    avatars_loaded: bool,
     database: Option<Arc<AgentDatabase>>,
     chat_history: Vec<ChatMessage>,
     last_chat_refresh: std::time::Instant,
@@ -48,6 +49,7 @@ impl AgentApp {
             character_panel: CharacterPanel::new(config),
             comfy_settings_panel,
             avatars: None, // Will be loaded on first frame when egui context is available
+            avatars_loaded: false,
             database,
             chat_history: Vec::new(),
             last_chat_refresh: std::time::Instant::now(),
@@ -102,9 +104,10 @@ impl AgentApp {
 impl eframe::App for AgentApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Load avatars on first frame when context is available
-        if self.avatars.is_none() {
+        if !self.avatars_loaded {
             let config = self.settings_panel.config.clone();
             self.load_avatars(ctx, &config);
+            self.avatars_loaded = true;
         }
 
         // Periodically refresh chat history

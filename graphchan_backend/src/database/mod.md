@@ -51,6 +51,7 @@ SQLite database wrapper with schema migrations, connection management, and the r
 | `blocked_peers` | Direct blocks |
 | `blocklist_subscriptions` | Subscribed blocklists |
 | `blocklist_entries` | Entries in blocklists |
+| `import_post_map` | Maps external post IDs to internal IDs for imported thread dedup |
 
 ### Indexes
 - `idx_posts_thread` - Posts by thread_id
@@ -69,3 +70,4 @@ SQLite database wrapper with schema migrations, connection management, and the r
 - Foreign keys with CASCADE deletes
 - Thread-safe via Mutex (single writer)
 - Migrations run on every startup (idempotent CREATE IF NOT EXISTS)
+- `threads` table has import tracking columns: `source_url`, `source_platform`, `last_refreshed_at` (added by `ensure_import_tracking` migration)

@@ -298,6 +298,10 @@ mod tests {
                     thread_hash: None,
                     visibility: "social".to_string(),
                     topic_secret: None,
+                    sync_status: "downloaded".to_string(),
+                    source_url: None,
+                    source_platform: None,
+                    last_refreshed_at: None,
                 })?;
                 repos.posts().create(&PostRecord {
                     id: "post-1".into(),
@@ -368,6 +372,10 @@ mod tests {
                     thread_hash: None,
                     visibility: "social".to_string(),
                     topic_secret: None,
+                    sync_status: "downloaded".to_string(),
+                    source_url: None,
+                    source_platform: None,
+                    last_refreshed_at: None,
                 })?;
                 repos.posts().create(&PostRecord {
                     id: "post-1".into(),
@@ -444,6 +452,10 @@ mod tests {
                     thread_hash: None,
                     visibility: "social".to_string(),
                     topic_secret: None,
+                    sync_status: "downloaded".to_string(),
+                    source_url: None,
+                    source_platform: None,
+                    last_refreshed_at: None,
                 })?;
                 repos.posts().create(&PostRecord {
                     id: "post-1".into(),

@@ -78,6 +78,9 @@ impl ThreadService {
                     sync_status: thread.sync_status,
                     first_image_file: first_image,
                     topics,
+                    source_url: thread.source_url,
+                    source_platform: thread.source_platform,
+                    last_refreshed_at: thread.last_refreshed_at,
                 });
             }
 
@@ -178,6 +181,9 @@ impl ThreadService {
             visibility: input.visibility.unwrap_or_else(|| "social".to_string()),
             topic_secret: None,
             sync_status: "downloaded".to_string(), // Locally created thread
+            source_url: None,
+            source_platform: None,
+            last_refreshed_at: None,
         };
 
         let initial_post_body = input.body.clone();
@@ -339,6 +345,12 @@ pub struct ThreadSummary {
     pub first_image_file: Option<crate::files::FileView>,
     #[serde(default)]
     pub topics: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_platform: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_refreshed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -437,6 +449,9 @@ impl ThreadSummary {
             sync_status: record.sync_status,
             first_image_file: None, // Not populated in from_record
             topics: Vec::new(), // Not populated in from_record
+            source_url: record.source_url,
+            source_platform: record.source_platform,
+            last_refreshed_at: record.last_refreshed_at,
         }
     }
 }

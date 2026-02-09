@@ -88,12 +88,11 @@ impl GraphchanApp {
                             state.graph_nodes = build_initial_graph(&details.posts);
                             state.chronological_nodes = HashMap::new();
                             state.sugiyama_nodes = HashMap::new();
-                            state.sim_start_time = None;
+                            state.sim_running = true;
                             state.graph_zoom = 1.0;
                             state.graph_offset = egui::vec2(0.0, 0.0);
                             state.graph_dragging = false;
                             state.repulsion_force = 500.0;
-                            state.sim_paused = false;
                         }
 
                         // Update global peer cache

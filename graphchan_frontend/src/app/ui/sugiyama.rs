@@ -299,7 +299,7 @@ pub fn render_sugiyama(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Th
 
         let is_secondary = state.secondary_selected_post.as_ref() == Some(&layout.post.id);
 
-        render_node(
+        let node_response = render_node(
             app,
             ui,
             state,
@@ -311,6 +311,17 @@ pub fn render_sugiyama(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Th
             is_neighbor,
             is_secondary
         );
+
+        // Update cached node size with actual rendered height for accurate edge connections
+        let actual_height = node_response.rect.height() / state.graph_zoom;
+        if let Some(node) = state.sugiyama_nodes.get_mut(&layout.post.id) {
+            if (node.size.y - actual_height).abs() > 1.0 {
+                // Adjust pos to keep the top edge stable (pos is center-based)
+                let old_top = node.pos.y - node.size.y / 2.0;
+                node.size.y = actual_height;
+                node.pos.y = old_top + actual_height / 2.0;
+            }
+        }
     }
     
     // Controls

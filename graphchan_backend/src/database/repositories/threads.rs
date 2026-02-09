@@ -65,7 +65,8 @@ impl<'conn> super::ThreadRepository for SqliteThreadRepository<'conn> {
                 r#"
                 SELECT id, title, creator_peer_id, created_at, pinned, thread_hash,
                        COALESCE(visibility, 'social') as visibility, topic_secret,
-                       COALESCE(sync_status, 'downloaded') as sync_status
+                       COALESCE(sync_status, 'downloaded') as sync_status,
+                       source_url, source_platform, last_refreshed_at
                 FROM threads
                 WHERE id = ?1
                 "#,
@@ -81,6 +82,9 @@ impl<'conn> super::ThreadRepository for SqliteThreadRepository<'conn> {
                         visibility: row.get(6)?,
                         topic_secret: row.get(7)?,
                         sync_status: row.get(8)?,
+                        source_url: row.get(9)?,
+                        source_platform: row.get(10)?,
+                        last_refreshed_at: row.get(11)?,
                     })
                 },
             )
@@ -93,7 +97,8 @@ impl<'conn> super::ThreadRepository for SqliteThreadRepository<'conn> {
             r#"
             SELECT id, title, creator_peer_id, created_at, pinned, thread_hash,
                    COALESCE(visibility, 'social') as visibility, topic_secret,
-                   COALESCE(sync_status, 'downloaded') as sync_status
+                   COALESCE(sync_status, 'downloaded') as sync_status,
+                   source_url, source_platform, last_refreshed_at
             FROM threads
             WHERE deleted = 0 AND ignored = 0
             ORDER BY datetime(created_at) DESC
@@ -111,6 +116,9 @@ impl<'conn> super::ThreadRepository for SqliteThreadRepository<'conn> {
                 visibility: row.get(6)?,
                 topic_secret: row.get(7)?,
                 sync_status: row.get(8)?,
+                source_url: row.get(9)?,
+                source_platform: row.get(10)?,
+                last_refreshed_at: row.get(11)?,
             })
         })?;
 
@@ -187,5 +195,22 @@ impl<'conn> super::ThreadRepository for SqliteThreadRepository<'conn> {
             |row| row.get(0),
         )?;
         Ok(ignored != 0)
+    }
+
+    fn set_source_info(&self, thread_id: &str, source_url: &str, platform: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE threads SET source_url = ?1, source_platform = ?2 WHERE id = ?3",
+            params![source_url, platform, thread_id],
+        )?;
+        Ok(())
+    }
+
+    fn set_last_refreshed(&self, thread_id: &str) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE threads SET last_refreshed_at = ?1 WHERE id = ?2",
+            params![now, thread_id],
+        )?;
+        Ok(())
     }
 }

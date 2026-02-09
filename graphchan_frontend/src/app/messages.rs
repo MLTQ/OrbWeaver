@@ -23,6 +23,11 @@ pub enum AppMessage {
     // Import
     ThreadImported(String),
     ImportError(String),
+    // Source refresh (imported thread update from 4chan/Reddit)
+    ThreadSourceRefreshed {
+        thread_id: String,
+        result: Result<ThreadDetails, anyhow::Error>,
+    },
     PostAttachmentsLoaded {
         thread_id: String,
         post_id: String,
@@ -179,6 +184,7 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
             AppMessage::ImportFinished(result) => app.handle_import_finished(result),
             AppMessage::ThreadImported(thread_id) => app.handle_thread_imported(thread_id),
             AppMessage::ImportError(err) => app.handle_import_error(err),
+            AppMessage::ThreadSourceRefreshed { thread_id, result } => app.handle_thread_source_refreshed(thread_id, result),
 
             // Identity/Peer handlers (handlers_misc.rs)
             AppMessage::IdentityLoaded(result) => app.handle_identity_loaded(result),

@@ -61,6 +61,10 @@ HTTP client wrapper for communicating with the Graphchan backend REST API. Provi
 - `subscribe_topic(topic_id)` → `()`
 - `unsubscribe_topic(topic_id)` → `()`
 
+### Import & Refresh
+- `import_thread(url, topics)` → `String` (thread ID) — imports with optional topic tags
+- `refresh_thread(thread_id)` → `ThreadDetails` — re-fetches imported thread from source for new posts
+
 ## Contracts
 
 | Dependent | Expects | Breaking changes |
