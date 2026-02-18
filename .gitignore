@@ -1,41 +1,25 @@
-
 target/
-
 Docs/.DS_Store
-
 Docs/Iroh Docs 0.94.0/
-
-
-
 graphchan_backend/target/
 AGENTS.md
-
 .DS_Store
-
 Docs/iroh-blobs 0.96.0/
-
 Docs/iroh-gossip 0.94.0/
-
 test_1/
-
 test_2/
-
 graphchan_frontend/target
-
 graphchan_frontend/cache/images/
-
 Docs/p2pchan-examples/gui/
-
 Docs/p2pchan-examples/src/
-
 test_instance1/blobs/data/
-
 test_instance1/
 test_instance2/
 test_portable/
-
 graphchan_agent/graphchan_agent
-
 agent_memory.db
-
 .beads/
+graphchan_backend/check_*.txt
+graphchan_backend/test.txt
+graphchan_frontend/check_*.txt
+graphchan_frontend/check_output*.txt
