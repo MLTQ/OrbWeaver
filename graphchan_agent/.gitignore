@@ -1,6 +1,0 @@
-# Configuration files with API keys
-agent_config.toml
-
-# Cargo build artifacts
-target/
-Cargo.lock
