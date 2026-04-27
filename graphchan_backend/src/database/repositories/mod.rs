@@ -61,6 +61,10 @@ pub trait PeerRepository {
     fn get(&self, id: &str) -> Result<Option<PeerRecord>>;
     fn list(&self) -> Result<Vec<PeerRecord>>;
     fn delete(&self, id: &str) -> Result<()>;
+    /// Resolve the canonical peer id (GPG fingerprint) from an iroh public key
+    /// string, used when an inbound gossip frame only carries the iroh-side
+    /// identifier and we need to record IP/connection info against a peer row.
+    fn id_for_iroh_peer(&self, iroh_peer_id: &str) -> Result<Option<String>>;
 }
 
 pub trait FileRepository {
@@ -240,29 +244,21 @@ impl<'conn> SqliteRepositories<'conn> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::MIGRATIONS;
 
-    fn setup_conn() -> Connection {
-        let conn = Connection::open_in_memory().expect("in-memory db");
-        conn.execute_batch(MIGRATIONS).expect("base migrations");
-
-        // Apply additional migrations that are normally run by Database::ensure_migrations()
-        // These will error if columns already exist, which is fine - we ignore the error
-        let _ = conn.execute("ALTER TABLE peers ADD COLUMN x25519_pubkey TEXT", []);
-        let _ = conn.execute("ALTER TABLE threads ADD COLUMN visibility TEXT DEFAULT 'social'", []);
-        let _ = conn.execute("ALTER TABLE threads ADD COLUMN topic_secret TEXT", []);
-
-        conn
+    fn setup_db() -> crate::database::Database {
+        // Drive the real migration runner so fixtures stay current as schema evolves.
+        let db = crate::database::Database::from_connection(
+            Connection::open_in_memory().expect("in-memory db"),
+            true,
+        );
+        db.ensure_migrations().expect("migrations");
+        db
     }
 
-    #[test]
-    fn thread_and_post_repositories_work() {
-        let conn = setup_conn();
-        let repos = SqliteRepositories::new(&conn);
-
-        let peer = PeerRecord {
-            id: "peer-1".into(),
-            alias: Some("author".into()),
+    fn make_peer(id: &str, alias: Option<&str>) -> PeerRecord {
+        PeerRecord {
+            id: id.into(),
+            alias: alias.map(Into::into),
             username: None,
             bio: None,
             friendcode: None,
@@ -272,13 +268,15 @@ mod tests {
             last_seen: None,
             trust_state: "unknown".into(),
             avatar_file_id: None,
-        };
-        repos.peers().upsert(&peer).unwrap();
+            agents: None,
+        }
+    }
 
-        let thread = ThreadRecord {
-            id: "thread-1".into(),
-            title: "First".into(),
-            creator_peer_id: Some(peer.id.clone()),
+    fn make_thread(id: &str, title: &str, creator: &str) -> ThreadRecord {
+        ThreadRecord {
+            id: id.into(),
+            title: title.into(),
+            creator_peer_id: Some(creator.into()),
             created_at: "2024-01-01T00:00:00Z".into(),
             pinned: false,
             thread_hash: None,
@@ -288,89 +286,84 @@ mod tests {
             source_url: None,
             source_platform: None,
             last_refreshed_at: None,
-        };
-        repos.threads().create(&thread).unwrap();
+        }
+    }
 
-        let fetched = repos.threads().get("thread-1").unwrap().unwrap();
-        assert_eq!(fetched.title, "First");
-
-        let post = PostRecord {
-            id: "post-1".into(),
-            thread_id: thread.id.clone(),
-            author_peer_id: Some("peer-1".into()),
-            body: "Hello".into(),
+    fn make_post(id: &str, thread_id: &str, author: &str, body: &str) -> PostRecord {
+        PostRecord {
+            id: id.into(),
+            thread_id: thread_id.into(),
+            author_peer_id: Some(author.into()),
+            author_friendcode: None,
+            body: body.into(),
             created_at: "2024-01-01T00:00:01Z".into(),
             updated_at: None,
-        };
-        repos.posts().create(&post).unwrap();
+            metadata: None,
+        }
+    }
 
-        let posts = repos.posts().list_for_thread(&thread.id).unwrap();
-        assert_eq!(posts.len(), 1);
-        assert_eq!(posts[0].body, "Hello");
+    #[test]
+    fn thread_and_post_repositories_work() {
+        let db = setup_db();
+        db.with_repositories(|repos| {
+            let peer = make_peer("peer-1", Some("author"));
+            repos.peers().upsert(&peer)?;
+
+            let thread = make_thread("thread-1", "First", &peer.id);
+            repos.threads().create(&thread)?;
+
+            let fetched = repos.threads().get("thread-1")?.unwrap();
+            assert_eq!(fetched.title, "First");
+
+            let post = make_post("post-1", &thread.id, &peer.id, "Hello");
+            repos.posts().create(&post)?;
+
+            let posts = repos.posts().list_for_thread(&thread.id)?;
+            assert_eq!(posts.len(), 1);
+            assert_eq!(posts[0].body, "Hello");
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn peer_and_file_repositories_work() {
-        let conn = setup_conn();
-        let repos = SqliteRepositories::new(&conn);
+        let db = setup_db();
+        db.with_repositories(|repos| {
+            let mut peer = make_peer("peer-1", Some("alice"));
+            peer.friendcode = Some("friend-code".into());
+            peer.iroh_peer_id = Some("peer-id".into());
+            peer.gpg_fingerprint = Some("fingerprint".into());
+            peer.last_seen = Some("2024-01-01T00:00:00Z".into());
+            peer.trust_state = "trusted".into();
+            repos.peers().upsert(&peer)?;
+            let fetched = repos.peers().get("peer-1")?.unwrap();
+            assert_eq!(fetched.alias.as_deref(), Some("alice"));
 
-        let peer = PeerRecord {
-            id: "peer-1".into(),
-            alias: Some("alice".into()),
-            username: None,
-            bio: None,
-            friendcode: Some("friend-code".into()),
-            iroh_peer_id: Some("peer-id".into()),
-            gpg_fingerprint: Some("fingerprint".into()),
-            x25519_pubkey: None,
-            last_seen: Some("2024-01-01T00:00:00Z".into()),
-            trust_state: "trusted".into(),
-            avatar_file_id: None,
-        };
-        repos.peers().upsert(&peer).unwrap();
-        let fetched = repos.peers().get("peer-1").unwrap().unwrap();
-        assert_eq!(fetched.alias.as_deref(), Some("alice"));
+            let thread = make_thread("thread-1", "Downloads", &peer.id);
+            repos.threads().create(&thread)?;
 
-        let thread = ThreadRecord {
-            id: "thread-1".into(),
-            title: "Downloads".into(),
-            creator_peer_id: Some(peer.id.clone()),
-            created_at: "2024-01-01T00:00:00Z".into(),
-            pinned: false,
-            thread_hash: None,
-            visibility: "social".into(),
-            topic_secret: None,
-            sync_status: "downloaded".into(),
-            source_url: None,
-            source_platform: None,
-            last_refreshed_at: None,
-        };
-        repos.threads().create(&thread).unwrap();
+            let post = make_post("post-1", &thread.id, &peer.id, "Attachment");
+            repos.posts().create(&post)?;
 
-        let post = PostRecord {
-            id: "post-1".into(),
-            thread_id: thread.id.clone(),
-            author_peer_id: Some(peer.id.clone()),
-            body: "Attachment".into(),
-            created_at: "2024-01-01T00:01:00Z".into(),
-            updated_at: None,
-        };
-        repos.posts().create(&post).unwrap();
-
-        let file = FileRecord {
-            id: "file-1".into(),
-            post_id: post.id.clone(),
-            path: "files/uploads/file-1.bin".into(),
-            original_name: Some("file-1.bin".into()),
-            mime: Some("application/octet-stream".into()),
-            blob_id: Some("blob-1".into()),
-            size_bytes: Some(42),
-            checksum: Some("sha256:deadbeef".into()),
-            ticket: None,
-        };
-        repos.files().attach(&file).unwrap();
-        let files = repos.files().list_for_post(&post.id).unwrap();
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].checksum.as_deref(), Some("sha256:deadbeef"));
+            let file = FileRecord {
+                id: "file-1".into(),
+                post_id: post.id.clone(),
+                path: "files/uploads/file-1.bin".into(),
+                original_name: Some("file-1.bin".into()),
+                mime: Some("application/octet-stream".into()),
+                blob_id: Some("blob-1".into()),
+                size_bytes: Some(42),
+                checksum: Some("sha256:deadbeef".into()),
+                ticket: None,
+                download_status: Some("available".into()),
+            };
+            repos.files().attach(&file)?;
+            let files = repos.files().list_for_post(&post.id)?;
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].checksum.as_deref(), Some("sha256:deadbeef"));
+            Ok(())
+        })
+        .unwrap();
     }
 }

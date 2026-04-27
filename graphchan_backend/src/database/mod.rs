@@ -2,9 +2,10 @@ pub mod models;
 pub mod repositories;
 
 use crate::config::GraphchanPaths;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
+use parking_lot::Mutex;
 use rusqlite::{params, Connection, OptionalExtension};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 pub(crate) const MIGRATIONS: &str = r#"
     PRAGMA journal_mode = WAL;
@@ -280,10 +281,7 @@ impl Database {
     where
         F: FnOnce(&Connection) -> Result<T>,
     {
-        let guard = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow!("database mutex poisoned"))?;
+        let guard = self.conn.lock();
         f(&guard)
     }
 

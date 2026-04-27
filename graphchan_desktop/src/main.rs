@@ -12,7 +12,24 @@ fn main() -> Result<()> {
     telemetry::init_tracing();
 
     let runtime = Runtime::new()?;
-    let config = GraphchanConfig::from_env()?;
+    let mut config = GraphchanConfig::from_env()?;
+
+    // If the user hasn't set GRAPHCHAN_API_TOKEN, mint a per-launch random token
+    // so the bundled desktop API isn't an open door for anything else on the
+    // host. The frontend reads it via GRAPHCHAN_API_TOKEN below.
+    if config.auth.token.is_none() {
+        let token: String = (0..32)
+            .map(|_| {
+                const CHARSET: &[u8] =
+                    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+                let idx = rand::random::<u8>() as usize % CHARSET.len();
+                CHARSET[idx] as char
+            })
+            .collect();
+        config.auth.token = Some(token);
+    }
+    let api_token = config.auth.token.clone().expect("token set above");
+
     let node = runtime.block_on(GraphchanNode::start(config))?;
     let snapshot = node.snapshot();
     drop(node);
@@ -34,6 +51,7 @@ fn main() -> Result<()> {
 
     let base_url = format!("http://127.0.0.1:{}", snapshot.config.api_port);
     std::env::set_var("GRAPHCHAN_API_URL", &base_url);
+    std::env::set_var("GRAPHCHAN_API_TOKEN", &api_token);
 
     let ui_result = graphchan_frontend::run_frontend();
 

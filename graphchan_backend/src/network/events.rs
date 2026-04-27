@@ -12,8 +12,6 @@ use tokio::sync::{
     mpsc::{Receiver, Sender},
     RwLock,
 };
-use base64::{Engine as _, engine::general_purpose};
-
 type TopicId = iroh_gossip::proto::TopicId;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,8 +26,6 @@ pub enum EventPayload {
     ThreadAnnouncement(ThreadAnnouncement),
     PostUpdate(PostView),
     FileAvailable(FileAnnouncement),
-    FileRequest(FileRequest),
-    FileChunk(FileChunk),
     ProfileUpdate(ProfileUpdate),
     ReactionUpdate(ReactionUpdate),
     DirectMessage(DirectMessageEvent),
@@ -72,40 +68,6 @@ pub struct FileAnnouncement {
     pub checksum: Option<String>,
     pub blob_id: Option<String>,
     pub ticket: Option<BlobTicket>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileRequest {
-    pub file_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileChunk {
-    pub file_id: String,
-    #[serde(
-        serialize_with = "serialize_bytes_as_base64",
-        deserialize_with = "deserialize_bytes_from_base64"
-    )]
-    pub data: Vec<u8>,
-    pub eof: bool,
-}
-
-fn serialize_bytes_as_base64<S>(data: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    let encoded = general_purpose::STANDARD.encode(data);
-    serializer.serialize_str(&encoded)
-}
-
-fn deserialize_bytes_from_base64<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let encoded: String = serde::Deserialize::deserialize(deserializer)?;
-    general_purpose::STANDARD
-        .decode(&encoded)
-        .map_err(serde::de::Error::custom)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -248,8 +210,6 @@ async fn broadcast_to_topic(
         EventPayload::ThreadAnnouncement(_) => "ThreadAnnouncement",
         EventPayload::PostUpdate(_) => "PostUpdate",
         EventPayload::FileAvailable(_) => "FileAnnouncement",
-        EventPayload::FileRequest(_) => "FileRequest",
-        EventPayload::FileChunk(_) => "FileChunk",
         EventPayload::ProfileUpdate(_) => "ProfileUpdate",
         EventPayload::ReactionUpdate(_) => "ReactionUpdate",
         EventPayload::DirectMessage(_) => "DirectMessage",
@@ -301,84 +261,6 @@ async fn broadcast_to_topic(
     Ok(())
 }
 
-pub async fn run_gossip_receiver_loop(
-    gossip: Gossip,
-    _topics: Arc<RwLock<HashMap<String, GossipTopic>>>,
-    inbound_tx: Sender<InboundGossip>,
-) -> Result<()> {
-    // Subscribe to global topic for receiving
-    // Note: This is a separate subscription from the one used for broadcasting
-    // iroh-gossip allows multiple subscriptions to the same topic
-    let global_topic_id = TopicId::from_bytes(*blake3::hash(b"graphchan-global").as_bytes());
-    let mut receiver = gossip.subscribe(global_topic_id, vec![]).await?;
-
-    tracing::info!("gossip receiver loop started");
-
-    while let Some(event_result) = receiver.next().await {
-        match event_result {
-            Ok(iroh_gossip::api::Event::Received(message)) => {
-                let msg_size = message.content.len();
-                match serde_json::from_slice::<EventEnvelope>(&message.content) {
-                    Ok(envelope) => {
-                        let peer_id = Some(message.delivered_from.to_string());
-                        let payload_type = match &envelope.payload {
-                            EventPayload::ThreadAnnouncement(_) => "ThreadAnnouncement",
-                            EventPayload::PostUpdate(_) => "PostUpdate",
-                            EventPayload::FileAvailable(_) => "FileAnnouncement",
-                            EventPayload::FileRequest(_) => "FileRequest",
-                            EventPayload::FileChunk(_) => "FileChunk",
-                            EventPayload::ProfileUpdate(_) => "ProfileUpdate",
-                            EventPayload::ReactionUpdate(_) => "ReactionUpdate",
-                            EventPayload::DirectMessage(_) => "DirectMessage",
-                            EventPayload::BlockAction(_) => "BlockAction",
-                        };
-                        tracing::info!(
-                            from_peer = %message.delivered_from.fmt_short(),
-                            topic = %envelope.topic,
-                            payload_type = %payload_type,
-                            size_bytes = msg_size,
-                            "received gossip message"
-                        );
-                        if let Err(err) = inbound_tx
-                            .send(InboundGossip {
-                                peer_id,
-                                payload: envelope.payload,
-                            })
-                            .await
-                        {
-                            tracing::warn!(error = ?err, "failed to forward inbound gossip");
-                            break;
-                        }
-                    }
-                    Err(err) => {
-                        tracing::warn!(
-                            error = ?err,
-                            size_bytes = msg_size,
-                            "⚠️  failed to decode gossip envelope - message may be too large or corrupted"
-                        );
-                    }
-                }
-            }
-            Ok(iroh_gossip::api::Event::NeighborUp(peer_id)) => {
-                tracing::info!(peer = %peer_id.fmt_short(), "🎉 GOSSIP NEIGHBOR UP - peer connected to mesh!");
-            }
-            Ok(iroh_gossip::api::Event::NeighborDown(peer_id)) => {
-                tracing::info!(peer = %peer_id.fmt_short(), "❌ GOSSIP NEIGHBOR DOWN");
-            }
-            Ok(iroh_gossip::api::Event::Lagged) => {
-                tracing::warn!("gossip receiver lagged, some messages may have been dropped");
-            }
-            Err(err) => {
-                tracing::error!(error = ?err, "gossip receiver error");
-                break;
-            }
-        }
-    }
-
-    tracing::info!("gossip receiver loop ended");
-    Ok(())
-}
-
 fn envelope_for(payload: EventPayload) -> EventEnvelope {
     let topic = topic_for_payload(&payload);
     EventEnvelope {
@@ -414,9 +296,5 @@ fn topic_for_payload(payload: &EventPayload) -> String {
 
         // Block actions route to blocker's peer topic (for shared blocklist subscribers)
         EventPayload::BlockAction(action) => format!("peer-{}", action.blocker_peer_id),
-
-        // These shouldn't be used with the current blob-based file transfer
-        EventPayload::FileRequest(_) => "deprecated-file-request".to_string(),
-        EventPayload::FileChunk(_) => "deprecated-file-chunk".to_string(),
     }
 }

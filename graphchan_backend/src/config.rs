@@ -9,6 +9,47 @@ pub struct GraphchanConfig {
     pub paths: GraphchanPaths,
     pub network: NetworkConfig,
     pub file: FileConfig,
+    pub auth: AuthConfig,
+}
+
+/// Bearer-token auth for the REST API.
+///
+/// When `token` is `Some`, every non-public route requires the header
+/// `Authorization: Bearer <token>`. The token is read from `GRAPHCHAN_API_TOKEN`
+/// at startup. If unset *and* the listen address is loopback, the API runs
+/// unauthenticated for backwards compatibility (so existing local desktop
+/// installs keep working). If unset and bound to a non-loopback address, the
+/// server refuses to start — an open API on a public address is almost certainly
+/// not what the user wanted.
+#[derive(Debug, Clone, Default)]
+pub struct AuthConfig {
+    pub token: Option<String>,
+    /// Comma-separated list of allowed CORS origins. If `None`, the legacy
+    /// open CORS (Any) is used. Set via GRAPHCHAN_CORS_ORIGINS.
+    pub cors_origins: Option<Vec<String>>,
+}
+
+impl AuthConfig {
+    pub fn from_env() -> Self {
+        let token = env::var("GRAPHCHAN_API_TOKEN").ok().and_then(|raw| {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+        let cors_origins = env::var("GRAPHCHAN_CORS_ORIGINS")
+            .ok()
+            .map(|raw| {
+                raw.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|v: &Vec<String>| !v.is_empty());
+        Self { token, cors_origins }
+    }
 }
 
 impl GraphchanConfig {
@@ -20,11 +61,13 @@ impl GraphchanConfig {
             .unwrap_or(8080);
         let network = NetworkConfig::from_env();
         let file = FileConfig::from_env();
+        let auth = AuthConfig::from_env();
         Ok(Self {
             api_port,
             paths,
             network,
             file,
+            auth,
         })
     }
 
@@ -34,6 +77,7 @@ impl GraphchanConfig {
             paths,
             network,
             file: FileConfig::from_env(),
+            auth: AuthConfig::from_env(),
         }
     }
 
@@ -48,6 +92,7 @@ impl GraphchanConfig {
             paths,
             network,
             file,
+            auth: AuthConfig::from_env(),
         }
     }
 }

@@ -1,5 +1,6 @@
 mod blocking;
 mod dms;
+mod events;
 mod files;
 mod peers;
 mod reactions;
@@ -13,8 +14,9 @@ use crate::files::FileView;
 use crate::identity::IdentitySummary;
 use crate::network::NetworkHandle;
 use anyhow::{Context, Result};
-use axum::extract::DefaultBodyLimit;
-use axum::http::StatusCode;
+use axum::extract::{DefaultBodyLimit, Request, State};
+use axum::http::{HeaderValue, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -164,8 +166,20 @@ pub async fn serve_http(
     // Configure body limit for file uploads (default 10GB if not specified)
     // Media files (images/video/audio) are limited to 50MB at the handler level
     let max_upload_bytes = config.file.max_upload_bytes.unwrap_or(10 * 1024 * 1024 * 1024);
+
+    // Auth setup: derive whether we run authenticated based on config + bind address.
+    let auth_token = config.auth.token.clone();
+    if auth_token.is_some() {
+        tracing::info!("REST API auth enabled (Bearer token required)");
+    } else {
+        tracing::warn!(
+            "REST API running without auth — set GRAPHCHAN_API_TOKEN to require Bearer token"
+        );
+    }
+
     let router = Router::new()
         .route("/health", get(threads::health_handler))
+        .route("/events", get(events::stream_events))
         .route("/threads", get(threads::list_threads).post(threads::create_thread))
         .route("/threads/:id", get(threads::get_thread))
         .route("/threads/:id/download", post(threads::download_thread))
@@ -220,13 +234,12 @@ pub async fn serve_http(
         .route("/settings/:key", get(settings::get_setting_handler).put(settings::set_setting_handler))
         .route("/topics", get(settings::list_topics_handler).post(settings::subscribe_topic_handler))
         .route("/topics/:topic_id", delete(settings::unsubscribe_topic_handler))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_bearer_token,
+        ))
         .layer(DefaultBodyLimit::max(max_upload_bytes as usize))
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
-        )
+        .layer(build_cors_layer(&config))
         .with_state(state.clone());
 
     tracing::info!(
@@ -247,6 +260,126 @@ pub async fn serve_http(
     }
 
     tracing::info!(?addr, "HTTP server listening");
-    axum::serve(listener, router.into_make_service()).await?;
+    let network_for_shutdown = state.network.clone();
+    axum::serve(listener, router.into_make_service())
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    tracing::info!("HTTP server stopped, shutting down network handle");
+    network_for_shutdown.shutdown().await;
     Ok(())
+}
+
+/// Build the CORS layer from config. If `cors_origins` is set, restrict to those
+/// origins; otherwise fall back to the legacy permissive `Any` origin (preserves
+/// behavior for existing local installs where the desktop app is the only client).
+fn build_cors_layer(config: &GraphchanConfig) -> CorsLayer {
+    match &config.auth.cors_origins {
+        Some(origins) => {
+            let parsed: Vec<HeaderValue> = origins
+                .iter()
+                .filter_map(|o| o.parse::<HeaderValue>().ok())
+                .collect();
+            tracing::info!(allowed_origins = ?origins, "CORS restricted via GRAPHCHAN_CORS_ORIGINS");
+            CorsLayer::new()
+                .allow_origin(parsed)
+                .allow_methods(Any)
+                .allow_headers(Any)
+        }
+        None => CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any),
+    }
+}
+
+/// Auth middleware. When `config.auth.token` is set, every request except those
+/// on the always-public allowlist (currently `/health`) must carry a matching
+/// `Authorization: Bearer <token>` header. Without a configured token, the
+/// middleware is a no-op and all requests pass through.
+async fn require_bearer_token(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let Some(expected) = state.config.auth.token.as_deref() else {
+        return next.run(request).await;
+    };
+
+    let path = request.uri().path();
+    if is_public_path(path) {
+        return next.run(request).await;
+    }
+
+    let provided = request
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "));
+
+    match provided {
+        Some(token) if constant_time_eq(token.as_bytes(), expected.as_bytes()) => {
+            next.run(request).await
+        }
+        _ => {
+            tracing::debug!(path = %path, "rejecting unauthenticated request");
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(ErrorResponse {
+                    message: "missing or invalid bearer token".into(),
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Routes that bypass auth (liveness/health checks, OpenAPI discovery).
+fn is_public_path(path: &str) -> bool {
+    matches!(path, "/health")
+}
+
+/// Constant-time byte comparison to avoid leaking token length / prefix via
+/// timing. Both sides must have identical lengths to compare equal.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// Resolves on Ctrl-C (Unix and Windows). Used to drive `axum::serve`'s
+/// `with_graceful_shutdown` so in-flight requests complete and the network
+/// stack flushes before the process exits.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(err) = tokio::signal::ctrl_c().await {
+            tracing::warn!(error = ?err, "failed to install Ctrl-C handler");
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(err) => {
+                tracing::warn!(error = ?err, "failed to install SIGTERM handler");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => tracing::info!("received Ctrl-C, shutting down"),
+        _ = terminate => tracing::info!("received SIGTERM, shutting down"),
+    }
 }

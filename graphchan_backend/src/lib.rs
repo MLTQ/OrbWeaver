@@ -6,6 +6,7 @@ pub mod config;
 pub mod crypto;
 pub mod database;
 pub mod dms;
+pub mod events;
 pub mod files;
 pub mod identity;
 pub mod importer;
