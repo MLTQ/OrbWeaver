@@ -56,7 +56,7 @@ jobs:
         run: ./scripts/patch_deps.sh
 
       - name: Build
-        run: cargo build --release --bin graphchan_desktop --bin graphchan_backend --bin graphchan_agent --bin graphchan_mcp
+        run: cargo build --release --bin graphchan_desktop --bin graphchan_backend  --bin graphchan_mcp
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -65,7 +65,6 @@ jobs:
           path: |
             target/release/graphchan_desktop.exe
             target/release/graphchan_backend.exe
-            target/release/graphchan_agent.exe
             target/release/graphchan_mcp.exe
 
   build-macos:
@@ -86,7 +85,7 @@ jobs:
         run: ./scripts/patch_deps.sh
 
       - name: Build
-        run: cargo build --release --bin graphchan_desktop --bin graphchan_backend --bin graphchan_agent --bin graphchan_mcp
+        run: cargo build --release --bin graphchan_desktop --bin graphchan_backend --bin graphchan_mcp
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -95,7 +94,6 @@ jobs:
           path: |
             target/release/graphchan_desktop
             target/release/graphchan_backend
-            target/release/graphchan_agent
             target/release/graphchan_mcp
 
   build-linux:
@@ -140,7 +138,7 @@ jobs:
 
 
           echo "Building..."
-          cargo build --release --bin graphchan_desktop --bin graphchan_backend --bin graphchan_agent --bin graphchan_mcp
+          cargo build --release --bin graphchan_desktop --bin graphchan_backend  --bin graphchan_mcp
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -149,7 +147,6 @@ jobs:
           path: |
             target/release/graphchan_desktop
             target/release/graphchan_backend
-            target/release/graphchan_agent
             target/release/graphchan_mcp
 
   create-release:
@@ -227,14 +224,11 @@ jobs:
           files: |
             graphchan_desktop-windows.exe
             graphchan_backend-windows.exe
-            graphchan_agent-windows.exe
             graphchan_mcp-windows.exe
             graphchan_desktop-macos
             graphchan_backend-macos
-            graphchan_agent-macos
             graphchan_mcp-macos
             graphchan_desktop-linux
             graphchan_backend-linux
-            graphchan_agent-linux
             graphchan_mcp-linux
           fail_on_unmatched_files: false
