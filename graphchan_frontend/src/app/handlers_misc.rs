@@ -206,6 +206,10 @@ impl GraphchanApp {
                     Ok(messages) => {
                         state.messages = messages;
                         state.messages_error = None;
+                        // load_messages already fired mark_conversation_read on
+                        // the worker; refresh the conversations list so the
+                        // sidebar unread badge updates immediately.
+                        self.spawn_load_conversations();
                     }
                     Err(err) => {
                         error!("Failed to load messages for {}: {}", peer_id, err);

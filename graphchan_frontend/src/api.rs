@@ -344,6 +344,14 @@ impl ApiClient {
         Ok(())
     }
 
+    /// Mark every unread incoming message in a conversation as read in one call.
+    /// Avoids N round-trips when opening a conversation with many unread DMs.
+    pub fn mark_conversation_read(&self, peer_id: &str) -> Result<()> {
+        let url = format!("{}/dms/{}/read", self.base_url(), peer_id);
+        self.client.post(&url).send()?.error_for_status()?;
+        Ok(())
+    }
+
     pub fn get_unread_count(&self) -> Result<UnreadCountResponse> {
         let url = self.url("/dms/unread/count")?;
         let response = self.client.get(url).send()?.error_for_status()?;

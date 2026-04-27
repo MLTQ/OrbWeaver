@@ -98,4 +98,51 @@ impl<'conn> super::ConversationRepository for SqliteConversationRepository<'conn
         )?;
         Ok(())
     }
+
+    fn record_incoming_message(
+        &self,
+        conversation_id: &str,
+        peer_id: &str,
+        message_at: &str,
+        preview: &str,
+    ) -> Result<()> {
+        // Single statement: insert with unread=1 if new, else increment by 1.
+        // ON CONFLICT updates last_message_* but adds 1 to existing unread_count
+        // rather than clobbering it.
+        self.conn.execute(
+            r#"
+            INSERT INTO conversations (id, peer_id, last_message_at, last_message_preview, unread_count)
+            VALUES (?1, ?2, ?3, ?4, 1)
+            ON CONFLICT(id) DO UPDATE SET
+                last_message_at = excluded.last_message_at,
+                last_message_preview = excluded.last_message_preview,
+                unread_count = conversations.unread_count + 1
+            "#,
+            params![conversation_id, peer_id, message_at, preview],
+        )?;
+        Ok(())
+    }
+
+    fn record_outgoing_message(
+        &self,
+        conversation_id: &str,
+        peer_id: &str,
+        message_at: &str,
+        preview: &str,
+    ) -> Result<()> {
+        // unread_count defaults to 0 for newly-created rows; existing rows keep
+        // their counter untouched (sending a reply must not silently mark the
+        // peer's unread messages as read).
+        self.conn.execute(
+            r#"
+            INSERT INTO conversations (id, peer_id, last_message_at, last_message_preview, unread_count)
+            VALUES (?1, ?2, ?3, ?4, 0)
+            ON CONFLICT(id) DO UPDATE SET
+                last_message_at = excluded.last_message_at,
+                last_message_preview = excluded.last_message_preview
+            "#,
+            params![conversation_id, peer_id, message_at, preview],
+        )?;
+        Ok(())
+    }
 }

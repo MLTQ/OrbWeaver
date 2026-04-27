@@ -38,10 +38,14 @@ pub(crate) async fn send_dm_handler(
     State(state): State<AppState>,
     Json(payload): Json<SendDmRequest>,
 ) -> Result<(StatusCode, Json<DirectMessageView>), ApiError> {
+    if payload.body.trim().is_empty() {
+        return Err(ApiError::BadRequest("message body may not be empty".into()));
+    }
+
     let service = DmService::new(state.database.clone(), state.config.paths.clone());
     let (message, ciphertext, nonce) = service
         .send_dm(&payload.to_peer_id, &payload.body)
-        .map_err(ApiError::Internal)?;
+        .map_err(map_send_dm_error)?;
 
     // Broadcast encrypted DM over gossip to recipient
     let dm_event = crate::network::DirectMessageEvent {
@@ -84,10 +88,48 @@ pub(crate) async fn mark_message_read_handler(
     Ok(StatusCode::OK)
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct MarkConversationReadResponse {
+    /// Number of incoming messages newly transitioned from unread → read.
+    /// 0 when the conversation was already fully read.
+    marked: usize,
+}
+
+pub(crate) async fn mark_conversation_read_handler(
+    State(state): State<AppState>,
+    Path(peer_id): Path<String>,
+) -> ApiResult<MarkConversationReadResponse> {
+    let service = DmService::new(state.database.clone(), state.config.paths.clone());
+    let marked = service
+        .mark_conversation_read(&peer_id)
+        .map_err(ApiError::Internal)?;
+    Ok(Json(MarkConversationReadResponse { marked }))
+}
+
 pub(crate) async fn count_unread_handler(
     State(state): State<AppState>,
 ) -> ApiResult<UnreadCountResponse> {
     let service = DmService::new(state.database.clone(), state.config.paths.clone());
     let count = service.count_unread().map_err(ApiError::Internal)?;
     Ok(Json(UnreadCountResponse { count }))
+}
+
+/// DmService::send_dm bubbles every failure through anyhow::Error, but several
+/// of those are user-fixable (peer unknown, peer has no x25519 key, malformed
+/// pubkey, etc.). Without this mapping they all become 500 "internal server
+/// error" with no body, which is unactionable for clients. We pattern-match the
+/// known user-facing error strings and surface them as 400/404 with the
+/// original message preserved.
+fn map_send_dm_error(err: anyhow::Error) -> ApiError {
+    let msg = err.to_string();
+    if msg.contains("peer not found") {
+        ApiError::NotFound(msg)
+    } else if msg.contains("no X25519 public key")
+        || msg.contains("invalid X25519 public key length")
+        || msg.contains("failed to decode X25519 public key")
+    {
+        ApiError::BadRequest(msg)
+    } else {
+        ApiError::Internal(err)
+    }
 }
