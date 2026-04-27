@@ -333,3 +333,55 @@ pub struct AddIpBlockRequest {
     pub ip_or_range: String,
     pub reason: Option<String>,
 }
+
+/// Mirror of `graphchan_backend::events::AppEvent`. The serde tagging matches
+/// the backend (`#[serde(tag = "type", rename_all = "snake_case")]`) so JSON
+/// from the SSE `/events` stream deserializes here directly.
+///
+/// Keep this in sync with the backend enum; if a new variant is added there
+/// without being mirrored here, the SSE consumer will fall through to
+/// `Unknown` rather than crashing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ServerEvent {
+    PostAdded {
+        thread_id: String,
+        post_id: String,
+        #[serde(default)]
+        author_peer_id: Option<String>,
+    },
+    ThreadAnnounced {
+        thread_id: String,
+        title: String,
+        #[serde(default)]
+        creator_peer_id: Option<String>,
+    },
+    FileAnnounced {
+        file_id: String,
+        post_id: String,
+        #[serde(default)]
+        size_bytes: Option<i64>,
+    },
+    FileDownloaded {
+        file_id: String,
+        post_id: String,
+    },
+    ProfileUpdated {
+        peer_id: String,
+    },
+    ReactionUpdated {
+        post_id: String,
+        reactor_peer_id: String,
+        emoji: String,
+        removed: bool,
+    },
+    DmReceived {
+        from_peer_id: String,
+        conversation_id: String,
+        message_id: String,
+    },
+    /// Catches future variants the backend adds without us knowing — keeps
+    /// the SSE consumer alive across version skew.
+    #[serde(other)]
+    Unknown,
+}

@@ -2,7 +2,7 @@ use eframe::egui;
 use log::{error, info};
 
 use crate::models::{
-    ConversationView, DirectMessageView, PeerView, ReactionsResponse, SearchResponse,
+    ConversationView, DirectMessageView, PeerView, ReactionsResponse, SearchResponse, ServerEvent,
 };
 
 use super::state::{ThreadState, ViewState};
@@ -194,6 +194,81 @@ impl GraphchanApp {
             Err(err) => {
                 error!("Failed to load conversations: {}", err);
                 self.dm_state.conversations_error = Some(err.to_string());
+            }
+        }
+    }
+
+    /// Dispatch a server-pushed event (from the SSE /events stream) by
+    /// triggering whichever local refresh keeps the UI consistent. Most
+    /// branches just spawn a load — the existing handlers do all the work.
+    pub(super) fn handle_server_event(&mut self, event: ServerEvent) {
+        match event {
+            ServerEvent::DmReceived { from_peer_id, .. } => {
+                // Always refresh conversations (sidebar unread badge moves).
+                self.spawn_load_conversations();
+                // If the user is currently viewing this conversation, reload
+                // its messages so the new one appears live. The reload also
+                // re-fires mark_conversation_read, so seen-while-open DMs
+                // don't pile up unread.
+                let viewing = matches!(
+                    &self.view,
+                    ViewState::Conversation(state) if state.peer_id == from_peer_id
+                );
+                if viewing {
+                    // Pull the existing peer_id out of the view (already proven
+                    // equal to from_peer_id by the match above) and reload via
+                    // a direct task call rather than spawn_load_messages, since
+                    // the latter mutates `state` to flip its loading flag and
+                    // we'd hit a re-entrant borrow on `self`.
+                    if let ViewState::Conversation(ref mut state) = self.view {
+                        state.messages_loading = true;
+                        state.messages_error = None;
+                    }
+                    super::tasks::load_messages(
+                        self.api.clone(),
+                        self.tx.clone(),
+                        from_peer_id,
+                    );
+                }
+            }
+            ServerEvent::ProfileUpdated { peer_id: _ } => {
+                // A profile update may bring a new x25519 key, which the
+                // backend uses to retry pending-key DMs. Refresh the
+                // conversations list so previously-locked entries surface
+                // their decrypted previews.
+                self.spawn_load_conversations();
+                self.spawn_load_peers();
+            }
+            ServerEvent::PostAdded { thread_id, .. } => {
+                // If we're looking at this thread, reload it. Otherwise just
+                // refresh the catalog so post counts / activity update.
+                let viewing_this = matches!(
+                    &self.view,
+                    ViewState::Thread(state) if state.summary.id == thread_id
+                );
+                if viewing_this {
+                    self.spawn_load_thread(&thread_id);
+                }
+                self.spawn_load_threads();
+            }
+            ServerEvent::ThreadAnnounced { .. } => {
+                self.spawn_load_threads();
+            }
+            ServerEvent::FileAnnounced { .. } | ServerEvent::FileDownloaded { .. } => {
+                // File arrival affects the active thread's attachments. If a
+                // thread view is open, reload it; otherwise the next visit
+                // will fetch fresh data.
+                if let ViewState::Thread(ref state) = self.view {
+                    let id = state.summary.id.clone();
+                    self.spawn_load_thread(&id);
+                }
+            }
+            ServerEvent::ReactionUpdated { post_id, .. } => {
+                self.spawn_load_reactions(&post_id);
+            }
+            ServerEvent::Unknown => {
+                // Backend added a variant we don't know about — already
+                // logged at trace level by the consumer. No-op here.
             }
         }
     }

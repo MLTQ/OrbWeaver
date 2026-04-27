@@ -105,6 +105,14 @@ pub trait DirectMessageRepository {
         read_at: &str,
     ) -> Result<usize>;
     fn count_unread(&self, to_peer_id: &str) -> Result<usize>;
+    /// Update the decrypt_status of a single message. Used by the retry path
+    /// when a peer's x25519 key becomes available after their DM had already
+    /// landed in 'pending_key' state.
+    fn update_decrypt_status(&self, id: &str, status: &str) -> Result<()>;
+    /// Return DMs from this peer that we couldn't decrypt before — the retry
+    /// candidates. Excludes 'failed' messages (non-key failures we won't
+    /// recover from).
+    fn list_pending_for_sender(&self, from_peer_id: &str) -> Result<Vec<DirectMessageRecord>>;
 }
 
 pub trait ConversationRepository {

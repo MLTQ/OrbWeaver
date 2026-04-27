@@ -128,6 +128,17 @@ const VERSIONED_MIGRATIONS: &[(i64, &str)] = &[
     // bootstrapping; any column or table added after the initial release
     // belongs in a new entry here.
     (1, "-- baseline (no-op; pre-existing schema lives in MIGRATIONS)"),
+    // version 2: decrypt_status on direct_messages.
+    // Values: 'decrypted' (default — message was successfully decrypted on
+    // receipt), 'pending_key' (sender's x25519 key was not yet known —
+    // retry when their profile arrives), 'failed' (decryption error
+    // unrelated to key availability — corruption / wrong recipient).
+    // Existing rows default to 'decrypted' since they all decrypted before
+    // this column existed.
+    (
+        2,
+        "ALTER TABLE direct_messages ADD COLUMN decrypt_status TEXT DEFAULT 'decrypted';",
+    ),
 ];
 
 /// Idempotent column-add helper. Probes the table's columns and runs
@@ -210,11 +221,12 @@ impl Database {
     pub fn ensure_migrations(&self) -> Result<bool> {
         self.with_conn(|conn| {
             conn.execute_batch(MIGRATIONS)?;
-            run_versioned_migrations(conn)?;
-            // Legacy ensure_* helpers still run for backwards compat with
-            // existing on-disk databases that pre-date the schema_migrations
-            // table. Each is defensively idempotent (column-existence check
-            // then ALTER) so re-running on a migrated DB is a no-op.
+            // Legacy ensure_* helpers run BEFORE versioned migrations because
+            // some of them (ensure_dm_tables, ensure_blocking_tables, etc.)
+            // CREATE TABLE IF NOT EXISTS, and v2+ migrations may ALTER those
+            // tables. On a fresh DB the legacy helpers materialize the schema
+            // first, then the versioned migrations evolve it.
+            // Each helper is defensively idempotent so re-running is a no-op.
             self.ensure_node_identity_schema_locked(conn)?;
             self.ensure_files_schema_locked(conn)?;
             self.ensure_avatar_column(conn)?;
@@ -234,6 +246,7 @@ impl Database {
             self.ensure_peers_agents_column(conn)?;
             self.ensure_topic_tables(conn)?;
             self.ensure_import_tracking(conn)?;
+            run_versioned_migrations(conn)?;
             Ok(())
         })?;
         Ok(self.newly_created)
