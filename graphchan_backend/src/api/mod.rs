@@ -2,6 +2,7 @@ mod blocking;
 mod dms;
 mod events;
 mod files;
+mod openapi;
 mod peers;
 mod reactions;
 mod search;
@@ -179,6 +180,7 @@ pub async fn serve_http(
 
     let router = Router::new()
         .route("/health", get(threads::health_handler))
+        .route("/openapi.json", get(openapi::openapi_handler))
         .route("/events", get(events::stream_events))
         .route("/threads", get(threads::list_threads).post(threads::create_thread))
         .route("/threads/:id", get(threads::get_thread))
@@ -336,7 +338,7 @@ async fn require_bearer_token(
 
 /// Routes that bypass auth (liveness/health checks, OpenAPI discovery).
 fn is_public_path(path: &str) -> bool {
-    matches!(path, "/health")
+    matches!(path, "/health" | "/openapi.json")
 }
 
 /// Constant-time byte comparison to avoid leaking token length / prefix via
