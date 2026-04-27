@@ -95,6 +95,15 @@ pub trait DirectMessageRepository {
     fn get(&self, id: &str) -> Result<Option<DirectMessageRecord>>;
     fn list_for_conversation(&self, conversation_id: &str, limit: usize) -> Result<Vec<DirectMessageRecord>>;
     fn mark_as_read(&self, id: &str, read_at: &str) -> Result<()>;
+    /// Mark every unread incoming message in a conversation as read.
+    /// Returns the number of rows updated. Pairs with
+    /// ConversationRepository::update_unread_count(0).
+    fn mark_conversation_read(
+        &self,
+        conversation_id: &str,
+        to_peer_id: &str,
+        read_at: &str,
+    ) -> Result<usize>;
     fn count_unread(&self, to_peer_id: &str) -> Result<usize>;
 }
 
@@ -104,6 +113,27 @@ pub trait ConversationRepository {
     fn list(&self) -> Result<Vec<ConversationRecord>>;
     fn update_unread_count(&self, conversation_id: &str, count: i64) -> Result<()>;
     fn update_last_message(&self, conversation_id: &str, message_at: &str, preview: &str) -> Result<()>;
+    /// Atomically increment unread_count by 1, creating the conversation row if
+    /// missing and updating last_message_at / preview in the same statement.
+    /// Used by receive_dm — separate from upsert() because upsert clobbers the
+    /// counter, which is a footgun when state is concurrent.
+    fn record_incoming_message(
+        &self,
+        conversation_id: &str,
+        peer_id: &str,
+        message_at: &str,
+        preview: &str,
+    ) -> Result<()>;
+    /// Update last_message_at + preview without touching unread_count. Used by
+    /// send_dm so replying does not silently clear unread state from the other
+    /// side of the conversation.
+    fn record_outgoing_message(
+        &self,
+        conversation_id: &str,
+        peer_id: &str,
+        message_at: &str,
+        preview: &str,
+    ) -> Result<()>;
 }
 
 pub trait BlockedPeerRepository {

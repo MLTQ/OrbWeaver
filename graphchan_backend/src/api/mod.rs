@@ -214,6 +214,7 @@ pub async fn serve_http(
         .route("/dms/send", post(dms::send_dm_handler))
         .route("/dms/:peer_id/messages", get(dms::get_messages_handler))
         .route("/dms/messages/:message_id/read", post(dms::mark_message_read_handler))
+        .route("/dms/:peer_id/read", post(dms::mark_conversation_read_handler))
         .route("/dms/unread/count", get(dms::count_unread_handler))
         .route("/blocking/peers", get(blocking::list_blocked_peers_handler))
         .route("/blocking/peers/:peer_id", post(blocking::block_peer_handler))

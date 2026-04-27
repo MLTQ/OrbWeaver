@@ -455,6 +455,18 @@ pub fn load_conversations(client: ApiClient, tx: Sender<AppMessage>) {
 pub fn load_messages(client: ApiClient, tx: Sender<AppMessage>, peer_id: String) {
     thread::spawn(move || {
         let result = client.get_messages(&peer_id, 50);
+
+        // Fire-and-forget mark-conversation-read on successful load. We do this
+        // on the same worker thread so it happens before the UI re-asks for
+        // unread counts via spawn_load_conversations on receipt of MessagesLoaded.
+        // A network failure here is not user-visible — the count just refreshes
+        // wrong this tick and corrects on the next interaction.
+        if result.is_ok() {
+            if let Err(err) = client.mark_conversation_read(&peer_id) {
+                log::warn!("failed to mark conversation {} read: {}", peer_id, err);
+            }
+        }
+
         let message = AppMessage::MessagesLoaded { peer_id, result };
         if tx.send(message).is_err() {
             error!("failed to send MessagesLoaded message");
