@@ -112,4 +112,16 @@ impl<'conn> super::PeerRepository for SqlitePeerRepository<'conn> {
         )?;
         Ok(())
     }
+
+    fn id_for_iroh_peer(&self, iroh_peer_id: &str) -> Result<Option<String>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT id FROM peers WHERE iroh_peer_id = ?1",
+                params![iroh_peer_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(row)
+    }
 }

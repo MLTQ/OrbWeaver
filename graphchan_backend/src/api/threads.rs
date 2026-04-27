@@ -199,16 +199,20 @@ pub(crate) async fn download_thread(
             .map_err(|e| ApiError::Internal(anyhow::anyhow!("blob download failed: {}", e)))?;
     }
 
-    // Read the blob data
-    let mut reader = state.blobs.reader(hash);
-    let mut blob_data = Vec::new();
-    tokio::io::copy(&mut reader, &mut blob_data)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("failed to read blob: {}", e)))?;
-
-    // Deserialize as ThreadDetails
-    let thread_details: ThreadDetails = serde_json::from_slice(&blob_data)
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("invalid thread data: {}", e)))?;
+    // Stream the blob through serde_json instead of materializing the whole
+    // snapshot. SyncIoBridge runs the blocking deserialize on a worker thread
+    // so the runtime stays responsive. AsyncReadExt::take caps how much we'll
+    // accept, so a malicious peer can't OOM us via a huge bogus blob.
+    const MAX_THREAD_BLOB_BYTES: u64 = 256 * 1024 * 1024;
+    let reader = state.blobs.reader(hash);
+    let bounded = tokio::io::AsyncReadExt::take(reader, MAX_THREAD_BLOB_BYTES);
+    let thread_details: ThreadDetails = tokio::task::spawn_blocking(move || {
+        let sync = tokio_util::io::SyncIoBridge::new(bounded);
+        serde_json::from_reader(sync)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("blob deserialize task panicked: {}", e)))?
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("invalid thread data: {}", e)))?;
 
     tracing::info!(
         thread_id = %thread_id,

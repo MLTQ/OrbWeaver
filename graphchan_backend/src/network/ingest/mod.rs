@@ -1,25 +1,53 @@
+mod files;
+mod profile;
+mod reactions;
+mod resync;
+
+use files::{apply_file_announcement, download_blob, ensure_download_directory, file_needs_download};
+use profile::apply_profile_update;
+use reactions::apply_reaction_update;
+use resync::download_thread_snapshot_blob;
+
 use crate::blocking::IpBlockChecker;
 use crate::config::GraphchanPaths;
-use crate::database::models::{FileRecord, PostRecord, ReactionRecord, ThreadRecord};
-use crate::database::repositories::{FileRepository, PeerIpRepository, PeerRepository, PostRepository, ReactionRepository, ThreadRepository};
+use crate::database::models::{FileRecord, PostRecord, ThreadRecord};
+use crate::database::repositories::{FileRepository, PeerIpRepository, PeerRepository, PostRepository, ThreadRepository};
 use crate::database::Database;
+use crate::events::{AppEvent, EventPublisher};
 use crate::network::events::{
-    EventPayload, FileAnnouncement, FileChunk, FileRequest, InboundGossip, NetworkEvent,
-    ProfileUpdate, ReactionUpdate,
+    EventPayload, FileAnnouncement, InboundGossip, NetworkEvent,
 };
-use crate::peers::PeerService;
 use crate::threading::{PostView, ThreadDetails};
 use anyhow::{Context, Result};
 use blake3::Hasher;
 use iroh::endpoint::Endpoint;
 use iroh_blobs::store::fs::FsStore;
 use iroh_blobs::ticket::BlobTicket;
+use lru::LruCache;
 use rusqlite::OptionalExtension;
-use std::collections::HashSet;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
+
+/// Maximum number of recently-seen gossip message IDs we retain for dedup.
+/// Bounds memory growth on long-running nodes; events older than this may be
+/// re-broadcast a second time, which is acceptable since gossip itself dedups.
+const SEEN_MESSAGES_CAPACITY: usize = 65_536;
+
+/// Insert a message ID into the LRU dedup cache.
+/// Returns true if this is the first time we've seen the ID (caller should rebroadcast).
+async fn mark_seen(cache: &Arc<Mutex<LruCache<String, ()>>>, msg_id: String) -> bool {
+    let mut guard = cache.lock().await;
+    if guard.contains(&msg_id) {
+        guard.promote(&msg_id);
+        false
+    } else {
+        guard.put(msg_id, ());
+        true
+    }
+}
 
 /// Request to resynchronize a thread due to detected hash mismatch
 struct ResyncRequest {
@@ -36,12 +64,16 @@ pub async fn run_ingest_loop(
     endpoint: Arc<Endpoint>,
     local_peer_id: String,
     ip_blocker: IpBlockChecker,
+    events: EventPublisher,
 ) {
     tracing::info!("network ingest loop started");
 
-    // Cache of recently seen message IDs to prevent re-broadcast loops
-    // Format: "post:{id}" or "thread:{id}" or "file:{id}" etc.
-    let seen_messages: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+    // Cache of recently seen message IDs to prevent re-broadcast loops.
+    // Bounded LRU: events older than SEEN_MESSAGES_CAPACITY may rebroadcast once
+    // more, but iroh-gossip itself dedups so this is harmless.
+    let seen_messages: Arc<Mutex<LruCache<String, ()>>> = Arc::new(Mutex::new(
+        LruCache::new(NonZeroUsize::new(SEEN_MESSAGES_CAPACITY).expect("non-zero")),
+    ));
 
     while let Some(message) = rx.recv().await {
         let peer = message.peer_id.clone();
@@ -56,6 +88,7 @@ pub async fn run_ingest_loop(
             &seen_messages,
             &local_peer_id,
             &ip_blocker,
+            &events,
         ).await {
             Ok(Some(resync_request)) => {
                 // Spawn background task to re-download thread
@@ -102,30 +135,61 @@ pub async fn run_ingest_loop(
     tracing::info!("network ingest loop shutting down");
 }
 
-/// Capture and store the IP address of a peer from the endpoint connection
+/// Capture and store the IP address of a peer based on the live iroh
+/// connection state. The inbound gossip frame's `delivered_from` is the iroh
+/// PublicKey, so we resolve that to the canonical peer id (GPG fingerprint)
+/// via the peers table before recording. If no peer record exists yet — which
+/// happens when we receive a frame from someone before any thread/profile
+/// arrives — we silently no-op; the next frame after the peer is registered
+/// will populate the IP.
 ///
-/// TODO: Iroh 0.94's Endpoint API doesn't directly expose per-peer connection information.
-/// Possible solutions:
-/// 1. Use endpoint.magic_endpoint() to access underlying connection tracking
-/// 2. Monitor connection events via endpoint event streams
-/// 3. Track connections at a lower level (QUIC connection events)
-/// 4. Wait for Iroh API updates that expose this information
-///
-/// For now, this is a stub. We'll need to implement proper IP tracking based on
-/// the actual Iroh API capabilities.
+/// Note: only Direct/Mixed connections expose a usable IP. Pure-relay
+/// connections give us a relay URL with no peer-side IP, so IP-blocking those
+/// peers is impossible until they switch to a direct path.
 async fn capture_peer_ip(
-    _database: &Database,
-    _endpoint: &Endpoint,
-    peer_id_str: &str,
+    database: &Database,
+    endpoint: &Endpoint,
+    iroh_peer_id_str: &str,
 ) -> Result<()> {
-    tracing::trace!(
-        peer_id = %peer_id_str,
-        "IP capture not yet implemented for Iroh 0.94 endpoint API"
-    );
+    use iroh::endpoint::ConnectionType;
+    use n0_watcher::Watcher;
 
-    // TODO: Implement actual IP extraction once we determine the correct Iroh API
-    // The infrastructure (database tables, repositories) is ready.
+    let endpoint_id: iroh::PublicKey = match iroh_peer_id_str.parse() {
+        Ok(id) => id,
+        Err(_) => return Ok(()), // Not an iroh PublicKey — nothing to do
+    };
 
+    let Some(mut watcher) = endpoint.conn_type(endpoint_id) else {
+        return Ok(());
+    };
+
+    let socket_addr = match watcher.get() {
+        ConnectionType::Direct(addr) => Some(addr),
+        ConnectionType::Mixed(addr, _relay) => Some(addr),
+        ConnectionType::Relay(_) | ConnectionType::None => None,
+    };
+
+    let Some(addr) = socket_addr else {
+        return Ok(());
+    };
+
+    let canonical_id: Option<String> = database.with_repositories(|repos| {
+        Ok(repos.peers().id_for_iroh_peer(iroh_peer_id_str)?)
+    })?;
+
+    let Some(peer_id) = canonical_id else {
+        tracing::trace!(
+            iroh_peer_id = %iroh_peer_id_str,
+            ip = %addr.ip(),
+            "received gossip from peer with direct connection but no canonical peer record yet"
+        );
+        return Ok(());
+    };
+
+    let timestamp = chrono::Utc::now().timestamp();
+    database.with_repositories(|repos| {
+        repos.peer_ips().update(&peer_id, &addr.ip().to_string(), timestamp)
+    })?;
     Ok(())
 }
 
@@ -137,9 +201,10 @@ async fn handle_message(
     payload: EventPayload,
     blobs: &FsStore,
     endpoint: &Arc<Endpoint>,
-    seen_messages: &Arc<Mutex<HashSet<String>>>,
+    seen_messages: &Arc<Mutex<LruCache<String, ()>>>,
     local_peer_id: &str,
     ip_blocker: &IpBlockChecker,
+    events: &EventPublisher,
 ) -> Result<Option<ResyncRequest>> {
     // Capture peer IP address if available
     if let Some(ref peer_id_str) = peer_id {
@@ -159,12 +224,14 @@ async fn handle_message(
             );
 
             let msg_id = format!("thread:{}:{}", announcement.thread_id, announcement.thread_hash);
-            let should_rebroadcast = {
-                let mut seen = seen_messages.lock().await;
-                seen.insert(msg_id)
-            };
+            let should_rebroadcast = mark_seen(seen_messages, msg_id).await;
 
             apply_thread_announcement(database, announcement.clone())?;
+            events.publish(AppEvent::ThreadAnnounced {
+                thread_id: announcement.thread_id.clone(),
+                title: announcement.title.clone(),
+                creator_peer_id: Some(announcement.creator_peer_id.clone()),
+            });
 
             // Re-broadcast only if this is the first time we've seen this version
             // CRITICAL: Change announcer_peer_id to OUR peer ID so we publish to OUR peer topic
@@ -191,12 +258,14 @@ async fn handle_message(
             );
 
             let msg_id = format!("post:{}", post.id);
-            let should_rebroadcast = {
-                let mut seen = seen_messages.lock().await;
-                seen.insert(msg_id)
-            };
+            let should_rebroadcast = mark_seen(seen_messages, msg_id).await;
 
             let result = apply_post_update(database, ip_blocker, post.clone()).await?;
+            events.publish(AppEvent::PostAdded {
+                thread_id: post.thread_id.clone(),
+                post_id: post.id.clone(),
+                author_peer_id: post.author_peer_id.clone(),
+            });
 
             // Re-broadcast only if this is the first time we've seen this post
             // This enables transitive post propagation: A → B → C → ...
@@ -220,12 +289,14 @@ async fn handle_message(
                 "received FileAnnouncement"
             );
             let msg_id = format!("file:{}", announcement.id);
-            let should_rebroadcast = {
-                let mut seen = seen_messages.lock().await;
-                seen.insert(msg_id)
-            };
+            let should_rebroadcast = mark_seen(seen_messages, msg_id).await;
 
             let fetch_needed = apply_file_announcement(database, paths, &announcement)?;
+            events.publish(AppEvent::FileAnnounced {
+                file_id: announcement.id.clone(),
+                post_id: announcement.post_id.clone(),
+                size_bytes: announcement.size_bytes,
+            });
             if fetch_needed && announcement.ticket.is_some() {
                 tracing::info!(
                     file_id = %announcement.id,
@@ -263,26 +334,9 @@ async fn handle_message(
 
             Ok(None)
         }
-        EventPayload::FileRequest(request) => {
-            if let Some(peer_id) = peer_id {
-                tracing::info!(file_id = %request.file_id, peer = %peer_id, "📤 received file request, preparing to send chunk");
-                respond_with_file_chunk(database, paths, publisher, &peer_id, request)?;
-            } else {
-                tracing::debug!(file_id = %request.file_id, "received file request without peer_id");
-            }
-            Ok(None)
-        }
-        EventPayload::FileChunk(chunk) => {
-            tracing::info!(file_id = %chunk.file_id, size = %chunk.data.len(), "📦 received file chunk");
-            apply_file_chunk(database, paths, chunk)?;
-            Ok(None)
-        }
         EventPayload::ProfileUpdate(update) => {
             let msg_id = format!("profile:{}", update.peer_id);
-            let should_rebroadcast = {
-                let mut seen = seen_messages.lock().await;
-                seen.insert(msg_id)
-            };
+            let should_rebroadcast = mark_seen(seen_messages, msg_id).await;
 
             // Download avatar blob if a ticket is provided and we don't have it locally
             if let (Some(ref avatar_id), Some(ref ticket)) = (&update.avatar_file_id, &update.ticket) {
@@ -314,6 +368,9 @@ async fn handle_message(
             }
 
             apply_profile_update(database, update.clone())?;
+            events.publish(AppEvent::ProfileUpdated {
+                peer_id: update.peer_id.clone(),
+            });
 
             // Re-broadcast profile updates only if first time seeing this update
             if should_rebroadcast {
@@ -336,12 +393,15 @@ async fn handle_message(
                 reaction.emoji,
                 reaction.is_removal
             );
-            let should_rebroadcast = {
-                let mut seen = seen_messages.lock().await;
-                seen.insert(msg_id)
-            };
+            let should_rebroadcast = mark_seen(seen_messages, msg_id).await;
 
             apply_reaction_update(database, reaction.clone())?;
+            events.publish(AppEvent::ReactionUpdated {
+                post_id: reaction.post_id.clone(),
+                reactor_peer_id: reaction.reactor_peer_id.clone(),
+                emoji: reaction.emoji.clone(),
+                removed: reaction.is_removal,
+            });
 
             // Re-broadcast reaction updates only if first time seeing this update
             if should_rebroadcast {
@@ -359,11 +419,8 @@ async fn handle_message(
 
         EventPayload::DirectMessage(dm) => {
             let msg_id = format!("dm:{}", dm.message_id);
-            {
-                let mut seen = seen_messages.lock().await;
-                if !seen.insert(msg_id) {
-                    return Ok(None); // Already processed
-                }
+            if !mark_seen(seen_messages, msg_id).await {
+                return Ok(None); // Already processed
             }
 
             tracing::info!(
@@ -375,7 +432,7 @@ async fn handle_message(
 
             // Store the DM using DmService
             let service = crate::dms::DmService::new(database.clone(), paths.clone());
-            if let Err(err) = service.ingest_dm(
+            match service.ingest_dm(
                 &dm.from_peer_id,
                 &dm.to_peer_id,
                 &dm.encrypted_body,
@@ -384,7 +441,16 @@ async fn handle_message(
                 &dm.conversation_id,
                 &dm.created_at,
             ) {
-                tracing::warn!(error = ?err, "failed to ingest DM from gossip");
+                Ok(_) => {
+                    events.publish(AppEvent::DmReceived {
+                        from_peer_id: dm.from_peer_id.clone(),
+                        conversation_id: dm.conversation_id.clone(),
+                        message_id: dm.message_id.clone(),
+                    });
+                }
+                Err(err) => {
+                    tracing::warn!(error = ?err, "failed to ingest DM from gossip");
+                }
             }
 
             // Don't re-broadcast DMs - they're point-to-point
@@ -396,11 +462,8 @@ async fn handle_message(
                 "block:{}:{}:{}",
                 action.blocker_peer_id, action.blocked_peer_id, action.is_unblock
             );
-            {
-                let mut seen = seen_messages.lock().await;
-                if !seen.insert(msg_id) {
-                    return Ok(None);
-                }
+            if !mark_seen(seen_messages, msg_id).await {
+                return Ok(None);
             }
 
             tracing::info!(
@@ -430,43 +493,7 @@ async fn handle_message(
     }
 }
 
-fn apply_profile_update(database: &Database, update: ProfileUpdate) -> Result<()> {
-    let service = PeerService::new(database.clone());
-    service.update_profile(&update.peer_id, update.avatar_file_id, update.username, update.bio, update.agents, update.x25519_pubkey)?;
-    Ok(())
-}
-
-fn apply_reaction_update(database: &Database, reaction: ReactionUpdate) -> Result<()> {
-    database.with_repositories(|repos| {
-        if reaction.is_removal {
-            // Remove reaction
-            tracing::info!(
-                post_id = %reaction.post_id,
-                reactor = %reaction.reactor_peer_id,
-                emoji = %reaction.emoji,
-                "👎 removing reaction via gossip"
-            );
-            repos.reactions().remove(&reaction.post_id, &reaction.reactor_peer_id, &reaction.emoji)?;
-        } else {
-            // Add reaction
-            tracing::info!(
-                post_id = %reaction.post_id,
-                reactor = %reaction.reactor_peer_id,
-                emoji = %reaction.emoji,
-                "👍 adding reaction via gossip"
-            );
-            let record = ReactionRecord {
-                post_id: reaction.post_id,
-                reactor_peer_id: reaction.reactor_peer_id,
-                emoji: reaction.emoji,
-                signature: reaction.signature,
-                created_at: reaction.created_at,
-            };
-            repos.reactions().add(&record)?;
-        }
-        Ok(())
-    })
-}
+// apply_profile_update lives in `profile` submodule; apply_reaction_update in `reactions`.
 
 /// Stores just the announcement metadata - the full thread will be downloaded on-demand
 fn apply_thread_announcement(
@@ -538,7 +565,7 @@ fn apply_thread_announcement(
             let stub_peer = PeerRecord {
                 id: announcement.creator_peer_id.clone(),
                 alias: None,
-                username: Some(format!("Unknown ({})", &announcement.creator_peer_id[..8])),
+                username: Some(format!("Unknown ({})", crate::utils::short_id(&announcement.creator_peer_id, 8))),
                 bio: None,
                 friendcode: None,
                 iroh_peer_id: None,
@@ -667,7 +694,7 @@ fn apply_thread_snapshot(
                 let stub_peer = crate::database::models::PeerRecord {
                     id: author_id.clone(),
                     alias: None,
-                    username: Some(format!("Unknown ({})", &author_id[..8])),
+                    username: Some(format!("Unknown ({})", crate::utils::short_id(&author_id, 8))),
                     bio: None,
                     friendcode: None,
                     iroh_peer_id: None,
@@ -1066,7 +1093,7 @@ async fn apply_post_update(database: &Database, ip_blocker: &IpBlockChecker, pos
                 let stub_peer = crate::database::models::PeerRecord {
                     id: author_id.clone(),
                     alias: None,
-                    username: Some(format!("Unknown ({})", &author_id[..8])),
+                    username: Some(format!("Unknown ({})", crate::utils::short_id(&author_id, 8))),
                     bio: None,
                     friendcode: post.author_friendcode.clone(),
                     iroh_peer_id: friend_iroh_peer_id,
@@ -1118,440 +1145,6 @@ where
     Ok(())
 }
 
-fn apply_file_announcement(
-    database: &Database,
-    paths: &GraphchanPaths,
-    announcement: &FileAnnouncement,
-) -> Result<bool> {
-    tracing::debug!(
-        file_id = %announcement.id,
-        post_id = %announcement.post_id,
-        "processing FileAnnouncement"
-    );
-
-    // Check if we already have this file locally (we're the uploader)
-    let existing_record = database.with_repositories(|repos| {
-        repos.files().get(&announcement.id)
-    })?;
-
-    if let Some(existing) = &existing_record {
-        let existing_path = paths.base.join(&existing.path);
-        if existing_path.exists() {
-            tracing::info!(
-                file_id = %announcement.id,
-                path = %existing_path.display(),
-                "✅ file already exists locally, skipping announcement"
-            );
-            return Ok(false); // We already have it, no need to fetch
-        } else {
-            tracing::debug!(
-                file_id = %announcement.id,
-                path = %existing_path.display(),
-                "file record exists but file missing on disk, will re-download"
-            );
-        }
-    }
-
-    // We don't have it locally, create/update record for download
-    let relative_path = format!("files/downloads/{}", announcement.id);
-    let record = FileRecord {
-        id: announcement.id.clone(),
-        post_id: announcement.post_id.clone(),
-        path: relative_path,
-        original_name: announcement.original_name.clone(),
-        mime: announcement.mime.clone(),
-        blob_id: announcement.blob_id.clone(),
-        size_bytes: announcement.size_bytes,
-        checksum: announcement.checksum.clone(),
-        ticket: announcement.ticket.as_ref().map(|t| t.to_string()),
-        download_status: Some("pending".to_string()),
-    };
-
-    // Always persist the file record, even if post doesn't exist yet
-    // The post might arrive in a later message (ThreadSnapshot)
-    let post_exists = database.with_repositories(|repos| {
-        repos.files().upsert(&record)?;
-        tracing::debug!(file_id = %announcement.id, "file record upserted");
-        Ok(repos.posts().get(&announcement.post_id)?.is_some())
-    })?;
-
-    if !post_exists {
-        tracing::info!(
-            file_id = %announcement.id,
-            post_id = %announcement.post_id,
-            "💾 saved file record, but post doesn't exist yet - will download when post arrives"
-        );
-        return Ok(false); // Don't download yet, wait for post
-    }
-
-    let needs_fetch = file_needs_download(paths, &record)?;
-    tracing::debug!(
-        file_id = %announcement.id,
-        needs_fetch = %needs_fetch,
-        size_bytes = ?record.size_bytes,
-        "checked if download needed"
-    );
-
-    // Don't auto-download large files - let user manually trigger download
-    const AUTO_DOWNLOAD_SIZE_LIMIT: i64 = 50 * 1024 * 1024; // 50MB
-    if needs_fetch {
-        if let Some(size) = record.size_bytes {
-            tracing::debug!(
-                file_id = %announcement.id,
-                size_bytes = size,
-                size_mb = size / (1024 * 1024),
-                limit_mb = AUTO_DOWNLOAD_SIZE_LIMIT / (1024 * 1024),
-                "checking if file exceeds auto-download limit"
-            );
-            if size > AUTO_DOWNLOAD_SIZE_LIMIT {
-                tracing::info!(
-                    file_id = %announcement.id,
-                    size_mb = size / (1024 * 1024),
-                    "⏸️ file exceeds auto-download limit ({}MB), marked as pending for manual download",
-                    AUTO_DOWNLOAD_SIZE_LIMIT / (1024 * 1024)
-                );
-                ensure_download_directory(paths)?;
-                return Ok(false); // Don't auto-download, user must trigger manually
-            } else {
-                tracing::debug!(
-                    file_id = %announcement.id,
-                    size_mb = size / (1024 * 1024),
-                    "file is small enough for auto-download"
-                );
-            }
-        } else {
-            tracing::warn!(
-                file_id = %announcement.id,
-                "no size information available, allowing auto-download"
-            );
-        }
-        ensure_download_directory(paths)?;
-    }
-    Ok(needs_fetch)
-}
-
-fn ensure_download_directory(paths: &GraphchanPaths) -> Result<()> {
-    if !paths.downloads_dir.exists() {
-        fs::create_dir_all(&paths.downloads_dir)?;
-    }
-    Ok(())
-}
-
-fn file_needs_download(paths: &GraphchanPaths, record: &FileRecord) -> Result<bool> {
-    let absolute = paths.base.join(&record.path);
-    if !absolute.exists() {
-        return Ok(true);
-    }
-    if let Some(expected) = record.size_bytes {
-        let actual = absolute.metadata()?.len() as i64;
-        if actual != expected {
-            return Ok(true);
-        }
-    }
-    if let Some(expected_checksum) = &record.checksum {
-        let data = fs::read(&absolute)?;
-        let mut hasher = Hasher::new();
-        hasher.update(&data);
-        let hash = hasher.finalize();
-        let actual = format!("blake3:{}", hash.to_hex());
-        if &actual != expected_checksum {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn respond_with_file_chunk(
-    database: &Database,
-    paths: &GraphchanPaths,
-    publisher: &Sender<NetworkEvent>,
-    peer_id: &str,
-    request: FileRequest,
-) -> Result<()> {
-    let record = match database.with_repositories(|repos| repos.files().get(&request.file_id))? {
-        Some(record) => record,
-        None => {
-            tracing::debug!(file_id = %request.file_id, "ignoring file request for unknown file");
-            return Ok(());
-        }
-    };
-    let absolute = paths.base.join(&record.path);
-    if !absolute.exists() {
-        tracing::warn!(file_id = %request.file_id, path = %absolute.display(), "⚠️  requested file missing locally");
-        return Ok(());
-    }
-    let data = fs::read(&absolute)
-        .with_context(|| format!("failed to read file for chunk: {}", absolute.display()))?;
-    tracing::info!(file_id = %request.file_id, size = %data.len(), "sending file chunk");
-    let chunk_payload = EventPayload::FileChunk(FileChunk {
-        file_id: request.file_id,
-        data,
-        eof: true,
-    });
-
-    let direct_sender = publisher.clone();
-    let direct_peer = peer_id.to_string();
-    let direct_payload = chunk_payload.clone();
-    tokio::spawn(async move {
-        if let Err(err) = direct_sender
-            .send(NetworkEvent::Direct {
-                peer_id: direct_peer,
-                payload: direct_payload,
-            })
-            .await
-        {
-            tracing::warn!(error = ?err, "failed to enqueue direct file chunk");
-        }
-    });
-
-    let broadcast_sender = publisher.clone();
-    tokio::spawn(async move {
-        if let Err(err) = broadcast_sender
-            .send(NetworkEvent::Broadcast(chunk_payload))
-            .await
-        {
-            tracing::warn!(error = ?err, "failed to broadcast file chunk");
-        }
-    });
-    Ok(())
-}
-
-fn apply_file_chunk(database: &Database, paths: &GraphchanPaths, chunk: FileChunk) -> Result<()> {
-    if !chunk.eof {
-        tracing::debug!(file_id = %chunk.file_id, "received non-eof chunk; treating as complete file");
-    }
-    ensure_download_directory(paths)?;
-    let relative = format!("files/downloads/{}", chunk.file_id);
-    let absolute = paths.base.join(&relative);
-
-    fs::write(&absolute, &chunk.data)
-        .with_context(|| format!("failed to write file chunk to {}", absolute.display()))?;
-    tracing::debug!(file_id = %chunk.file_id, path = %absolute.display(), "wrote file chunk to disk");
-
-    let mut hasher = Hasher::new();
-    hasher.update(&chunk.data);
-    let digest = hasher.finalize();
-    let checksum = format!("blake3:{}", digest.to_hex());
-    let blob_id = digest.to_hex().to_string();
-    let size = chunk.data.len() as i64;
-
-    let known = database.with_repositories(|repos| {
-        if let Some(mut record) = repos.files().get(&chunk.file_id)? {
-            record.path = relative.clone();
-            record.size_bytes = Some(size);
-            record.checksum = Some(checksum.clone());
-            if record.blob_id.is_none() {
-                record.blob_id = Some(blob_id.clone());
-            }
-            repos.files().upsert(&record)?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    })?;
-
-    if !known {
-        tracing::warn!(file_id = %chunk.file_id, "⚠️  file chunk arrived without prior announcement; discarding");
-        let _ = fs::remove_file(&absolute);
-        return Ok(());
-    }
-
-    tracing::info!(file_id = %chunk.file_id, size_bytes = size, "✅ file downloaded and saved successfully");
-    Ok(())
-}
-
-async fn download_thread_snapshot_blob(
-    database: &Database,
-    paths: &GraphchanPaths,
-    publisher: &Sender<NetworkEvent>,
-    ticket: BlobTicket,
-    blob_store: FsStore,
-    endpoint: Arc<Endpoint>,
-) -> Result<()> {
-    let hash = ticket.hash();
-
-    tracing::info!(
-        hash = %hash.fmt_short(),
-        peer = %ticket.addr().id.fmt_short(),
-        "downloading thread snapshot blob via iroh-blobs"
-    );
-
-    // Check if blob already exists
-    let has_blob = blob_store.has(hash).await.context("failed to check blob existence")?;
-
-    if !has_blob {
-        // Download the blob from the peer
-        let downloader = blob_store.downloader(&endpoint);
-        downloader
-            .download(hash, Some(ticket.addr().id))
-            .await
-            .context("failed to download thread snapshot blob")?;
-
-        tracing::info!(
-            hash = %hash.fmt_short(),
-            "✅ thread snapshot blob downloaded successfully"
-        );
-    } else {
-        tracing::info!("thread snapshot blob already in local store");
-    }
-
-    // Read blob bytes - we need to export to a temporary file first
-    let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join(format!("thread_snapshot_{}.json", hash.fmt_short()));
-
-    blob_store
-        .export(hash, temp_path.clone())
-        .await
-        .context("failed to export thread snapshot blob")?;
-
-    let blob_bytes = std::fs::read(&temp_path)
-        .context("failed to read exported thread snapshot")?;
-
-    // Clean up temp file
-    let _ = std::fs::remove_file(&temp_path);
-
-    // Deserialize the ThreadDetails
-    let snapshot: crate::threading::ThreadDetails = serde_json::from_slice(&blob_bytes)
-        .context("failed to deserialize thread snapshot from blob")?;
-
-    tracing::info!(
-        thread_id = %snapshot.thread.id,
-        post_count = snapshot.posts.len(),
-        "deserialized thread snapshot from blob - applying to database"
-    );
-
-    // Apply the snapshot using existing logic
-    apply_thread_snapshot(database, paths, publisher, snapshot, &blob_store, &endpoint)
-}
-
-async fn download_blob(
-    database: &Database,
-    paths: &GraphchanPaths,
-    announcement: &FileAnnouncement,
-    blob_store: FsStore,
-    endpoint: Arc<Endpoint>,
-) -> Result<()> {
-    let ticket = announcement
-        .ticket
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("no ticket in announcement"))?;
-
-    tracing::info!(
-        file_id = %announcement.id,
-        hash = %ticket.hash().fmt_short(),
-        "downloading blob via iroh-blobs"
-    );
-
-    let hash = ticket.hash();
-
-    // Check if blob already exists in local store
-    let has_blob = blob_store.has(hash).await.context("failed to check blob existence")?;
-
-    if !has_blob {
-        tracing::info!(
-            file_id = %announcement.id,
-            hash = %hash.fmt_short(),
-            peer = %ticket.addr().id.fmt_short(),
-            "blob not in local store - downloading from peer"
-        );
-
-        // Set status to 'downloading'
-        let db_clone = database.clone();
-        let file_id = announcement.id.clone();
-        let _ = tokio::task::spawn_blocking(move || -> Result<()> {
-            db_clone.with_repositories(|repos| {
-                if let Ok(Some(mut record)) = repos.files().get(&file_id) {
-                    record.download_status = Some("downloading".to_string());
-                    let _ = repos.files().upsert(&record);
-                }
-                Ok(())
-            })
-        }).await;
-
-        // Download the blob from the peer specified in the ticket
-        let downloader = blob_store.downloader(&endpoint);
-        let download_result = downloader
-            .download(hash, Some(ticket.addr().id))
-            .await;
-
-        match download_result {
-            Ok(_) => {
-                tracing::info!(
-                    file_id = %announcement.id,
-                    hash = %hash.fmt_short(),
-                    "✅ blob downloaded successfully from peer"
-                );
-            }
-            Err(err) => {
-                tracing::warn!(
-                    file_id = %announcement.id,
-                    hash = %hash.fmt_short(),
-                    error = ?err,
-                    "⚠️  failed to download blob from peer"
-                );
-
-                // Set status to 'failed'
-                let db_clone = database.clone();
-                let file_id = announcement.id.clone();
-                let _ = tokio::task::spawn_blocking(move || -> Result<()> {
-                    db_clone.with_repositories(|repos| {
-                        if let Ok(Some(mut record)) = repos.files().get(&file_id) {
-                            record.download_status = Some("failed".to_string());
-                            let _ = repos.files().upsert(&record);
-                        }
-                        Ok(())
-                    })
-                }).await;
-
-                return Err(err.into());
-            }
-        }
-    } else {
-        tracing::info!(file_id = %announcement.id, "blob already in local store");
-    }
-
-    // Export blob to file
-    ensure_download_directory(paths)?;
-    let relative_path = format!("files/downloads/{}", announcement.id);
-    let absolute_path = paths.base.join(&relative_path);
-
-    // Read blob data and write to file - use export method
-    blob_store
-        .export(hash, absolute_path.clone())
-        .await
-        .with_context(|| format!("failed to export blob to {}", absolute_path.display()))?;
-
-    let data = fs::read(&absolute_path)
-        .with_context(|| format!("failed to read exported file {}", absolute_path.display()))?;
-
-    tracing::info!(
-        file_id = %announcement.id,
-        path = %absolute_path.display(),
-        size = %data.len(),
-        "blob exported to file"
-    );
-
-    // Update database record
-    let size = data.len() as i64;
-    let mut hasher = Hasher::new();
-    hasher.update(&data);
-    let digest = hasher.finalize();
-    let checksum = format!("blake3:{}", digest.to_hex());
-
-    database.with_repositories(|repos| {
-        if let Some(mut record) = repos.files().get(&announcement.id)? {
-            record.path = relative_path;
-            record.size_bytes = Some(size);
-            record.checksum = Some(checksum);
-            record.download_status = Some("available".to_string());
-            repos.files().upsert(&record)?;
-            tracing::info!(file_id = %announcement.id, "✅ blob downloaded and saved successfully");
-        }
-        Ok(())
-    })?;
-
-    Ok(())
-}
 
 /// Public wrapper for applying a downloaded thread to the database.
 /// This is called when a user manually downloads a thread on-demand.
@@ -1628,9 +1221,11 @@ mod tests {
                     id: "post-1".into(),
                     thread_id: "thread-1".into(),
                     author_peer_id: None,
+                    author_friendcode: None,
                     body: "body".into(),
                     created_at: now_utc_iso(),
                     updated_at: None,
+                    metadata: None,
                 })?;
                 Ok(())
             })
@@ -1653,6 +1248,7 @@ mod tests {
         let ingest_paths = paths.clone();
         let ingest_publisher = publisher_tx.clone();
         let ingest_endpoint = endpoint.clone();
+        let ingest_ip_blocker = crate::blocking::IpBlockChecker::new(database.clone());
         let handle = tokio::spawn(async move {
             run_ingest_loop(
                 ingest_db,
@@ -1662,6 +1258,8 @@ mod tests {
                 blob_store,
                 ingest_endpoint,
                 "test-peer-id".to_string(),
+                ingest_ip_blocker,
+                crate::events::EventPublisher::new(),
             )
             .await;
         });

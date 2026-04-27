@@ -307,9 +307,11 @@ mod tests {
                     id: "post-1".into(),
                     thread_id: "thread-1".into(),
                     author_peer_id: None,
+                    author_friendcode: None,
                     body: "body".into(),
                     created_at: now_utc_iso(),
                     updated_at: None,
+                    metadata: None,
                 })?;
                 Ok(())
             })
@@ -381,9 +383,11 @@ mod tests {
                     id: "post-1".into(),
                     thread_id: "thread-1".into(),
                     author_peer_id: None,
+                    author_friendcode: None,
                     body: "body".into(),
                     created_at: now_utc_iso(),
                     updated_at: None,
+                    metadata: None,
                 })?;
                 Ok(())
             })
@@ -461,9 +465,11 @@ mod tests {
                     id: "post-1".into(),
                     thread_id: "thread-1".into(),
                     author_peer_id: None,
+                    author_friendcode: None,
                     body: "body".into(),
                     created_at: now_utc_iso(),
                     updated_at: None,
+                    metadata: None,
                 })?;
                 Ok(())
             })

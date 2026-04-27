@@ -2,9 +2,10 @@ pub mod models;
 pub mod repositories;
 
 use crate::config::GraphchanPaths;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
+use parking_lot::Mutex;
 use rusqlite::{params, Connection, OptionalExtension};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 pub(crate) const MIGRATIONS: &str = r#"
     PRAGMA journal_mode = WAL;
@@ -113,6 +114,79 @@ pub(crate) const MIGRATIONS: &str = r#"
     -- ALTER TABLE posts ADD COLUMN author_friendcode TEXT;
 "#;
 
+/// Versioned schema migrations. Each entry is run in order and recorded in
+/// the `schema_migrations` table; a migration with a given version is run at
+/// most once per database. New schema changes should append a new entry here
+/// rather than spawning another `ensure_*` helper.
+///
+/// Existing entries must NEVER be edited — they may have run on databases in
+/// the wild. To fix a botched migration, append a new one that repairs the
+/// state.
+const VERSIONED_MIGRATIONS: &[(i64, &str)] = &[
+    // version 1: marker so future migrations have somewhere to land. The
+    // base schema is still defined in MIGRATIONS above for first-run
+    // bootstrapping; any column or table added after the initial release
+    // belongs in a new entry here.
+    (1, "-- baseline (no-op; pre-existing schema lives in MIGRATIONS)"),
+];
+
+/// Idempotent column-add helper. Probes the table's columns and runs
+/// `ALTER TABLE ... ADD COLUMN ...` only if the column is missing. Used by
+/// the legacy `ensure_*` helpers to keep them defensive and short.
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    type_and_default: &str,
+) -> Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let already_present = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|name| name.eq_ignore_ascii_case(column));
+    drop(stmt);
+    if !already_present {
+        conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {type_and_default}"),
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+fn run_versioned_migrations(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        )
+        "#,
+    )?;
+
+    let current: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+            [],
+            |row| row.get(0),
+        )
+        .context("read schema_migrations max version")?;
+
+    for (version, sql) in VERSIONED_MIGRATIONS {
+        if *version <= current {
+            continue;
+        }
+        tracing::info!(version, "applying schema migration");
+        conn.execute_batch(sql)
+            .with_context(|| format!("schema migration {version} failed"))?;
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+            params![version, crate::utils::now_utc_iso()],
+        )?;
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct Database {
     conn: Arc<Mutex<Connection>>,
@@ -136,6 +210,11 @@ impl Database {
     pub fn ensure_migrations(&self) -> Result<bool> {
         self.with_conn(|conn| {
             conn.execute_batch(MIGRATIONS)?;
+            run_versioned_migrations(conn)?;
+            // Legacy ensure_* helpers still run for backwards compat with
+            // existing on-disk databases that pre-date the schema_migrations
+            // table. Each is defensively idempotent (column-existence check
+            // then ALTER) so re-running on a migrated DB is a no-op.
             self.ensure_node_identity_schema_locked(conn)?;
             self.ensure_files_schema_locked(conn)?;
             self.ensure_avatar_column(conn)?;
@@ -194,49 +273,12 @@ impl Database {
     }
 
     fn ensure_node_identity_schema_locked(&self, conn: &Connection) -> Result<()> {
-        let mut stmt = conn.prepare("PRAGMA table_info(node_identity)")?;
-        let mut has_friendcode = false;
-        let rows = stmt.query_map([], |row| {
-            let name: String = row.get(1)?;
-            Ok(name)
-        })?;
-        for row in rows {
-            let name = row?;
-            if name.eq_ignore_ascii_case("friendcode") {
-                has_friendcode = true;
-                break;
-            }
-        }
-        if !has_friendcode {
-            conn.execute("ALTER TABLE node_identity ADD COLUMN friendcode TEXT", [])?;
-        }
-        Ok(())
+        add_column_if_missing(conn, "node_identity", "friendcode", "TEXT")
     }
 
     fn ensure_files_schema_locked(&self, conn: &Connection) -> Result<()> {
-        let mut stmt = conn.prepare("PRAGMA table_info(files)")?;
-        let mut has_original_name = false;
-        let mut has_ticket = false;
-        let rows = stmt.query_map([], |row| {
-            let name: String = row.get(1)?;
-            Ok(name)
-        })?;
-        for row in rows {
-            let name = row?;
-            if name.eq_ignore_ascii_case("original_name") {
-                has_original_name = true;
-            }
-            if name.eq_ignore_ascii_case("ticket") {
-                has_ticket = true;
-            }
-        }
-        if !has_original_name {
-            conn.execute("ALTER TABLE files ADD COLUMN original_name TEXT", [])?;
-        }
-        if !has_ticket {
-            conn.execute("ALTER TABLE files ADD COLUMN ticket TEXT", [])?;
-        }
-        Ok(())
+        add_column_if_missing(conn, "files", "original_name", "TEXT")?;
+        add_column_if_missing(conn, "files", "ticket", "TEXT")
     }
 
     pub fn upsert_local_peer(
@@ -280,10 +322,7 @@ impl Database {
     where
         F: FnOnce(&Connection) -> Result<T>,
     {
-        let guard = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow!("database mutex poisoned"))?;
+        let guard = self.conn.lock();
         f(&guard)
     }
 
@@ -314,220 +353,48 @@ impl Database {
     }
 
     fn ensure_avatar_column(&self, conn: &Connection) -> Result<()> {
-        let mut stmt = conn.prepare("PRAGMA table_info(peers)")?;
-        let mut has_avatar = false;
-        let rows = stmt.query_map([], |row| {
-            let name: String = row.get(1)?;
-            Ok(name)
-        })?;
-        for row in rows {
-            let name = row?;
-            if name.eq_ignore_ascii_case("avatar_file_id") {
-                has_avatar = true;
-                break;
-            }
-        }
-        if !has_avatar {
-            conn.execute("ALTER TABLE peers ADD COLUMN avatar_file_id TEXT", [])?;
-        }
-        Ok(())
+        add_column_if_missing(conn, "peers", "avatar_file_id", "TEXT")
     }
 
     fn ensure_peer_profile_columns(&self, conn: &Connection) -> Result<()> {
-        let mut stmt = conn.prepare("PRAGMA table_info(peers)")?;
-        let mut has_username = false;
-        let mut has_bio = false;
-        let rows = stmt.query_map([], |row| {
-            let name: String = row.get(1)?;
-            Ok(name)
-        })?;
-        for row in rows {
-            let name = row?;
-            if name.eq_ignore_ascii_case("username") {
-                has_username = true;
-            }
-            if name.eq_ignore_ascii_case("bio") {
-                has_bio = true;
-            }
-        }
-        if !has_username {
-            conn.execute("ALTER TABLE peers ADD COLUMN username TEXT", [])?;
-        }
-        if !has_bio {
-            conn.execute("ALTER TABLE peers ADD COLUMN bio TEXT", [])?;
-        }
-        Ok(())
+        add_column_if_missing(conn, "peers", "username", "TEXT")?;
+        add_column_if_missing(conn, "peers", "bio", "TEXT")
     }
 
     fn ensure_thread_blob_ticket_column(&self, conn: &Connection) -> Result<()> {
-        let mut stmt = conn.prepare("PRAGMA table_info(threads)")?;
-        let mut has_blob_ticket = false;
-        let rows = stmt.query_map([], |row| {
-            let name: String = row.get(1)?;
-            Ok(name)
-        })?;
-        for row in rows {
-            if row? == "blob_ticket" {
-                has_blob_ticket = true;
-                break;
-            }
-        }
-        if !has_blob_ticket {
-            conn.execute("ALTER TABLE threads ADD COLUMN blob_ticket TEXT", [])?;
-        }
-        Ok(())
+        add_column_if_missing(conn, "threads", "blob_ticket", "TEXT")
     }
 
     fn ensure_thread_hash_column(&self, conn: &Connection) -> Result<()> {
-        let mut stmt = conn.prepare("PRAGMA table_info(threads)")?;
-        let mut has_thread_hash = false;
-        let rows = stmt.query_map([], |row| {
-            let name: String = row.get(1)?;
-            Ok(name)
-        })?;
-        for row in rows {
-            if row? == "thread_hash" {
-                has_thread_hash = true;
-                break;
-            }
-        }
-        if !has_thread_hash {
-            conn.execute("ALTER TABLE threads ADD COLUMN thread_hash TEXT", [])?;
-        }
-        Ok(())
+        add_column_if_missing(conn, "threads", "thread_hash", "TEXT")
     }
 
     fn ensure_x25519_pubkey_column(&self, conn: &Connection) -> Result<()> {
-        let mut stmt = conn.prepare("PRAGMA table_info(peers)")?;
-        let mut has_x25519_pubkey = false;
-        let rows = stmt.query_map([], |row| {
-            let name: String = row.get(1)?;
-            Ok(name)
-        })?;
-        for row in rows {
-            let name = row?;
-            if name.eq_ignore_ascii_case("x25519_pubkey") {
-                has_x25519_pubkey = true;
-                break;
-            }
-        }
-        if !has_x25519_pubkey {
-            conn.execute("ALTER TABLE peers ADD COLUMN x25519_pubkey TEXT", [])?;
-        }
-        Ok(())
+        add_column_if_missing(conn, "peers", "x25519_pubkey", "TEXT")
     }
 
     fn ensure_thread_visibility_columns(&self, conn: &Connection) -> Result<()> {
-        let mut stmt = conn.prepare("PRAGMA table_info(threads)")?;
-        let mut has_visibility = false;
-        let mut has_topic_secret = false;
-        let rows = stmt.query_map([], |row| {
-            let name: String = row.get(1)?;
-            Ok(name)
-        })?;
-        for row in rows {
-            let name = row?;
-            if name.eq_ignore_ascii_case("visibility") {
-                has_visibility = true;
-            }
-            if name.eq_ignore_ascii_case("topic_secret") {
-                has_topic_secret = true;
-            }
-        }
-        if !has_visibility {
-            // Default to 'social' for existing threads
-            conn.execute("ALTER TABLE threads ADD COLUMN visibility TEXT DEFAULT 'social'", [])?;
-        }
-        if !has_topic_secret {
-            conn.execute("ALTER TABLE threads ADD COLUMN topic_secret TEXT", [])?;
-        }
-        Ok(())
+        add_column_if_missing(conn, "threads", "visibility", "TEXT DEFAULT 'social'")?;
+        add_column_if_missing(conn, "threads", "topic_secret", "TEXT")
     }
 
     fn ensure_thread_sync_status_column(&self, conn: &Connection) -> Result<()> {
-        let mut stmt = conn.prepare("PRAGMA table_info(threads)")?;
-        let mut has_sync_status = false;
-        let rows = stmt.query_map([], |row| {
-            let name: String = row.get(1)?;
-            Ok(name)
-        })?;
-        for row in rows {
-            let name = row?;
-            if name.eq_ignore_ascii_case("sync_status") {
-                has_sync_status = true;
-                break;
-            }
-        }
-        if !has_sync_status {
-            // Default to 'downloaded' for existing threads (they're already in DB)
-            // Values: 'announced', 'downloading', 'downloaded', 'failed'
-            conn.execute("ALTER TABLE threads ADD COLUMN sync_status TEXT DEFAULT 'downloaded'", [])?;
-        }
-        Ok(())
+        // Values: 'announced', 'downloading', 'downloaded', 'failed'.
+        // Default 'downloaded' so existing rows are treated as already in sync.
+        add_column_if_missing(conn, "threads", "sync_status", "TEXT DEFAULT 'downloaded'")
     }
 
     fn ensure_file_download_status_column(&self, conn: &Connection) -> Result<()> {
-        let mut stmt = conn.prepare("PRAGMA table_info(files)")?;
-        let mut has_download_status = false;
-        let rows = stmt.query_map([], |row| {
-            let name: String = row.get(1)?;
-            Ok(name)
-        })?;
-        for row in rows {
-            let name = row?;
-            if name.eq_ignore_ascii_case("download_status") {
-                has_download_status = true;
-                break;
-            }
-        }
-        if !has_download_status {
-            // Default to 'available' for existing files (they're already in DB and physically present)
-            // Values: 'pending', 'downloading', 'available', 'failed'
-            conn.execute("ALTER TABLE files ADD COLUMN download_status TEXT DEFAULT 'available'", [])?;
-        }
-        Ok(())
+        // Values: 'pending', 'downloading', 'available', 'failed'.
+        add_column_if_missing(conn, "files", "download_status", "TEXT DEFAULT 'available'")
     }
 
     fn ensure_post_metadata_column(&self, conn: &Connection) -> Result<()> {
-        let mut stmt = conn.prepare("PRAGMA table_info(posts)")?;
-        let mut has_metadata = false;
-        let rows = stmt.query_map([], |row| {
-            let name: String = row.get(1)?;
-            Ok(name)
-        })?;
-        for row in rows {
-            let name = row?;
-            if name.eq_ignore_ascii_case("metadata") {
-                has_metadata = true;
-                break;
-            }
-        }
-        if !has_metadata {
-            // JSON-encoded PostMetadata (agent info, client info, etc.)
-            conn.execute("ALTER TABLE posts ADD COLUMN metadata TEXT", [])?;
-        }
-        Ok(())
+        add_column_if_missing(conn, "posts", "metadata", "TEXT")
     }
 
     fn ensure_peers_agents_column(&self, conn: &Connection) -> Result<()> {
-        let mut stmt = conn.prepare("PRAGMA table_info(peers)")?;
-        let mut has_agents = false;
-        let rows = stmt.query_map([], |row| {
-            let name: String = row.get(1)?;
-            Ok(name)
-        })?;
-        for row in rows {
-            let name = row?;
-            if name.eq_ignore_ascii_case("agents") {
-                has_agents = true;
-                break;
-            }
-        }
-        if !has_agents {
-            // JSON-encoded Vec<String> of authorized agent names
-            conn.execute("ALTER TABLE peers ADD COLUMN agents TEXT", [])?;
-        }
-        Ok(())
+        add_column_if_missing(conn, "peers", "agents", "TEXT")
     }
 
     fn ensure_thread_member_keys_table(&self, conn: &Connection) -> Result<()> {
@@ -829,33 +696,9 @@ impl Database {
     }
 
     fn ensure_import_tracking(&self, conn: &Connection) -> Result<()> {
-        // Add source tracking columns to threads table
-        let mut stmt = conn.prepare("PRAGMA table_info(threads)")?;
-        let mut has_source_url = false;
-        let mut has_source_platform = false;
-        let mut has_last_refreshed_at = false;
-        let rows = stmt.query_map([], |row| {
-            let name: String = row.get(1)?;
-            Ok(name)
-        })?;
-        for row in rows {
-            let name = row?;
-            match name.as_str() {
-                "source_url" => has_source_url = true,
-                "source_platform" => has_source_platform = true,
-                "last_refreshed_at" => has_last_refreshed_at = true,
-                _ => {}
-            }
-        }
-        if !has_source_url {
-            conn.execute("ALTER TABLE threads ADD COLUMN source_url TEXT", [])?;
-        }
-        if !has_source_platform {
-            conn.execute("ALTER TABLE threads ADD COLUMN source_platform TEXT", [])?;
-        }
-        if !has_last_refreshed_at {
-            conn.execute("ALTER TABLE threads ADD COLUMN last_refreshed_at TEXT", [])?;
-        }
+        add_column_if_missing(conn, "threads", "source_url", "TEXT")?;
+        add_column_if_missing(conn, "threads", "source_platform", "TEXT")?;
+        add_column_if_missing(conn, "threads", "last_refreshed_at", "TEXT")?;
 
         // Create import_post_map table for dedup during refresh
         conn.execute(

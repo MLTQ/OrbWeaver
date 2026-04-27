@@ -15,6 +15,26 @@ use crate::models::{
 static SHARED_CLIENT: OnceLock<Client> = OnceLock::new();
 static UPLOAD_CLIENT: OnceLock<Client> = OnceLock::new();
 
+/// Build the default header map, injecting `Authorization: Bearer <token>`
+/// when `GRAPHCHAN_API_TOKEN` is set. The desktop launcher mints a per-launch
+/// token and exports it in the environment before spawning the GUI.
+fn default_headers() -> reqwest::header::HeaderMap {
+    let mut headers = reqwest::header::HeaderMap::new();
+    if let Ok(token) = std::env::var("GRAPHCHAN_API_TOKEN") {
+        let trimmed = token.trim();
+        if !trimmed.is_empty() {
+            if let Ok(value) =
+                reqwest::header::HeaderValue::from_str(&format!("Bearer {trimmed}"))
+            {
+                let mut value = value;
+                value.set_sensitive(true);
+                headers.insert(reqwest::header::AUTHORIZATION, value);
+            }
+        }
+    }
+    headers
+}
+
 pub fn get_shared_client() -> Result<&'static Client> {
     if let Some(client) = SHARED_CLIENT.get() {
         return Ok(client);
@@ -23,6 +43,7 @@ pub fn get_shared_client() -> Result<&'static Client> {
     let client = Client::builder()
         .timeout(Duration::from_secs(30))
         .user_agent("GraphchanFrontend/0.1")
+        .default_headers(default_headers())
         .build()
         .context("failed to build HTTP client")?;
 
@@ -39,6 +60,7 @@ pub fn get_upload_client() -> Result<&'static Client> {
     let client = Client::builder()
         .timeout(Duration::from_secs(3600)) // 1 hour for large file uploads
         .user_agent("GraphchanFrontend/0.1")
+        .default_headers(default_headers())
         .build()
         .context("failed to build upload HTTP client")?;
 

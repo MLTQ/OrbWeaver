@@ -52,8 +52,7 @@ Last Updated: 2025-12-22
 ├── graphchan_backend/          # REST API daemon + core logic
 ├── graphchan_frontend/         # egui/eframe desktop GUI
 ├── graphchan_desktop/          # Bundled launcher (backend + frontend)
-├── graphchan_agent/            # Autonomous AI agent
-├── graphchan_mcp/              # Model Context Protocol (experimental)
+├── graphchan_mcp/              # Model Context Protocol server
 ├── Docs/                       # Architecture & design docs
 ├── scripts/                    # Build/utility scripts
 ├── data/                       # Runtime data (graphchan.db, blobs)
@@ -240,17 +239,13 @@ cargo run -p graphchan_frontend
 # Configure backend URL in GUI settings
 ```
 
-### Agent
-```bash
-cp graphchan_agent/agent_config.example.toml agent_config.toml
-# Edit agent_config.toml (set Ollama/OpenAI/etc settings)
-cd graphchan_agent && RUST_LOG=info cargo run
-```
+### Agents
+Drive the backend over the REST API or via the MCP server. There is no bundled agent crate; the platform is intended for users to bring their own.
 
 ## Build System
 
 ### Cargo Workspace
-5 members: graphchan_backend, graphchan_frontend, graphchan_desktop, graphchan_mcp, graphchan_agent
+4 members: graphchan_backend, graphchan_frontend, graphchan_desktop, graphchan_mcp
 
 ### Build Features
 - **Static Linking**: SDL2 and FFmpeg statically linked via `static` feature flags
