@@ -24,22 +24,25 @@ impl<'conn> super::ThreadMemberKeyRepository for SqliteThreadMemberKeyRepository
     }
 
     fn get(&self, thread_id: &str, member_peer_id: &str) -> Result<Option<ThreadMemberKey>> {
-        let result = self.conn.query_row(
-            r#"
+        let result = self
+            .conn
+            .query_row(
+                r#"
             SELECT thread_id, member_peer_id, wrapped_key_ciphertext, wrapped_key_nonce
             FROM thread_member_keys
             WHERE thread_id = ?1 AND member_peer_id = ?2
             "#,
-            params![thread_id, member_peer_id],
-            |row| {
-                Ok(ThreadMemberKey {
-                    thread_id: row.get(0)?,
-                    member_peer_id: row.get(1)?,
-                    wrapped_key_ciphertext: row.get(2)?,
-                    wrapped_key_nonce: row.get(3)?,
-                })
-            },
-        ).optional()?;
+                params![thread_id, member_peer_id],
+                |row| {
+                    Ok(ThreadMemberKey {
+                        thread_id: row.get(0)?,
+                        member_peer_id: row.get(1)?,
+                        wrapped_key_ciphertext: row.get(2)?,
+                        wrapped_key_nonce: row.get(3)?,
+                    })
+                },
+            )
+            .optional()?;
         Ok(result)
     }
 

@@ -8,7 +8,9 @@ use serde::Deserialize;
 use tokio::time::sleep;
 
 use crate::api::AppState;
-use crate::database::repositories::{ImportPostMapRepository, PostRepository, ThreadRepository, TopicRepository};
+use crate::database::repositories::{
+    ImportPostMapRepository, PostRepository, ThreadRepository, TopicRepository,
+};
 use crate::files::{FileService, SaveFileInput};
 use crate::threading::{CreatePostInput, CreateThreadInput, ThreadDetails, ThreadService};
 
@@ -16,7 +18,6 @@ use crate::threading::{CreatePostInput, CreateThreadInput, ThreadDetails, Thread
 struct FourChanThreadResponse {
     posts: Vec<FourChanPost>,
 }
-
 
 #[derive(Deserialize)]
 struct FourChanPost {
@@ -38,11 +39,16 @@ struct FourChanPost {
     _fsize: Option<u64>,
 }
 
-pub async fn import_fourchan_thread(state: &AppState, url: &str, topics: Vec<String>) -> Result<String> {
+pub async fn import_fourchan_thread(
+    state: &AppState,
+    url: &str,
+    topics: Vec<String>,
+) -> Result<String> {
     let (board, thread_id) = parse_thread_url(url)?;
     let api_url = format!("https://a.4cdn.org/{}/thread/{}.json", board, thread_id);
 
-    let response = state.http_client
+    let response = state
+        .http_client
         .get(&api_url)
         .send()
         .await
@@ -50,7 +56,10 @@ pub async fn import_fourchan_thread(state: &AppState, url: &str, topics: Vec<Str
         .error_for_status()
         .context("4chan API returned an error status")?;
 
-    let thread: FourChanThreadResponse = response.json().await.context("failed to decode thread JSON")?;
+    let thread: FourChanThreadResponse = response
+        .json()
+        .await
+        .context("failed to decode thread JSON")?;
     let mut posts_iter = thread.posts.into_iter();
     let first_post = posts_iter.next().context("thread contains no posts")?;
 
@@ -91,7 +100,9 @@ pub async fn import_fourchan_thread(state: &AppState, url: &str, topics: Vec<Str
     if !topics.is_empty() {
         state.database.with_repositories(|repos| {
             for topic_id in &topics {
-                repos.topics().add_thread_topic(&graph_thread_id, topic_id)?;
+                repos
+                    .topics()
+                    .add_thread_topic(&graph_thread_id, topic_id)?;
             }
             Ok(())
         })?;
@@ -99,7 +110,9 @@ pub async fn import_fourchan_thread(state: &AppState, url: &str, topics: Vec<Str
 
     // Store source info for refresh support
     state.database.with_repositories(|repos| {
-        repos.threads().set_source_info(&graph_thread_id, url, "4chan")
+        repos
+            .threads()
+            .set_source_info(&graph_thread_id, url, "4chan")
     })?;
 
     let mut id_map: HashMap<u64, String> = HashMap::new();
@@ -108,7 +121,11 @@ pub async fn import_fourchan_thread(state: &AppState, url: &str, topics: Vec<Str
 
         // Store import mapping for OP
         state.database.with_repositories(|repos| {
-            repos.import_post_map().insert(&graph_thread_id, &first_post.no.to_string(), &created_op.id)
+            repos.import_post_map().insert(
+                &graph_thread_id,
+                &first_post.no.to_string(),
+                &created_op.id,
+            )
         })?;
 
         // Upload first post's image if it has one
@@ -117,8 +134,17 @@ pub async fn import_fourchan_thread(state: &AppState, url: &str, topics: Vec<Str
                 .filename
                 .clone()
                 .unwrap_or_else(|| format!("{}", tim));
-            if let Err(e) =
-                download_and_save_image(&file_service, &state, &board, tim, ext, &filename, &created_op.id, &graph_thread_id).await
+            if let Err(e) = download_and_save_image(
+                &file_service,
+                &state,
+                &board,
+                tim,
+                ext,
+                &filename,
+                &created_op.id,
+                &graph_thread_id,
+            )
+            .await
             {
                 tracing::warn!("Failed to upload OP image: {}", e);
             }
@@ -162,14 +188,25 @@ pub async fn import_fourchan_thread(state: &AppState, url: &str, topics: Vec<Str
 
         // Store import mapping for dedup during refresh
         state.database.with_repositories(|repos| {
-            repos.import_post_map().insert(&graph_thread_id, &post.no.to_string(), &created.id)
+            repos
+                .import_post_map()
+                .insert(&graph_thread_id, &post.no.to_string(), &created.id)
         })?;
 
         // Upload post's image if it has one (still broadcasts FileAvailable individually)
         if let (Some(tim), Some(ext)) = (post.tim, post.ext.as_ref()) {
             let filename = post.filename.clone().unwrap_or_else(|| format!("{}", tim));
-            if let Err(e) =
-                download_and_save_image(&file_service, &state, &board, tim, ext, &filename, &created.id, &graph_thread_id).await
+            if let Err(e) = download_and_save_image(
+                &file_service,
+                &state,
+                &board,
+                tim,
+                ext,
+                &filename,
+                &created.id,
+                &graph_thread_id,
+            )
+            .await
             {
                 tracing::warn!("Failed to upload image for post {}: {}", post.no, e);
             }
@@ -177,9 +214,9 @@ pub async fn import_fourchan_thread(state: &AppState, url: &str, topics: Vec<Str
     }
 
     // Set initial last_refreshed_at
-    state.database.with_repositories(|repos| {
-        repos.threads().set_last_refreshed(&graph_thread_id)
-    })?;
+    state
+        .database
+        .with_repositories(|repos| repos.threads().set_last_refreshed(&graph_thread_id))?;
 
     // After importing all posts, broadcast a thread announcement
     let complete_details = thread_service
@@ -187,10 +224,11 @@ pub async fn import_fourchan_thread(state: &AppState, url: &str, topics: Vec<Str
         .context("failed to get imported thread for announcement")?
         .context("imported thread not found")?;
 
-    if let Err(err) = state.network.publish_thread_announcement(
-        complete_details,
-        &state.identity.gpg_fingerprint
-    ).await {
+    if let Err(err) = state
+        .network
+        .publish_thread_announcement(complete_details, &state.identity.gpg_fingerprint)
+        .await
+    {
         tracing::warn!(
             error = ?err,
             thread_id = %graph_thread_id,
@@ -215,12 +253,13 @@ async fn download_and_save_image(
     let image_url = format!("https://i.4cdn.org/{}/{}{}", board, tim, ext);
 
     tracing::info!("Downloading image: {}", image_url);
-    
+
     // Add delay to avoid hitting 4chan's rate limit (429 errors)
     // Increased to 1500ms to be safer
     sleep(Duration::from_millis(1500)).await;
 
-    let response = state.http_client
+    let response = state
+        .http_client
         .get(&image_url)
         .send()
         .await
@@ -230,7 +269,10 @@ async fn download_and_save_image(
         anyhow::bail!("failed to download image: status {}", response.status());
     }
 
-    let bytes = response.bytes().await.context("failed to read image bytes")?;
+    let bytes = response
+        .bytes()
+        .await
+        .context("failed to read image bytes")?;
 
     // Determine MIME type from extension
     let mime = match ext {
@@ -249,14 +291,16 @@ async fn download_and_save_image(
     };
 
     let mut file_view = file_service.save_post_file(save_input).await?;
-    
+
     // Publish file availability
     let ticket = file_view
         .blob_id
         .as_deref()
         .and_then(|blob| state.network.make_blob_ticket(blob));
-    file_view.ticket = ticket.as_ref().map(|t: &iroh_blobs::ticket::BlobTicket| t.to_string());
-    
+    file_view.ticket = ticket
+        .as_ref()
+        .map(|t: &iroh_blobs::ticket::BlobTicket| t.to_string());
+
     let announcement = crate::network::FileAnnouncement {
         id: file_view.id.clone(),
         post_id: file_view.post_id.clone(),
@@ -268,11 +312,11 @@ async fn download_and_save_image(
         blob_id: file_view.blob_id.clone(),
         ticket: ticket.clone(),
     };
-    
+
     if let Err(err) = file_service.persist_ticket(&file_view.id, ticket.as_ref()) {
         tracing::warn!(error = ?err, file_id = %file_view.id, "failed to persist blob ticket");
     }
-    
+
     if let Err(err) = state.network.publish_file_available(announcement).await {
         tracing::warn!(
             error = ?err,
@@ -330,7 +374,11 @@ fn parse_thread_url(url: &str) -> Result<(String, String)> {
     Ok((board, thread_id))
 }
 
-pub async fn import_reddit_thread(state: &AppState, url: &str, topics: Vec<String>) -> Result<String> {
+pub async fn import_reddit_thread(
+    state: &AppState,
+    url: &str,
+    topics: Vec<String>,
+) -> Result<String> {
     // 1. Validate and format URL
     // Ensure it ends with .json
     let json_url = if url.contains("?") {
@@ -344,7 +392,8 @@ pub async fn import_reddit_thread(state: &AppState, url: &str, topics: Vec<Strin
 
     // 2. Fetch Data
     let client = &state.http_client;
-    let response = client.get(&json_url)
+    let response = client
+        .get(&json_url)
         .header("User-Agent", "Graphchan/0.1.0") // Reddit requires a User-Agent
         .send()
         .await
@@ -354,10 +403,15 @@ pub async fn import_reddit_thread(state: &AppState, url: &str, topics: Vec<Strin
         anyhow::bail!("Reddit API error: {}", response.status());
     }
 
-    let json: serde_json::Value = response.json().await.context("failed to parse Reddit JSON")?;
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .context("failed to parse Reddit JSON")?;
 
     // Reddit returns an array of two listings: [Thread Listing, Comment Listing]
-    let listings = json.as_array().ok_or_else(|| anyhow::anyhow!("Invalid Reddit response format"))?;
+    let listings = json
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("Invalid Reddit response format"))?;
     if listings.len() < 2 {
         anyhow::bail!("Incomplete Reddit response");
     }
@@ -368,16 +422,18 @@ pub async fn import_reddit_thread(state: &AppState, url: &str, topics: Vec<Strin
     // 3. Create Thread
     let thread_service = ThreadService::new(state.database.clone());
     let mut thread_input = CreateThreadInput::default();
-    
-    let title = thread_data["title"].as_str().unwrap_or("Untitled Reddit Thread");
+
+    let title = thread_data["title"]
+        .as_str()
+        .unwrap_or("Untitled Reddit Thread");
     let selftext = thread_data["selftext"].as_str().unwrap_or("");
     let author = thread_data["author"].as_str().unwrap_or("unknown");
     let subreddit = thread_data["subreddit"].as_str().unwrap_or("unknown");
-    
+
     thread_input.title = format!("[r/{}] {}", subreddit, title);
     thread_input.body = Some(format!("**Author:** u/{}\n\n{}", author, selftext));
     thread_input.creator_peer_id = Some(state.identity.gpg_fingerprint.clone());
-    
+
     if let Some(created_utc) = thread_data["created_utc"].as_f64() {
         let dt = chrono::DateTime::from_timestamp(created_utc as i64, 0).unwrap_or_default();
         thread_input.created_at = Some(dt.to_rfc3339());
@@ -392,7 +448,9 @@ pub async fn import_reddit_thread(state: &AppState, url: &str, topics: Vec<Strin
     if !topics.is_empty() {
         state.database.with_repositories(|repos| {
             for topic_id in &topics {
-                repos.topics().add_thread_topic(&graph_thread_id, topic_id)?;
+                repos
+                    .topics()
+                    .add_thread_topic(&graph_thread_id, topic_id)?;
             }
             Ok(())
         })?;
@@ -400,21 +458,35 @@ pub async fn import_reddit_thread(state: &AppState, url: &str, topics: Vec<Strin
 
     // Store source info for refresh support
     state.database.with_repositories(|repos| {
-        repos.threads().set_source_info(&graph_thread_id, url, "reddit")
+        repos
+            .threads()
+            .set_source_info(&graph_thread_id, url, "reddit")
     })?;
 
     // Handle OP Image/Media if present
     if let Some(url) = thread_data["url"].as_str() {
-        if url.ends_with(".jpg") || url.ends_with(".png") || url.ends_with(".gif") || url.ends_with(".jpeg") {
-             // Download image
-             let file_service = FileService::new(
+        if url.ends_with(".jpg")
+            || url.ends_with(".png")
+            || url.ends_with(".gif")
+            || url.ends_with(".jpeg")
+        {
+            // Download image
+            let file_service = FileService::new(
                 state.database.clone(),
                 state.config.paths.clone(),
                 state.config.file.clone(),
                 state.blobs.clone(),
             );
-            if let Err(e) = download_and_save_reddit_image(&file_service, state, url, &details.posts[0].id, &graph_thread_id).await {
-                 tracing::warn!("Failed to download Reddit OP image: {}", e);
+            if let Err(e) = download_and_save_reddit_image(
+                &file_service,
+                state,
+                url,
+                &details.posts[0].id,
+                &graph_thread_id,
+            )
+            .await
+            {
+                tracing::warn!("Failed to download Reddit OP image: {}", e);
             }
         }
     }
@@ -429,7 +501,7 @@ pub async fn import_reddit_thread(state: &AppState, url: &str, topics: Vec<Strin
 
     while let Some((parent_id, child)) = comment_queue.pop() {
         let data = &child["data"];
-        
+
         // Skip "more" objects (pagination)
         if child["kind"].as_str() == Some("more") {
             continue;
@@ -437,7 +509,7 @@ pub async fn import_reddit_thread(state: &AppState, url: &str, topics: Vec<Strin
 
         let body = data["body"].as_str().unwrap_or("[deleted]");
         let author = data["author"].as_str().unwrap_or("[deleted]");
-        
+
         let mut payload = CreatePostInput::default();
         payload.thread_id = graph_thread_id.clone();
         payload.body = format!("**u/{}**\n\n{}", author, body);
@@ -445,8 +517,8 @@ pub async fn import_reddit_thread(state: &AppState, url: &str, topics: Vec<Strin
         payload.parent_post_ids = vec![parent_id.clone()];
 
         if let Some(created_utc) = data["created_utc"].as_f64() {
-             let dt = chrono::DateTime::from_timestamp(created_utc as i64, 0).unwrap_or_default();
-             payload.created_at = Some(dt.to_rfc3339());
+            let dt = chrono::DateTime::from_timestamp(created_utc as i64, 0).unwrap_or_default();
+            payload.created_at = Some(dt.to_rfc3339());
         }
 
         if let Ok(created) = thread_service.create_post(payload) {
@@ -462,16 +534,19 @@ pub async fn import_reddit_thread(state: &AppState, url: &str, topics: Vec<Strin
     }
 
     // Set initial last_refreshed_at
-    state.database.with_repositories(|repos| {
-        repos.threads().set_last_refreshed(&graph_thread_id)
-    })?;
+    state
+        .database
+        .with_repositories(|repos| repos.threads().set_last_refreshed(&graph_thread_id))?;
 
     // Broadcast
-    let complete_details = thread_service.get_thread(&graph_thread_id)?.context("thread not found")?;
-    if let Err(err) = state.network.publish_thread_announcement(
-        complete_details,
-        &state.identity.gpg_fingerprint
-    ).await {
+    let complete_details = thread_service
+        .get_thread(&graph_thread_id)?
+        .context("thread not found")?;
+    if let Err(err) = state
+        .network
+        .publish_thread_announcement(complete_details, &state.identity.gpg_fingerprint)
+        .await
+    {
         tracing::warn!("failed to broadcast thread announcement: {}", err);
     }
 
@@ -487,14 +562,18 @@ async fn download_and_save_reddit_image(
 ) -> Result<()> {
     let response = state.http_client.get(url).send().await?;
     let bytes = response.bytes().await?;
-    
+
     let filename = url.split('/').last().unwrap_or("image.jpg");
     // Remove query params if any
     let filename = filename.split('?').next().unwrap_or("image.jpg");
-    
-    let mime = if filename.ends_with(".png") { "image/png" } 
-               else if filename.ends_with(".gif") { "image/gif" }
-               else { "image/jpeg" };
+
+    let mime = if filename.ends_with(".png") {
+        "image/png"
+    } else if filename.ends_with(".gif") {
+        "image/gif"
+    } else {
+        "image/jpeg"
+    };
 
     let save_input = SaveFileInput {
         post_id: post_id.to_string(),
@@ -504,14 +583,16 @@ async fn download_and_save_reddit_image(
     };
 
     let mut file_view = file_service.save_post_file(save_input).await?;
-    
+
     // Publish file availability
     let ticket = file_view
         .blob_id
         .as_deref()
         .and_then(|blob| state.network.make_blob_ticket(blob));
-    file_view.ticket = ticket.as_ref().map(|t: &iroh_blobs::ticket::BlobTicket| t.to_string());
-    
+    file_view.ticket = ticket
+        .as_ref()
+        .map(|t: &iroh_blobs::ticket::BlobTicket| t.to_string());
+
     let announcement = crate::network::FileAnnouncement {
         id: file_view.id.clone(),
         post_id: file_view.post_id.clone(),
@@ -523,11 +604,11 @@ async fn download_and_save_reddit_image(
         blob_id: file_view.blob_id.clone(),
         ticket: ticket.clone(),
     };
-    
+
     if let Err(err) = file_service.persist_ticket(&file_view.id, ticket.as_ref()) {
         tracing::warn!("failed to persist blob ticket: {}", err);
     }
-    
+
     if let Err(err) = state.network.publish_file_available(announcement).await {
         tracing::warn!("failed to publish file availability: {}", err);
     }
@@ -539,16 +620,16 @@ async fn download_and_save_reddit_image(
 /// Only adds new posts that weren't present during the initial import.
 pub async fn refresh_thread(state: &AppState, thread_id: &str) -> Result<ThreadDetails> {
     // Load thread record to get source info
-    let thread_record = state.database.with_repositories(|repos| {
-        repos.threads().get(thread_id)
-    })?.context("thread not found")?;
+    let thread_record = state
+        .database
+        .with_repositories(|repos| repos.threads().get(thread_id))?
+        .context("thread not found")?;
 
-    let source_url = thread_record.source_url
+    let source_url = thread_record
+        .source_url
         .as_deref()
         .context("thread has no source URL — it was not imported")?;
-    let source_platform = thread_record.source_platform
-        .as_deref()
-        .unwrap_or("4chan");
+    let source_platform = thread_record.source_platform.as_deref().unwrap_or("4chan");
 
     match source_platform {
         "4chan" => refresh_fourchan_thread(state, thread_id, source_url).await,
@@ -557,11 +638,19 @@ pub async fn refresh_thread(state: &AppState, thread_id: &str) -> Result<ThreadD
     }
 }
 
-async fn refresh_fourchan_thread(state: &AppState, thread_id: &str, source_url: &str) -> Result<ThreadDetails> {
+async fn refresh_fourchan_thread(
+    state: &AppState,
+    thread_id: &str,
+    source_url: &str,
+) -> Result<ThreadDetails> {
     let (board, _chan_thread_id) = parse_thread_url(source_url)?;
-    let api_url = format!("https://a.4cdn.org/{}/thread/{}.json", board, _chan_thread_id);
+    let api_url = format!(
+        "https://a.4cdn.org/{}/thread/{}.json",
+        board, _chan_thread_id
+    );
 
-    let response = state.http_client
+    let response = state
+        .http_client
         .get(&api_url)
         .send()
         .await
@@ -569,12 +658,15 @@ async fn refresh_fourchan_thread(state: &AppState, thread_id: &str, source_url: 
         .error_for_status()
         .context("4chan API returned an error status")?;
 
-    let thread: FourChanThreadResponse = response.json().await.context("failed to decode thread JSON")?;
+    let thread: FourChanThreadResponse = response
+        .json()
+        .await
+        .context("failed to decode thread JSON")?;
 
     // Load existing import mapping
-    let existing_map: HashMap<String, String> = state.database.with_repositories(|repos| {
-        repos.import_post_map().get_map(thread_id)
-    })?;
+    let existing_map: HashMap<String, String> = state
+        .database
+        .with_repositories(|repos| repos.import_post_map().get_map(thread_id))?;
 
     let thread_service = ThreadService::new(state.database.clone());
     let file_service = FileService::new(
@@ -606,7 +698,11 @@ async fn refresh_fourchan_thread(state: &AppState, thread_id: &str, source_url: 
 
         let mut payload = CreatePostInput::default();
         payload.thread_id = thread_id.to_string();
-        payload.body = if body.is_empty() { "[image]".to_string() } else { body };
+        payload.body = if body.is_empty() {
+            "[image]".to_string()
+        } else {
+            body
+        };
         payload.author_peer_id = Some(state.identity.gpg_fingerprint.clone());
         payload.parent_post_ids = extract_references(post.com.as_deref(), &id_map);
 
@@ -623,16 +719,31 @@ async fn refresh_fourchan_thread(state: &AppState, thread_id: &str, source_url: 
 
         // Store mapping
         state.database.with_repositories(|repos| {
-            repos.import_post_map().insert(thread_id, &ext_id, &created.id)
+            repos
+                .import_post_map()
+                .insert(thread_id, &ext_id, &created.id)
         })?;
 
         // Download image if present
         if let (Some(tim), Some(ext)) = (post.tim, post.ext.as_ref()) {
             let filename = post.filename.clone().unwrap_or_else(|| format!("{}", tim));
             if let Err(e) = download_and_save_image(
-                &file_service, state, &board, tim, ext, &filename, &created.id, thread_id,
-            ).await {
-                tracing::warn!("Failed to download image for post {} during refresh: {}", post.no, e);
+                &file_service,
+                state,
+                &board,
+                tim,
+                ext,
+                &filename,
+                &created.id,
+                thread_id,
+            )
+            .await
+            {
+                tracing::warn!(
+                    "Failed to download image for post {} during refresh: {}",
+                    post.no,
+                    e
+                );
             }
         }
 
@@ -640,23 +751,25 @@ async fn refresh_fourchan_thread(state: &AppState, thread_id: &str, source_url: 
     }
 
     // Update last_refreshed_at
-    state.database.with_repositories(|repos| {
-        repos.threads().set_last_refreshed(thread_id)
-    })?;
+    state
+        .database
+        .with_repositories(|repos| repos.threads().set_last_refreshed(thread_id))?;
 
     tracing::info!(thread_id = %thread_id, new_posts, "thread refresh complete");
 
     // Get and re-broadcast updated thread
-    let thread_service = ThreadService::with_file_paths(state.database.clone(), state.config.paths.clone());
+    let thread_service =
+        ThreadService::with_file_paths(state.database.clone(), state.config.paths.clone());
     let complete_details = thread_service
         .get_thread(thread_id)?
         .context("thread not found after refresh")?;
 
     if new_posts > 0 {
-        if let Err(err) = state.network.publish_thread_announcement(
-            complete_details.clone(),
-            &state.identity.gpg_fingerprint,
-        ).await {
+        if let Err(err) = state
+            .network
+            .publish_thread_announcement(complete_details.clone(), &state.identity.gpg_fingerprint)
+            .await
+        {
             tracing::warn!(error = ?err, "failed to re-broadcast thread after refresh");
         }
     }
@@ -664,7 +777,11 @@ async fn refresh_fourchan_thread(state: &AppState, thread_id: &str, source_url: 
     Ok(complete_details)
 }
 
-async fn refresh_reddit_thread(state: &AppState, thread_id: &str, source_url: &str) -> Result<ThreadDetails> {
+async fn refresh_reddit_thread(
+    state: &AppState,
+    thread_id: &str,
+    source_url: &str,
+) -> Result<ThreadDetails> {
     let json_url = if source_url.contains("?") {
         let parts: Vec<&str> = source_url.split('?').collect();
         format!("{}.json?{}", parts[0], parts[1])
@@ -672,7 +789,9 @@ async fn refresh_reddit_thread(state: &AppState, thread_id: &str, source_url: &s
         format!("{}.json", source_url)
     };
 
-    let response = state.http_client.get(&json_url)
+    let response = state
+        .http_client
+        .get(&json_url)
         .header("User-Agent", "Graphchan/0.1.0")
         .send()
         .await
@@ -682,8 +801,13 @@ async fn refresh_reddit_thread(state: &AppState, thread_id: &str, source_url: &s
         anyhow::bail!("Reddit API error: {}", response.status());
     }
 
-    let json: serde_json::Value = response.json().await.context("failed to parse Reddit JSON")?;
-    let listings = json.as_array().ok_or_else(|| anyhow::anyhow!("Invalid Reddit response format"))?;
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .context("failed to parse Reddit JSON")?;
+    let listings = json
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("Invalid Reddit response format"))?;
     if listings.len() < 2 {
         anyhow::bail!("Incomplete Reddit response");
     }
@@ -691,9 +815,9 @@ async fn refresh_reddit_thread(state: &AppState, thread_id: &str, source_url: &s
     let comments_data = &listings[1]["data"]["children"];
 
     // Load existing import mapping
-    let existing_map: HashMap<String, String> = state.database.with_repositories(|repos| {
-        repos.import_post_map().get_map(thread_id)
-    })?;
+    let existing_map: HashMap<String, String> = state
+        .database
+        .with_repositories(|repos| repos.import_post_map().get_map(thread_id))?;
 
     let thread_service = ThreadService::new(state.database.clone());
 
@@ -701,7 +825,9 @@ async fn refresh_reddit_thread(state: &AppState, thread_id: &str, source_url: &s
     let op_post_id = state.database.with_repositories(|repos| {
         // Get first post in thread
         let posts = repos.posts().list_for_thread(thread_id)?;
-        posts.first().map(|p| p.id.clone())
+        posts
+            .first()
+            .map(|p| p.id.clone())
             .context("no OP post found for thread")
     })?;
 
@@ -738,14 +864,17 @@ async fn refresh_reddit_thread(state: &AppState, thread_id: &str, source_url: &s
             payload.parent_post_ids = vec![parent_id.clone()];
 
             if let Some(created_utc) = data["created_utc"].as_f64() {
-                let dt = chrono::DateTime::from_timestamp(created_utc as i64, 0).unwrap_or_default();
+                let dt =
+                    chrono::DateTime::from_timestamp(created_utc as i64, 0).unwrap_or_default();
                 payload.created_at = Some(dt.to_rfc3339());
             }
 
             match thread_service.create_post(payload) {
                 Ok(created) => {
                     state.database.with_repositories(|repos| {
-                        repos.import_post_map().insert(thread_id, &ext_id, &created.id)
+                        repos
+                            .import_post_map()
+                            .insert(thread_id, &ext_id, &created.id)
                     })?;
                     new_posts += 1;
                     created.id
@@ -768,23 +897,25 @@ async fn refresh_reddit_thread(state: &AppState, thread_id: &str, source_url: &s
     }
 
     // Update last_refreshed_at
-    state.database.with_repositories(|repos| {
-        repos.threads().set_last_refreshed(thread_id)
-    })?;
+    state
+        .database
+        .with_repositories(|repos| repos.threads().set_last_refreshed(thread_id))?;
 
     tracing::info!(thread_id = %thread_id, new_posts, "reddit thread refresh complete");
 
     // Get and re-broadcast updated thread
-    let thread_service = ThreadService::with_file_paths(state.database.clone(), state.config.paths.clone());
+    let thread_service =
+        ThreadService::with_file_paths(state.database.clone(), state.config.paths.clone());
     let complete_details = thread_service
         .get_thread(thread_id)?
         .context("thread not found after refresh")?;
 
     if new_posts > 0 {
-        if let Err(err) = state.network.publish_thread_announcement(
-            complete_details.clone(),
-            &state.identity.gpg_fingerprint,
-        ).await {
+        if let Err(err) = state
+            .network
+            .publish_thread_announcement(complete_details.clone(), &state.identity.gpg_fingerprint)
+            .await
+        {
             tracing::warn!(error = ?err, "failed to re-broadcast thread after refresh");
         }
     }

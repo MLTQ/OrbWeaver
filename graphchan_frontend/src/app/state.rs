@@ -1,13 +1,12 @@
-use std::collections::{HashMap, HashSet};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-
+use std::collections::{HashMap, HashSet};
 
 use eframe::egui;
 
 use crate::models::{
-    ConversationView, DirectMessageView, FileResponse, PeerView, ReactionsResponse, SearchResultView, ThreadDetails,
-    ThreadSummary,
+    ConversationView, DirectMessageView, FileResponse, PeerView, ReactionsResponse,
+    SearchResultView, ThreadDetails, ThreadSummary,
 };
 
 #[derive(Default)]
@@ -38,7 +37,7 @@ pub struct ImporterState {
 
 pub enum ViewState {
     Catalog,
-    Messages,  // List of all DM conversations (formerly "Private Threads" in catalog)
+    Messages, // List of all DM conversations (formerly "Private Threads" in catalog)
     Thread(ThreadState),
     Following,
     FollowingCatalog(PeerView),
@@ -73,9 +72,9 @@ pub struct AvatarCropperState {
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 pub enum NavigationMode {
     #[default]
-    None,      // No navigation used yet - default to reply
-    Parent,    // User navigated parents (u, o, p, i)
-    Reply,     // User navigated replies (j, l, ;, k)
+    None, // No navigation used yet - default to reply
+    Parent, // User navigated parents (u, o, p, i)
+    Reply,  // User navigated replies (j, l, ;, k)
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -99,15 +98,15 @@ pub struct ThreadState {
     pub chronological_nodes: HashMap<String, GraphNode>,
     pub sugiyama_nodes: HashMap<String, GraphNode>,
     pub radial_nodes: HashMap<String, RadialNode>,
-    pub radial_rotation: f32,        // Current rotation angle (radians) for "table spin" effect
+    pub radial_rotation: f32, // Current rotation angle (radians) for "table spin" effect
     pub radial_target_rotation: f32, // Target rotation for smooth animation
-    pub sim_running: bool,      // True = simulation active, False = paused
+    pub sim_running: bool,    // True = simulation active, False = paused
     #[serde(skip)]
     pub secondary_selected_post: Option<String>,
     #[serde(skip)]
     pub parent_cursor_index: usize, // Index into parent_post_ids of selected post
     #[serde(skip)]
-    pub reply_cursor_index: usize,  // Index into replies of selected post
+    pub reply_cursor_index: usize, // Index into replies of selected post
     #[serde(skip)]
     pub last_navigation_mode: NavigationMode, // Track which navigation was last used
     pub selected_post: Option<String>,
@@ -160,9 +159,9 @@ pub struct GraphNode {
 
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct RadialNode {
-    pub ring: usize,           // Which ring (0 = center/OP, 1 = first ring, etc.)
-    pub angle: f32,            // Angular position on the ring (radians)
-    pub size: egui::Vec2,      // Node size for rendering
+    pub ring: usize,      // Which ring (0 = center/OP, 1 = first ring, etc.)
+    pub angle: f32,       // Angular position on the ring (radians)
+    pub size: egui::Vec2, // Node size for rendering
 }
 
 #[derive(Clone)]

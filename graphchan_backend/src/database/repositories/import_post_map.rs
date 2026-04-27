@@ -19,9 +19,9 @@ impl<'conn> super::ImportPostMapRepository for SqliteImportPostMapRepository<'co
     }
 
     fn get_map(&self, thread_id: &str) -> Result<HashMap<String, String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT external_id, internal_id FROM import_post_map WHERE thread_id = ?1",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT external_id, internal_id FROM import_post_map WHERE thread_id = ?1")?;
         let rows = stmt.query_map(params![thread_id], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;

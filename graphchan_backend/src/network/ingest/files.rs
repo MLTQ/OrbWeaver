@@ -32,7 +32,8 @@ pub(super) fn apply_file_announcement(
         "processing FileAnnouncement"
     );
 
-    let existing_record = database.with_repositories(|repos| repos.files().get(&announcement.id))?;
+    let existing_record =
+        database.with_repositories(|repos| repos.files().get(&announcement.id))?;
 
     if let Some(existing) = &existing_record {
         let existing_path = paths.base.join(&existing.path);

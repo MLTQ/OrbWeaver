@@ -48,7 +48,10 @@ impl AuthConfig {
                     .collect::<Vec<_>>()
             })
             .filter(|v: &Vec<String>| !v.is_empty());
-        Self { token, cors_origins }
+        Self {
+            token,
+            cors_origins,
+        }
     }
 }
 

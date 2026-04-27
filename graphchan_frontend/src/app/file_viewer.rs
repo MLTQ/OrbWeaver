@@ -44,7 +44,10 @@ impl FileType {
             m if m.starts_with("text/") => FileType::Text,
             "application/json" | "application/javascript" | "application/xml" => FileType::Text,
             "application/pdf" => FileType::Pdf,
-            "application/zip" | "application/x-tar" | "application/gzip" | "application/x-7z-compressed" => FileType::Archive,
+            "application/zip"
+            | "application/x-tar"
+            | "application/gzip"
+            | "application/x-7z-compressed" => FileType::Archive,
             _ => FileType::Other,
         }
     }
@@ -122,7 +125,8 @@ impl GraphchanApp {
         self.image_loading.insert(file_id.to_string());
 
         // Add to queue
-        self.download_queue.push_back((file_id.to_string(), url.to_string()));
+        self.download_queue
+            .push_back((file_id.to_string(), url.to_string()));
 
         // Process queue
         self.process_download_queue();
@@ -158,7 +162,9 @@ impl GraphchanApp {
         file: &crate::models::FileResponse,
         base_url: &str,
     ) {
-        let file_type = file.mime.as_ref()
+        let file_type = file
+            .mime
+            .as_ref()
             .map(|m| FileType::from_mime(m))
             .unwrap_or(FileType::Other);
 
@@ -185,7 +191,7 @@ impl GraphchanApp {
             let resp = ui.add(
                 egui::Image::from_texture(texture)
                     .fit_to_exact_size(size * scale)
-                    .sense(egui::Sense::click())
+                    .sense(egui::Sense::click()),
             );
             if resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -195,7 +201,9 @@ impl GraphchanApp {
             }
         } else if let Some(pending) = self.image_pending.remove(&file.id) {
             let color = egui::ColorImage::from_rgba_unmultiplied(pending.size, &pending.pixels);
-            let tex = ui.ctx().load_texture(&file.id, color, egui::TextureOptions::default());
+            let tex = ui
+                .ctx()
+                .load_texture(&file.id, color, egui::TextureOptions::default());
             self.image_textures.insert(file.id.clone(), tex.clone());
             let size = tex.size_vec2();
             let max_width = 200.0;
@@ -207,7 +215,7 @@ impl GraphchanApp {
             let resp = ui.add(
                 egui::Image::from_texture(&tex)
                     .fit_to_exact_size(size * scale)
-                    .sense(egui::Sense::click())
+                    .sense(egui::Sense::click()),
             );
             if resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -239,23 +247,38 @@ impl GraphchanApp {
 
             // File name and details
             let file_name = file.original_name.as_deref().unwrap_or("unnamed");
-            let size_str = file.size_bytes
+            let size_str = file
+                .size_bytes
                 .map(|s| format_file_size(s as u64))
                 .unwrap_or_else(|| "unknown size".to_string());
 
             // Check if downloading
             if let Some(download_state) = self.file_downloads.get(&file.id) {
                 ui.spinner();
-                ui.label(format!("{} ({}%)", file_name, (download_state.progress * 100.0) as u32));
+                ui.label(format!(
+                    "{} ({}%)",
+                    file_name,
+                    (download_state.progress * 100.0) as u32
+                ));
             } else {
                 // Clickable file name
-                let response = ui.add(egui::Label::new(
-                    egui::RichText::new(file_name).underline().color(egui::Color32::LIGHT_BLUE)
-                ).sense(egui::Sense::click()));
+                let response = ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(file_name)
+                            .underline()
+                            .color(egui::Color32::LIGHT_BLUE),
+                    )
+                    .sense(egui::Sense::click()),
+                );
 
                 if response.clicked() {
                     // Open file viewer/downloader
-                    self.open_file_viewer(&file.id, file_name, file.mime.as_deref().unwrap_or("application/octet-stream"), base_url);
+                    self.open_file_viewer(
+                        &file.id,
+                        file_name,
+                        file.mime.as_deref().unwrap_or("application/octet-stream"),
+                        base_url,
+                    );
                 }
 
                 // Show context menu on right-click
@@ -276,7 +299,13 @@ impl GraphchanApp {
         });
     }
 
-    pub(crate) fn open_file_viewer(&mut self, file_id: &str, file_name: &str, mime: &str, base_url: &str) {
+    pub(crate) fn open_file_viewer(
+        &mut self,
+        file_id: &str,
+        file_name: &str,
+        mime: &str,
+        base_url: &str,
+    ) {
         let file_type = FileType::from_mime(mime);
 
         // Create viewer state
@@ -321,12 +350,13 @@ impl GraphchanApp {
                 // Load from cache instead of downloading
                 if let Some(ctx) = &self.ctx {
                     let player_result = if let Some(audio_device) = &mut self.audio_device {
-                        Player::new(ctx, &cache_path.to_string_lossy().to_string())
-                            .and_then(|mut player| {
+                        Player::new(ctx, &cache_path.to_string_lossy().to_string()).and_then(
+                            |mut player| {
                                 // Set initial volume
                                 player.options.set_audio_volume(self.video_volume);
                                 player.with_audio(audio_device)
-                            })
+                            },
+                        )
                     } else {
                         log::warn!("No audio device available, creating player without audio");
                         Player::new(ctx, &cache_path.to_string_lossy().to_string())
@@ -360,7 +390,12 @@ impl GraphchanApp {
 
     fn download_generic_file(&mut self, file_id: &str, file_name: &str, base_url: &str) {
         let url = resolve_file_url(base_url, file_id);
-        tasks::save_file_as(self.tx.clone(), file_id.to_string(), url, file_name.to_string());
+        tasks::save_file_as(
+            self.tx.clone(),
+            file_id.to_string(),
+            url,
+            file_name.to_string(),
+        );
     }
 
     pub(super) fn render_file_viewers(&mut self, ctx: &egui::Context) {
@@ -392,14 +427,15 @@ impl GraphchanApp {
                                     ui.add(
                                         egui::TextEdit::multiline(&mut text.as_str())
                                             .desired_width(f32::INFINITY)
-                                            .code_editor()
+                                            .code_editor(),
                                     );
                                 });
                             }
                             FileViewerContent::Markdown(text) => {
                                 egui::ScrollArea::vertical().show(ui, |ui| {
                                     if let Some(cache) = &mut viewer.markdown_cache {
-                                        egui_commonmark::CommonMarkViewer::new().show(ui, cache, text);
+                                        egui_commonmark::CommonMarkViewer::new()
+                                            .show(ui, cache, text);
                                     } else {
                                         // Fallback to plain text if cache not initialized
                                         ui.label(text.as_str());
@@ -419,7 +455,13 @@ impl GraphchanApp {
                                         ui.horizontal(|ui| {
                                             let mut volume = self.video_volume;
                                             ui.label("Volume:");
-                                            if ui.add(egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false)).changed() {
+                                            if ui
+                                                .add(
+                                                    egui::Slider::new(&mut volume, 0.0..=1.0)
+                                                        .show_value(false),
+                                                )
+                                                .changed()
+                                            {
                                                 self.video_volume = volume;
                                                 // Update player volume
                                                 player.options.set_audio_volume(volume);
@@ -442,8 +484,12 @@ impl GraphchanApp {
                                 ui.vertical_centered(|ui| {
                                     ui.heading("PDF Viewer");
                                     ui.add_space(10.0);
-                                    ui.label("PDF page rendering will be added in a future update.");
-                                    ui.label("For now, you can save the PDF and open it externally.");
+                                    ui.label(
+                                        "PDF page rendering will be added in a future update.",
+                                    );
+                                    ui.label(
+                                        "For now, you can save the PDF and open it externally.",
+                                    );
                                     ui.add_space(10.0);
 
                                     // Save button

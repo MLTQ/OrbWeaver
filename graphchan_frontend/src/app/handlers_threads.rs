@@ -9,7 +9,10 @@ use super::ui::graph::build_initial_graph;
 use super::GraphchanApp;
 
 impl GraphchanApp {
-    pub(super) fn handle_threads_loaded(&mut self, result: Result<Vec<ThreadSummary>, anyhow::Error>) {
+    pub(super) fn handle_threads_loaded(
+        &mut self,
+        result: Result<Vec<ThreadSummary>, anyhow::Error>,
+    ) {
         self.threads_loading = false;
         self.is_refreshing = false;
         match result {
@@ -17,9 +20,7 @@ impl GraphchanApp {
                 threads.sort_by(|a, b| b.created_at.cmp(&a.created_at));
                 self.threads = threads;
                 if let Some(target) = self.pending_thread_focus.clone() {
-                    if let Some(summary) =
-                        self.threads.iter().find(|t| t.id == target).cloned()
-                    {
+                    if let Some(summary) = self.threads.iter().find(|t| t.id == target).cloned() {
                         self.pending_thread_focus = None;
                         self.open_thread(summary);
                     }
@@ -31,7 +32,11 @@ impl GraphchanApp {
         }
     }
 
-    pub(super) fn handle_thread_loaded(&mut self, thread_id: String, result: Result<ThreadDetails, anyhow::Error>) {
+    pub(super) fn handle_thread_loaded(
+        &mut self,
+        thread_id: String,
+        result: Result<ThreadDetails, anyhow::Error>,
+    ) {
         if let ViewState::Thread(state) = &mut self.view {
             if state.summary.id == thread_id {
                 state.is_loading = false;
@@ -42,12 +47,16 @@ impl GraphchanApp {
 
                         if is_refresh {
                             // Smooth update - only add new posts
-                            let existing_post_ids: HashSet<String> = state.details.as_ref()
+                            let existing_post_ids: HashSet<String> = state
+                                .details
+                                .as_ref()
                                 .map(|d| d.posts.iter().map(|p| p.id.clone()).collect())
                                 .unwrap_or_default();
 
                             // Find new posts
-                            let new_posts: Vec<_> = details.posts.iter()
+                            let new_posts: Vec<_> = details
+                                .posts
+                                .iter()
                                 .filter(|p| !existing_post_ids.contains(&p.id))
                                 .collect();
 
@@ -70,7 +79,7 @@ impl GraphchanApp {
                                                 size: egui::vec2(300.0, 100.0),
                                                 dragging: false,
                                                 pinned: false,
-                                            }
+                                            },
                                         );
                                     }
                                 }
@@ -121,16 +130,24 @@ impl GraphchanApp {
                         if let Some(details) = &state.details {
                             for post in &details.posts {
                                 if !post.files.is_empty() {
-                                    state.attachments.insert(post.id.clone(), post.files.clone());
+                                    state
+                                        .attachments
+                                        .insert(post.id.clone(), post.files.clone());
 
                                     // Trigger image downloads
                                     for file in &post.files {
                                         if let Some(mime) = &file.mime {
                                             if mime.starts_with("image/") {
                                                 let url = if let Some(blob_id) = &file.blob_id {
-                                                    crate::app::resolve_blob_url(&self.base_url_input, blob_id)
+                                                    crate::app::resolve_blob_url(
+                                                        &self.base_url_input,
+                                                        blob_id,
+                                                    )
                                                 } else {
-                                                    crate::app::resolve_file_url(&self.base_url_input, &file.id)
+                                                    crate::app::resolve_file_url(
+                                                        &self.base_url_input,
+                                                        &file.id,
+                                                    )
                                                 };
                                                 downloads.push((file.id.clone(), url));
                                             }
@@ -188,7 +205,11 @@ impl GraphchanApp {
         }
     }
 
-    pub(super) fn handle_post_created(&mut self, thread_id: String, result: Result<PostView, anyhow::Error>) {
+    pub(super) fn handle_post_created(
+        &mut self,
+        thread_id: String,
+        result: Result<PostView, anyhow::Error>,
+    ) {
         if let ViewState::Thread(state) = &mut self.view {
             if state.summary.id == thread_id {
                 state.new_post_sending = false;
@@ -214,15 +235,23 @@ impl GraphchanApp {
                         self.info_banner = Some("Post published".into());
                         let mut downloads = Vec::new();
                         if !post.files.is_empty() {
-                            state.attachments.insert(post.id.clone(), post.files.clone());
+                            state
+                                .attachments
+                                .insert(post.id.clone(), post.files.clone());
                             // Trigger image downloads
                             for file in &post.files {
                                 if let Some(mime) = &file.mime {
                                     if mime.starts_with("image/") {
                                         let url = if let Some(blob_id) = &file.blob_id {
-                                            crate::app::resolve_blob_url(&self.base_url_input, blob_id)
+                                            crate::app::resolve_blob_url(
+                                                &self.base_url_input,
+                                                blob_id,
+                                            )
                                         } else {
-                                            crate::app::resolve_file_url(&self.base_url_input, &file.id)
+                                            crate::app::resolve_file_url(
+                                                &self.base_url_input,
+                                                &file.id,
+                                            )
                                         };
                                         downloads.push((file.id.clone(), url));
                                     }
@@ -265,9 +294,8 @@ impl GraphchanApp {
                                     || self.image_textures.contains_key(&file.id)
                                     || self.image_errors.contains_key(&file.id);
                                 if mime.starts_with("image/") && !already_have {
-                                    let base_ref = base_url.get_or_insert_with(|| {
-                                        self.api.base_url().to_string()
-                                    });
+                                    let base_ref = base_url
+                                        .get_or_insert_with(|| self.api.base_url().to_string());
                                     let url = super::resolve_download_url(
                                         base_ref,
                                         file.download_url.as_deref(),

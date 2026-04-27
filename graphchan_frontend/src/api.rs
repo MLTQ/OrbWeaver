@@ -6,10 +6,11 @@ use reqwest::blocking::Client;
 use reqwest::Url;
 
 use crate::models::{
-    AddPeerRequest, BlockedPeerView, BlocklistEntryView, BlocklistSubscriptionView,
-    BlockPeerRequest, ConversationView, CreatePostInput, CreateThreadInput, DirectMessageView,
-    FileResponse, PeerView, PostResponse, PostView, ReactionsResponse, SearchResponse, SendDmRequest,
-    SubscribeBlocklistRequest, ThreadDetails, ThreadSummary, UnreadCountResponse,
+    AddPeerRequest, BlockPeerRequest, BlockedPeerView, BlocklistEntryView,
+    BlocklistSubscriptionView, ConversationView, CreatePostInput, CreateThreadInput,
+    DirectMessageView, FileResponse, PeerView, PostResponse, PostView, ReactionsResponse,
+    SearchResponse, SendDmRequest, SubscribeBlocklistRequest, ThreadDetails, ThreadSummary,
+    UnreadCountResponse,
 };
 
 static SHARED_CLIENT: OnceLock<Client> = OnceLock::new();
@@ -23,8 +24,7 @@ fn default_headers() -> reqwest::header::HeaderMap {
     if let Ok(token) = std::env::var("GRAPHCHAN_API_TOKEN") {
         let trimmed = token.trim();
         if !trimmed.is_empty() {
-            if let Ok(value) =
-                reqwest::header::HeaderValue::from_str(&format!("Bearer {trimmed}"))
+            if let Ok(value) = reqwest::header::HeaderValue::from_str(&format!("Bearer {trimmed}"))
             {
                 let mut value = value;
                 value.set_sensitive(true);
@@ -115,7 +115,10 @@ impl ApiClient {
         Ok(response.json()?)
     }
 
-    pub fn list_recent_posts(&self, limit: Option<usize>) -> Result<crate::models::RecentPostsResponse> {
+    pub fn list_recent_posts(
+        &self,
+        limit: Option<usize>,
+    ) -> Result<crate::models::RecentPostsResponse> {
         let mut url = self.url("/posts/recent")?;
         if let Some(lim) = limit {
             url.set_query(Some(&format!("limit={}", lim)));
@@ -136,15 +139,22 @@ impl ApiClient {
         Ok(response.json()?)
     }
 
-    pub fn create_thread(&self, input: &CreateThreadInput, files: &[std::path::PathBuf]) -> Result<ThreadDetails> {
+    pub fn create_thread(
+        &self,
+        input: &CreateThreadInput,
+        files: &[std::path::PathBuf],
+    ) -> Result<ThreadDetails> {
         let url = self.url("/threads")?;
         let mut form = reqwest::blocking::multipart::Form::new();
-        
+
         let json = serde_json::to_string(input)?;
-        form = form.part("json", reqwest::blocking::multipart::Part::text(json).mime_str("application/json")?);
-        
+        form = form.part(
+            "json",
+            reqwest::blocking::multipart::Part::text(json).mime_str("application/json")?,
+        );
+
         for path in files {
-             form = form.file("file", path)?;
+            form = form.file("file", path)?;
         }
 
         let response = self
@@ -173,14 +183,18 @@ impl ApiClient {
         let request = AddPeerRequest {
             friendcode: friendcode.to_string(),
         };
-        let response = self.client.post(url).json(&request).send()?.error_for_status()?;
+        let response = self
+            .client
+            .post(url)
+            .json(&request)
+            .send()?
+            .error_for_status()?;
         Ok(response.json()?)
     }
 
     pub fn upload_avatar(&self, path: &std::path::Path) -> Result<()> {
         let url = self.url("/identity/avatar")?;
-        let form = reqwest::blocking::multipart::Form::new()
-            .file("file", path)?;
+        let form = reqwest::blocking::multipart::Form::new().file("file", path)?;
         self.upload_client()
             .post(url)
             .multipart(form)
@@ -192,7 +206,11 @@ impl ApiClient {
     pub fn update_profile(&self, username: Option<String>, bio: Option<String>) -> Result<()> {
         let url = self.url("/identity/profile")?;
         let input = crate::models::UpdateProfileRequest { username, bio };
-        self.client.post(url).json(&input).send()?.error_for_status()?;
+        self.client
+            .post(url)
+            .json(&input)
+            .send()?
+            .error_for_status()?;
         Ok(())
     }
 
@@ -218,10 +236,11 @@ impl ApiClient {
 
     pub fn upload_file(&self, post_id: &str, path: &std::path::Path) -> Result<FileResponse> {
         let url = self.url(&format!("/posts/{post_id}/files"))?;
-        let form = reqwest::blocking::multipart::Form::new()
-            .file("file", path)?;
+        let form = reqwest::blocking::multipart::Form::new().file("file", path)?;
 
-        let response = self.upload_client().post(url)
+        let response = self
+            .upload_client()
+            .post(url)
             .multipart(form)
             .send()?
             .error_for_status()?;
@@ -278,9 +297,18 @@ impl ApiClient {
         Ok(response.json()?)
     }
 
-    pub fn post_json<T: serde::Serialize>(&self, path: &str, json: &T) -> Result<reqwest::blocking::Response> {
+    pub fn post_json<T: serde::Serialize>(
+        &self,
+        path: &str,
+        json: &T,
+    ) -> Result<reqwest::blocking::Response> {
         let url = self.url(path)?;
-        let response = self.client.post(url).json(json).send()?.error_for_status()?;
+        let response = self
+            .client
+            .post(url)
+            .json(json)
+            .send()?
+            .error_for_status()?;
         Ok(response)
     }
 
@@ -293,7 +321,11 @@ impl ApiClient {
     pub fn set_thread_ignored(&self, thread_id: &str, ignored: bool) -> Result<()> {
         let url = format!("{}/threads/{}/ignore", self.base_url(), thread_id);
         let payload = serde_json::json!({ "ignored": ignored });
-        self.client.post(&url).json(&payload).send()?.error_for_status()?;
+        self.client
+            .post(&url)
+            .json(&payload)
+            .send()?
+            .error_for_status()?;
         Ok(())
     }
 
@@ -306,14 +338,22 @@ impl ApiClient {
     pub fn add_reaction(&self, post_id: &str, emoji: &str) -> Result<()> {
         let url = format!("{}/posts/{}/react", self.base_url(), post_id);
         let payload = serde_json::json!({ "emoji": emoji });
-        self.client.post(&url).json(&payload).send()?.error_for_status()?;
+        self.client
+            .post(&url)
+            .json(&payload)
+            .send()?
+            .error_for_status()?;
         Ok(())
     }
 
     pub fn remove_reaction(&self, post_id: &str, emoji: &str) -> Result<()> {
         let url = format!("{}/posts/{}/unreact", self.base_url(), post_id);
         let payload = serde_json::json!({ "emoji": emoji });
-        self.client.post(&url).json(&payload).send()?.error_for_status()?;
+        self.client
+            .post(&url)
+            .json(&payload)
+            .send()?
+            .error_for_status()?;
         Ok(())
     }
 
@@ -337,12 +377,22 @@ impl ApiClient {
             to_peer_id: to_peer_id.to_string(),
             body: body.to_string(),
         };
-        let response = self.client.post(url).json(&request).send()?.error_for_status()?;
+        let response = self
+            .client
+            .post(url)
+            .json(&request)
+            .send()?
+            .error_for_status()?;
         Ok(response.json()?)
     }
 
     pub fn get_messages(&self, peer_id: &str, limit: usize) -> Result<Vec<DirectMessageView>> {
-        let url = format!("{}/dms/{}/messages?limit={}", self.base_url(), peer_id, limit);
+        let url = format!(
+            "{}/dms/{}/messages?limit={}",
+            self.base_url(),
+            peer_id,
+            limit
+        );
         let response = self.client.get(&url).send()?.error_for_status()?;
         Ok(response.json()?)
     }
@@ -378,7 +428,12 @@ impl ApiClient {
     pub fn block_peer(&self, peer_id: &str, reason: Option<String>) -> Result<BlockedPeerView> {
         let url = format!("{}/blocking/peers/{}", self.base_url(), peer_id);
         let request = BlockPeerRequest { reason };
-        let response = self.client.post(&url).json(&request).send()?.error_for_status()?;
+        let response = self
+            .client
+            .post(&url)
+            .json(&request)
+            .send()?
+            .error_for_status()?;
         Ok(response.json()?)
     }
 
@@ -394,9 +449,17 @@ impl ApiClient {
         Ok(response.json()?)
     }
 
-    pub fn subscribe_blocklist(&self, request: &SubscribeBlocklistRequest) -> Result<BlocklistSubscriptionView> {
+    pub fn subscribe_blocklist(
+        &self,
+        request: &SubscribeBlocklistRequest,
+    ) -> Result<BlocklistSubscriptionView> {
         let url = self.url("/blocking/blocklists")?;
-        let response = self.client.post(url).json(request).send()?.error_for_status()?;
+        let response = self
+            .client
+            .post(url)
+            .json(request)
+            .send()?
+            .error_for_status()?;
         Ok(response.json()?)
     }
 
@@ -407,7 +470,11 @@ impl ApiClient {
     }
 
     pub fn list_blocklist_entries(&self, blocklist_id: &str) -> Result<Vec<BlocklistEntryView>> {
-        let url = format!("{}/blocking/blocklists/{}/entries", self.base_url(), blocklist_id);
+        let url = format!(
+            "{}/blocking/blocklists/{}/entries",
+            self.base_url(),
+            blocklist_id
+        );
         let response = self.client.get(&url).send()?.error_for_status()?;
         Ok(response.json()?)
     }
@@ -432,7 +499,11 @@ impl ApiClient {
             ip_or_range: ip_or_range.to_string(),
             reason,
         };
-        self.client.post(url).json(&request).send()?.error_for_status()?;
+        self.client
+            .post(url)
+            .json(&request)
+            .send()?
+            .error_for_status()?;
         Ok(())
     }
 
@@ -450,13 +521,21 @@ impl ApiClient {
 
     pub fn import_peer_blocks(&self, import_text: &str) -> Result<()> {
         let url = self.url("/blocking/peers/import")?;
-        self.client.post(url).body(import_text.to_string()).send()?.error_for_status()?;
+        self.client
+            .post(url)
+            .body(import_text.to_string())
+            .send()?
+            .error_for_status()?;
         Ok(())
     }
 
     pub fn import_ip_blocks(&self, import_text: &str) -> Result<()> {
         let url = self.url("/blocking/ips/import")?;
-        self.client.post(url).body(import_text.to_string()).send()?.error_for_status()?;
+        self.client
+            .post(url)
+            .body(import_text.to_string())
+            .send()?
+            .error_for_status()?;
         Ok(())
     }
 
@@ -481,7 +560,8 @@ impl ApiClient {
     pub fn search(&self, query: &str, limit: Option<usize>) -> Result<SearchResponse> {
         let limit_param = limit.unwrap_or(50);
         let url = format!("{}/search", self.base_url());
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .query(&[("q", query), ("limit", &limit_param.to_string())])
             .send()?
@@ -499,7 +579,11 @@ impl ApiClient {
     pub fn subscribe_topic(&self, topic_id: &str) -> Result<()> {
         let url = self.url("/topics")?;
         let request = serde_json::json!({ "topic_id": topic_id });
-        self.client.post(url).json(&request).send()?.error_for_status()?;
+        self.client
+            .post(url)
+            .json(&request)
+            .send()?
+            .error_for_status()?;
         Ok(())
     }
 
@@ -518,7 +602,8 @@ impl ApiClient {
         }
 
         let url = self.url("/identity/theme_color")?;
-        let response: ThemeColorResponse = self.client.get(url).send()?.error_for_status()?.json()?;
+        let response: ThemeColorResponse =
+            self.client.get(url).send()?.error_for_status()?.json()?;
         Ok((response.r, response.g, response.b))
     }
 
@@ -531,7 +616,8 @@ impl ApiClient {
         }
 
         let url = self.url("/identity/theme_color")?;
-        self.client.post(url)
+        self.client
+            .post(url)
             .json(&SetThemeColorRequest { r, g, b })
             .send()?
             .error_for_status()?;

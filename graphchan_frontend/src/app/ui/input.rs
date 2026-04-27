@@ -1,7 +1,7 @@
-use std::f32::consts::PI;
-use eframe::egui;
+use crate::app::state::{ThreadDisplayMode, ThreadState, ViewState};
 use crate::app::GraphchanApp;
-use crate::app::state::{ViewState, ThreadState, ThreadDisplayMode};
+use eframe::egui;
+use std::f32::consts::PI;
 
 pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
     // Only handle keyboard input when viewing a thread
@@ -24,7 +24,9 @@ pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
 
         if let Some(details) = &state.details {
             let posts = &details.posts;
-            if posts.is_empty() { return; }
+            if posts.is_empty() {
+                return;
+            }
 
             // Auto-select OP on first relevant keypress if nothing selected
             if state.selected_post.is_none() {
@@ -57,7 +59,8 @@ pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
             let has_parents = !parent_ids.is_empty();
 
             // Calculate replies (children) - sorted chronologically, extract IDs
-            let mut reply_tuples: Vec<(String, String)> = posts.iter()
+            let mut reply_tuples: Vec<(String, String)> = posts
+                .iter()
                 .filter(|p| p.parent_post_ids.contains(&current_id))
                 .map(|p| (p.id.clone(), p.created_at.clone()))
                 .collect();
@@ -119,11 +122,11 @@ pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
                         NavigationMode::Parent => {
                             // User was navigating parents - select parent at cursor
                             parent_ids.get(state.parent_cursor_index).cloned()
-                        },
+                        }
                         NavigationMode::Reply => {
                             // User was navigating replies - select reply at cursor
                             reply_ids.get(state.reply_cursor_index).cloned()
-                        },
+                        }
                         NavigationMode::None => {
                             // No navigation yet - default to first reply
                             reply_ids.first().cloned()
@@ -236,26 +239,46 @@ pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
             // Build data structures from radial_nodes directly (not posts) to avoid borrow conflicts
             if state.display_mode == ThreadDisplayMode::Radial {
                 // Build ring groupings from radial_nodes
-                let mut posts_by_ring: std::collections::HashMap<usize, Vec<(String, f32)>> = std::collections::HashMap::new();
+                let mut posts_by_ring: std::collections::HashMap<usize, Vec<(String, f32)>> =
+                    std::collections::HashMap::new();
                 for (post_id, node) in &state.radial_nodes {
-                    posts_by_ring.entry(node.ring).or_default().push((post_id.clone(), node.angle));
+                    posts_by_ring
+                        .entry(node.ring)
+                        .or_default()
+                        .push((post_id.clone(), node.angle));
                 }
                 // Sort posts within each ring by angle
                 for posts_in_ring in posts_by_ring.values_mut() {
-                    posts_in_ring.sort_by(|a, b| {
-                        a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-                    });
+                    posts_in_ring
+                        .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
                 }
 
-                let current_ring = state.radial_nodes.get(&current_id).map(|n| n.ring).unwrap_or(0);
-                let current_angle = state.radial_nodes.get(&current_id).map(|n| n.angle).unwrap_or(0.0);
-                let max_ring = state.radial_nodes.values().map(|n| n.ring).max().unwrap_or(0);
+                let current_ring = state
+                    .radial_nodes
+                    .get(&current_id)
+                    .map(|n| n.ring)
+                    .unwrap_or(0);
+                let current_angle = state
+                    .radial_nodes
+                    .get(&current_id)
+                    .map(|n| n.angle)
+                    .unwrap_or(0.0);
+                let max_ring = state
+                    .radial_nodes
+                    .values()
+                    .map(|n| n.ring)
+                    .max()
+                    .unwrap_or(0);
 
                 // LEFT: Previous post on same ring
                 if consume_key(ctx, egui::Key::ArrowLeft, egui::Modifiers::NONE) {
                     if let Some(ring_posts) = posts_by_ring.get(&current_ring) {
                         if let Some(idx) = ring_posts.iter().position(|(id, _)| id == &current_id) {
-                            let new_idx = if idx == 0 { ring_posts.len() - 1 } else { idx - 1 };
+                            let new_idx = if idx == 0 {
+                                ring_posts.len() - 1
+                            } else {
+                                idx - 1
+                            };
                             if let Some((new_id, _)) = ring_posts.get(new_idx) {
                                 state.selected_post = Some(new_id.clone());
                                 state.secondary_selected_post = None;
@@ -287,12 +310,13 @@ pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
                         let target_ring = current_ring - 1;
                         if let Some(ring_posts) = posts_by_ring.get(&target_ring) {
                             // Find the post on the target ring closest in angle to current
-                            let closest = ring_posts.iter()
-                                .min_by(|(_, angle_a), (_, angle_b)| {
-                                    let diff_a = (*angle_a - current_angle).abs();
-                                    let diff_b = (*angle_b - current_angle).abs();
-                                    diff_a.partial_cmp(&diff_b).unwrap_or(std::cmp::Ordering::Equal)
-                                });
+                            let closest = ring_posts.iter().min_by(|(_, angle_a), (_, angle_b)| {
+                                let diff_a = (*angle_a - current_angle).abs();
+                                let diff_b = (*angle_b - current_angle).abs();
+                                diff_a
+                                    .partial_cmp(&diff_b)
+                                    .unwrap_or(std::cmp::Ordering::Equal)
+                            });
                             if let Some((new_id, _)) = closest {
                                 state.selected_post = Some(new_id.clone());
                                 state.secondary_selected_post = None;
@@ -309,12 +333,13 @@ pub fn handle_keyboard_input(app: &mut GraphchanApp, ctx: &egui::Context) {
                         let target_ring = current_ring + 1;
                         if let Some(ring_posts) = posts_by_ring.get(&target_ring) {
                             // Find the post on the target ring closest in angle to current
-                            let closest = ring_posts.iter()
-                                .min_by(|(_, angle_a), (_, angle_b)| {
-                                    let diff_a = (*angle_a - current_angle).abs();
-                                    let diff_b = (*angle_b - current_angle).abs();
-                                    diff_a.partial_cmp(&diff_b).unwrap_or(std::cmp::Ordering::Equal)
-                                });
+                            let closest = ring_posts.iter().min_by(|(_, angle_a), (_, angle_b)| {
+                                let diff_a = (*angle_a - current_angle).abs();
+                                let diff_b = (*angle_b - current_angle).abs();
+                                diff_a
+                                    .partial_cmp(&diff_b)
+                                    .unwrap_or(std::cmp::Ordering::Equal)
+                            });
                             if let Some((new_id, _)) = closest {
                                 state.selected_post = Some(new_id.clone());
                                 state.secondary_selected_post = None;
@@ -345,7 +370,9 @@ fn is_text_edit_focused(ctx: &egui::Context) -> bool {
             // Check if this ID corresponds to a TextEdit by looking at its ID string
             // Draft post TextEdit typically has "Draft Post" in its window ID chain
             let id_str = format!("{:?}", focused_id);
-            return id_str.contains("Draft Post") || id_str.contains("text_edit") || id_str.contains("TextEdit");
+            return id_str.contains("Draft Post")
+                || id_str.contains("text_edit")
+                || id_str.contains("TextEdit");
         }
         false
     })
@@ -354,20 +381,20 @@ fn is_text_edit_focused(ctx: &egui::Context) -> bool {
 /// Check if user pressed a navigation key that should auto-select the OP
 fn should_auto_select_op(ctx: &egui::Context) -> bool {
     ctx.input(|i| {
-        i.key_pressed(egui::Key::Tab) ||
-        i.key_pressed(egui::Key::Space) ||
-        i.key_pressed(egui::Key::U) ||
-        i.key_pressed(egui::Key::I) ||
-        i.key_pressed(egui::Key::O) ||
-        i.key_pressed(egui::Key::P) ||
-        i.key_pressed(egui::Key::J) ||
-        i.key_pressed(egui::Key::K) ||
-        i.key_pressed(egui::Key::L) ||
-        i.key_pressed(egui::Key::Semicolon) ||
-        i.key_pressed(egui::Key::ArrowUp) ||
-        i.key_pressed(egui::Key::ArrowDown) ||
-        i.key_pressed(egui::Key::ArrowLeft) ||
-        i.key_pressed(egui::Key::ArrowRight)
+        i.key_pressed(egui::Key::Tab)
+            || i.key_pressed(egui::Key::Space)
+            || i.key_pressed(egui::Key::U)
+            || i.key_pressed(egui::Key::I)
+            || i.key_pressed(egui::Key::O)
+            || i.key_pressed(egui::Key::P)
+            || i.key_pressed(egui::Key::J)
+            || i.key_pressed(egui::Key::K)
+            || i.key_pressed(egui::Key::L)
+            || i.key_pressed(egui::Key::Semicolon)
+            || i.key_pressed(egui::Key::ArrowUp)
+            || i.key_pressed(egui::Key::ArrowDown)
+            || i.key_pressed(egui::Key::ArrowLeft)
+            || i.key_pressed(egui::Key::ArrowRight)
     })
 }
 
@@ -410,12 +437,12 @@ fn center_viewport_on_post(state: &mut ThreadState, post_id: &str, ctx: &egui::C
             if let Some(node) = state.graph_nodes.get(post_id) {
                 let zoom = state.graph_zoom;
                 let scale = 100.0; // Graph view uses a 100.0 scale factor
-                // Graph view adds rect.center() to the offset
-                // ScreenPos = Center + Offset + Pos * Zoom * Scale
-                // To center: Offset = -(Pos * Zoom * Scale)
+                                   // Graph view adds rect.center() to the offset
+                                   // ScreenPos = Center + Offset + Pos * Zoom * Scale
+                                   // To center: Offset = -(Pos * Zoom * Scale)
                 state.graph_offset = -(node.pos.to_vec2() * zoom * scale);
             }
-        },
+        }
         ThreadDisplayMode::Sugiyama => {
             if let Some(node) = state.sugiyama_nodes.get(post_id) {
                 let zoom = state.graph_zoom;
@@ -424,7 +451,7 @@ fn center_viewport_on_post(state: &mut ThreadState, post_id: &str, ctx: &egui::C
                 // To center: Offset = -(Pos * Zoom)
                 state.graph_offset = -(node.pos.to_vec2() * zoom);
             }
-        },
+        }
         ThreadDisplayMode::Chronological => {
             if let Some(node) = state.chronological_nodes.get(post_id) {
                 let zoom = state.graph_zoom;
@@ -436,7 +463,7 @@ fn center_viewport_on_post(state: &mut ThreadState, post_id: &str, ctx: &egui::C
                 // Offset = CenterScreen - Pos * Zoom
                 state.graph_offset = center_screen - (node.pos.to_vec2() * zoom);
             }
-        },
+        }
         ThreadDisplayMode::Radial => {
             // For radial view, center viewport on the post using X/Y translation
             if let Some(node) = state.radial_nodes.get(post_id) {
@@ -459,7 +486,7 @@ fn center_viewport_on_post(state: &mut ThreadState, post_id: &str, ctx: &egui::C
                     state.graph_offset = egui::vec2(-pos_x * zoom, -pos_y * zoom);
                 }
             }
-        },
+        }
         _ => {}
     }
 }

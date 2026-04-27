@@ -5,7 +5,10 @@ use crate::models::{BlockedPeerView, BlocklistEntryView, BlocklistSubscriptionVi
 use super::GraphchanApp;
 
 impl GraphchanApp {
-    pub(super) fn handle_blocked_peers_loaded(&mut self, result: Result<Vec<BlockedPeerView>, anyhow::Error>) {
+    pub(super) fn handle_blocked_peers_loaded(
+        &mut self,
+        result: Result<Vec<BlockedPeerView>, anyhow::Error>,
+    ) {
         self.blocking_state.blocked_peers_loading = false;
         match result {
             Ok(peers) => {
@@ -19,7 +22,11 @@ impl GraphchanApp {
         }
     }
 
-    pub(super) fn handle_peer_blocked(&mut self, peer_id: String, result: Result<BlockedPeerView, anyhow::Error>) {
+    pub(super) fn handle_peer_blocked(
+        &mut self,
+        peer_id: String,
+        result: Result<BlockedPeerView, anyhow::Error>,
+    ) {
         self.blocking_state.blocking_in_progress = false;
         match result {
             Ok(blocked) => {
@@ -35,10 +42,16 @@ impl GraphchanApp {
         }
     }
 
-    pub(super) fn handle_peer_unblocked(&mut self, peer_id: String, result: Result<(), anyhow::Error>) {
+    pub(super) fn handle_peer_unblocked(
+        &mut self,
+        peer_id: String,
+        result: Result<(), anyhow::Error>,
+    ) {
         match result {
             Ok(_) => {
-                self.blocking_state.blocked_peers.retain(|p| p.peer_id != peer_id);
+                self.blocking_state
+                    .blocked_peers
+                    .retain(|p| p.peer_id != peer_id);
             }
             Err(err) => {
                 error!("Failed to unblock peer {}: {}", peer_id, err);
@@ -47,7 +60,10 @@ impl GraphchanApp {
         }
     }
 
-    pub(super) fn handle_blocklists_loaded(&mut self, result: Result<Vec<BlocklistSubscriptionView>, anyhow::Error>) {
+    pub(super) fn handle_blocklists_loaded(
+        &mut self,
+        result: Result<Vec<BlocklistSubscriptionView>, anyhow::Error>,
+    ) {
         self.blocking_state.blocklists_loading = false;
         match result {
             Ok(blocklists) => {
@@ -61,7 +77,11 @@ impl GraphchanApp {
         }
     }
 
-    pub(super) fn handle_blocklist_subscribed(&mut self, blocklist_id: String, result: Result<BlocklistSubscriptionView, anyhow::Error>) {
+    pub(super) fn handle_blocklist_subscribed(
+        &mut self,
+        blocklist_id: String,
+        result: Result<BlocklistSubscriptionView, anyhow::Error>,
+    ) {
         self.blocking_state.subscribing_in_progress = false;
         match result {
             Ok(subscription) => {
@@ -80,19 +100,32 @@ impl GraphchanApp {
         }
     }
 
-    pub(super) fn handle_blocklist_unsubscribed(&mut self, blocklist_id: String, result: Result<(), anyhow::Error>) {
+    pub(super) fn handle_blocklist_unsubscribed(
+        &mut self,
+        blocklist_id: String,
+        result: Result<(), anyhow::Error>,
+    ) {
         match result {
             Ok(_) => {
-                self.blocking_state.blocklists.retain(|b| b.id != blocklist_id);
+                self.blocking_state
+                    .blocklists
+                    .retain(|b| b.id != blocklist_id);
             }
             Err(err) => {
-                error!("Failed to unsubscribe from blocklist {}: {}", blocklist_id, err);
+                error!(
+                    "Failed to unsubscribe from blocklist {}: {}",
+                    blocklist_id, err
+                );
                 self.blocking_state.blocklists_error = Some(err.to_string());
             }
         }
     }
 
-    pub(super) fn handle_blocklist_entries_loaded(&mut self, blocklist_id: String, result: Result<Vec<BlocklistEntryView>, anyhow::Error>) {
+    pub(super) fn handle_blocklist_entries_loaded(
+        &mut self,
+        blocklist_id: String,
+        result: Result<Vec<BlocklistEntryView>, anyhow::Error>,
+    ) {
         self.blocking_state.blocklist_entries_loading = false;
         match result {
             Ok(entries) => {
@@ -100,7 +133,10 @@ impl GraphchanApp {
                 self.blocking_state.blocklist_entries_error = None;
             }
             Err(err) => {
-                error!("Failed to load entries for blocklist {}: {}", blocklist_id, err);
+                error!(
+                    "Failed to load entries for blocklist {}: {}",
+                    blocklist_id, err
+                );
                 self.blocking_state.blocklist_entries_error = Some(err.to_string());
             }
         }
@@ -108,7 +144,10 @@ impl GraphchanApp {
 
     // IP Blocking handlers
 
-    pub(super) fn handle_ip_blocks_loaded(&mut self, result: Result<Vec<crate::models::IpBlockView>, anyhow::Error>) {
+    pub(super) fn handle_ip_blocks_loaded(
+        &mut self,
+        result: Result<Vec<crate::models::IpBlockView>, anyhow::Error>,
+    ) {
         self.blocking_state.ip_blocks_loading = false;
         match result {
             Ok(blocks) => {
@@ -122,7 +161,10 @@ impl GraphchanApp {
         }
     }
 
-    pub(super) fn handle_ip_block_stats_loaded(&mut self, result: Result<crate::models::IpBlockStatsResponse, anyhow::Error>) {
+    pub(super) fn handle_ip_block_stats_loaded(
+        &mut self,
+        result: Result<crate::models::IpBlockStatsResponse, anyhow::Error>,
+    ) {
         self.blocking_state.ip_block_stats_loading = false;
         match result {
             Ok(stats) => {
@@ -151,7 +193,11 @@ impl GraphchanApp {
         }
     }
 
-    pub(super) fn handle_ip_block_removed(&mut self, block_id: i64, result: Result<(), anyhow::Error>) {
+    pub(super) fn handle_ip_block_removed(
+        &mut self,
+        block_id: i64,
+        result: Result<(), anyhow::Error>,
+    ) {
         match result {
             Ok(_) => {
                 self.blocking_state.ip_blocks.retain(|b| b.id != block_id);
@@ -234,16 +280,28 @@ impl GraphchanApp {
     }
 
     pub(super) fn handle_peer_ip_blocked(&mut self, peer_id: String, blocked_ips: Vec<String>) {
-        info!("Blocked {} IP(s) for peer {}: {:?}", blocked_ips.len(), peer_id, blocked_ips);
+        info!(
+            "Blocked {} IP(s) for peer {}: {:?}",
+            blocked_ips.len(),
+            peer_id,
+            blocked_ips
+        );
         // Refresh IP blocks list
         self.spawn_load_ip_blocks();
         self.spawn_load_ip_block_stats();
         // Show success message
-        self.info_banner = Some(format!("Blocked {} IP(s) for peer {}", blocked_ips.len(), peer_id));
+        self.info_banner = Some(format!(
+            "Blocked {} IP(s) for peer {}",
+            blocked_ips.len(),
+            peer_id
+        ));
     }
 
     pub(super) fn handle_peer_ip_block_failed(&mut self, peer_id: String, error: String) {
         error!("Failed to block IPs for peer {}: {}", peer_id, error);
-        self.info_banner = Some(format!("Failed to block IPs for peer {}: {}", peer_id, error));
+        self.info_banner = Some(format!(
+            "Failed to block IPs for peer {}: {}",
+            peer_id, error
+        ));
     }
 }

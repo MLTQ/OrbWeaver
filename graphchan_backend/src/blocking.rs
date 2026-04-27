@@ -1,10 +1,10 @@
 use crate::database::models::{
-    BlockedPeerRecord, BlocklistEntryRecord, BlocklistSubscriptionRecord, RedactedPostRecord,
-    IpBlockRecord,
+    BlockedPeerRecord, BlocklistEntryRecord, BlocklistSubscriptionRecord, IpBlockRecord,
+    RedactedPostRecord,
 };
 use crate::database::repositories::{
-    BlockedPeerRepository, BlocklistRepository, PeerRepository, RedactedPostRepository,
-    IpBlockRepository, PeerIpRepository,
+    BlockedPeerRepository, BlocklistRepository, IpBlockRepository, PeerIpRepository,
+    PeerRepository, RedactedPostRepository,
 };
 use crate::database::Database;
 use crate::utils::now_utc_iso;
@@ -223,8 +223,8 @@ impl BlockChecker {
 
     /// Get a redacted post by ID.
     pub fn get_redacted_post(&self, post_id: &str) -> Result<Option<RedactedPostView>> {
-        self.database.with_repositories(|repos| {
-            match repos.redacted_posts().get(post_id)? {
+        self.database
+            .with_repositories(|repos| match repos.redacted_posts().get(post_id)? {
                 Some(record) => {
                     let parent_post_ids: Vec<String> =
                         serde_json::from_str(&record.parent_post_ids)?;
@@ -244,15 +244,11 @@ impl BlockChecker {
                     }))
                 }
                 None => Ok(None),
-            }
-        })
+            })
     }
 
     /// List all redacted posts for a thread.
-    pub fn list_redacted_posts_for_thread(
-        &self,
-        thread_id: &str,
-    ) -> Result<Vec<RedactedPostView>> {
+    pub fn list_redacted_posts_for_thread(&self, thread_id: &str) -> Result<Vec<RedactedPostView>> {
         self.database.with_repositories(|repos| {
             let records = repos.redacted_posts().list_for_thread(thread_id)?;
             let mut views = Vec::new();
@@ -375,9 +371,9 @@ impl IpBlockChecker {
 
     /// Initialize the cache by loading all active blocks from database
     pub async fn load_cache(&self) -> Result<()> {
-        let blocks = self.database.with_repositories(|repos| {
-            repos.ip_blocks().list_active()
-        })?;
+        let blocks = self
+            .database
+            .with_repositories(|repos| repos.ip_blocks().list_active())?;
 
         let mut cache = self.cache.write().await;
         cache.exact_blocks.clear();
@@ -399,24 +395,22 @@ impl IpBlockChecker {
                         );
                     }
                 }
-                "range" => {
-                    match block.ip_or_range.parse::<IpNetwork>() {
-                        Ok(network) => {
-                            cache.range_blocks.push(CidrBlock {
-                                id: block.id,
-                                network,
-                            });
-                        }
-                        Err(err) => {
-                            tracing::warn!(
-                                error = ?err,
-                                block_id = block.id,
-                                range = %block.ip_or_range,
-                                "invalid CIDR range in range block"
-                            );
-                        }
+                "range" => match block.ip_or_range.parse::<IpNetwork>() {
+                    Ok(network) => {
+                        cache.range_blocks.push(CidrBlock {
+                            id: block.id,
+                            network,
+                        });
                     }
-                }
+                    Err(err) => {
+                        tracing::warn!(
+                            error = ?err,
+                            block_id = block.id,
+                            range = %block.ip_or_range,
+                            "invalid CIDR range in range block"
+                        );
+                    }
+                },
                 _ => {
                     tracing::warn!(
                         block_id = block.id,
@@ -445,9 +439,9 @@ impl IpBlockChecker {
         // Fast path: check exact IP match (O(1))
         if cache.exact_blocks.contains(ip) {
             // Find the block ID for hit count tracking
-            if let Some((id, _)) = cache.block_metadata.iter()
-                .find(|(_, block)| block.block_type == "exact" && block.ip_or_range == ip.to_string())
-            {
+            if let Some((id, _)) = cache.block_metadata.iter().find(|(_, block)| {
+                block.block_type == "exact" && block.ip_or_range == ip.to_string()
+            }) {
                 return Ok((true, Some(*id)));
             }
             return Ok((true, None));
@@ -466,11 +460,14 @@ impl IpBlockChecker {
     /// Check if a peer is blocked based on their known IP addresses
     ///
     /// Returns (is_blocked, block_id, ip) where ip is the blocked IP if any
-    pub async fn is_peer_blocked(&self, peer_id: &str) -> Result<(bool, Option<i64>, Option<IpAddr>)> {
+    pub async fn is_peer_blocked(
+        &self,
+        peer_id: &str,
+    ) -> Result<(bool, Option<i64>, Option<IpAddr>)> {
         // Look up peer's known IP addresses
-        let peer_ip_record = self.database.with_repositories(|repos| {
-            repos.peer_ips().get(peer_id)
-        })?;
+        let peer_ip_record = self
+            .database
+            .with_repositories(|repos| repos.peer_ips().get(peer_id))?;
 
         if let Some(record) = peer_ip_record {
             if let Ok(ip) = record.ip_address.parse::<IpAddr>() {
@@ -489,12 +486,14 @@ impl IpBlockChecker {
         // Determine block type
         let block_type = if ip_or_range.contains('/') {
             // Validate CIDR
-            ip_or_range.parse::<IpNetwork>()
+            ip_or_range
+                .parse::<IpNetwork>()
                 .context("Invalid CIDR range")?;
             "range"
         } else {
             // Validate IP
-            ip_or_range.parse::<IpAddr>()
+            ip_or_range
+                .parse::<IpAddr>()
                 .context("Invalid IP address")?;
             "exact"
         };
@@ -509,9 +508,9 @@ impl IpBlockChecker {
             hit_count: 0,
         };
 
-        let block_id = self.database.with_repositories(|repos| {
-            repos.ip_blocks().add(&record)
-        })?;
+        let block_id = self
+            .database
+            .with_repositories(|repos| repos.ip_blocks().add(&record))?;
 
         // Refresh cache
         self.load_cache().await?;
@@ -528,9 +527,8 @@ impl IpBlockChecker {
 
     /// Remove an IP block
     pub async fn remove_block(&self, block_id: i64) -> Result<()> {
-        self.database.with_repositories(|repos| {
-            repos.ip_blocks().remove(block_id)
-        })?;
+        self.database
+            .with_repositories(|repos| repos.ip_blocks().remove(block_id))?;
 
         // Refresh cache
         self.load_cache().await?;
@@ -542,24 +540,21 @@ impl IpBlockChecker {
 
     /// Increment hit count for a block (called when a block triggers)
     pub async fn record_hit(&self, block_id: i64) -> Result<()> {
-        self.database.with_repositories(|repos| {
-            repos.ip_blocks().increment_hit_count(block_id)
-        })?;
+        self.database
+            .with_repositories(|repos| repos.ip_blocks().increment_hit_count(block_id))?;
 
         Ok(())
     }
 
     /// List all IP blocks (active and inactive)
     pub fn list_all(&self) -> Result<Vec<IpBlockRecord>> {
-        self.database.with_repositories(|repos| {
-            repos.ip_blocks().list_all()
-        })
+        self.database
+            .with_repositories(|repos| repos.ip_blocks().list_all())
     }
 
     /// List only active IP blocks
     pub fn list_active(&self) -> Result<Vec<IpBlockRecord>> {
-        self.database.with_repositories(|repos| {
-            repos.ip_blocks().list_active()
-        })
+        self.database
+            .with_repositories(|repos| repos.ip_blocks().list_active())
     }
 }

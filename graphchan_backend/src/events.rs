@@ -41,10 +41,7 @@ pub enum AppEvent {
         size_bytes: Option<i64>,
     },
     /// A blob finished downloading and is now present locally.
-    FileDownloaded {
-        file_id: String,
-        post_id: String,
-    },
+    FileDownloaded { file_id: String, post_id: String },
     /// A peer's profile (username/bio/avatar) was updated.
     ProfileUpdated { peer_id: String },
     /// A reaction was added or removed.

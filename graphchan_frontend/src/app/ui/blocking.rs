@@ -54,7 +54,10 @@ fn render_blocked_peers_tab(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
 
             // Export/Import buttons
             ui.horizontal(|ui| {
-                if ui.add_enabled(!state.exporting_peers, egui::Button::new("Export CSV")).clicked() {
+                if ui
+                    .add_enabled(!state.exporting_peers, egui::Button::new("Export CSV"))
+                    .clicked()
+                {
                     app.spawn_export_peer_blocks();
                 }
                 if state.exporting_peers {
@@ -70,7 +73,7 @@ fn render_blocked_peers_tab(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
                 ui.add(
                     egui::TextEdit::multiline(&mut text)
                         .desired_rows(6)
-                        .interactive(true)
+                        .interactive(true),
                 );
                 if ui.small_button("Close").clicked() {
                     state.peer_export_text = None;
@@ -86,7 +89,7 @@ fn render_blocked_peers_tab(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
                 ui.label("Peer ID:");
                 ui.add(
                     egui::TextEdit::singleline(&mut state.new_block_peer_id)
-                        .hint_text("Enter peer ID...")
+                        .hint_text("Enter peer ID..."),
                 );
             });
 
@@ -94,11 +97,14 @@ fn render_blocked_peers_tab(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
                 ui.label("Reason:");
                 ui.add(
                     egui::TextEdit::singleline(&mut state.new_block_reason)
-                        .hint_text("Optional reason...")
+                        .hint_text("Optional reason..."),
                 );
             });
 
-            if ui.add_enabled(!state.blocking_in_progress, egui::Button::new("Block Peer")).clicked() {
+            if ui
+                .add_enabled(!state.blocking_in_progress, egui::Button::new("Block Peer"))
+                .clicked()
+            {
                 app.spawn_block_peer(state);
             }
 
@@ -121,10 +127,13 @@ fn render_blocked_peers_tab(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &m
             ui.add(
                 egui::TextEdit::multiline(&mut state.peer_import_text)
                     .desired_rows(6)
-                    .hint_text("peer_id,reason\nabc123,Spammer\ndef456,Harassment")
+                    .hint_text("peer_id,reason\nabc123,Spammer\ndef456,Harassment"),
             );
 
-            if ui.add_enabled(!state.importing_peers, egui::Button::new("Import")).clicked() {
+            if ui
+                .add_enabled(!state.importing_peers, egui::Button::new("Import"))
+                .clicked()
+            {
                 app.spawn_import_peer_blocks(state);
             }
 
@@ -168,7 +177,7 @@ fn render_blocklists_tab(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut 
                 ui.label("Blocklist ID:");
                 ui.add(
                     egui::TextEdit::singleline(&mut state.new_blocklist_id)
-                        .hint_text("Enter blocklist ID...")
+                        .hint_text("Enter blocklist ID..."),
                 );
             });
 
@@ -176,7 +185,7 @@ fn render_blocklists_tab(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut 
                 ui.label("Maintainer:");
                 ui.add(
                     egui::TextEdit::singleline(&mut state.new_blocklist_maintainer)
-                        .hint_text("Maintainer peer ID...")
+                        .hint_text("Maintainer peer ID..."),
                 );
             });
 
@@ -184,7 +193,7 @@ fn render_blocklists_tab(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut 
                 ui.label("Name:");
                 ui.add(
                     egui::TextEdit::singleline(&mut state.new_blocklist_name)
-                        .hint_text("Blocklist name...")
+                        .hint_text("Blocklist name..."),
                 );
             });
 
@@ -192,13 +201,22 @@ fn render_blocklists_tab(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut 
                 ui.label("Description:");
                 ui.add(
                     egui::TextEdit::singleline(&mut state.new_blocklist_description)
-                        .hint_text("Optional description...")
+                        .hint_text("Optional description..."),
                 );
             });
 
-            ui.checkbox(&mut state.new_blocklist_auto_apply, "Auto-apply blocks from this list");
+            ui.checkbox(
+                &mut state.new_blocklist_auto_apply,
+                "Auto-apply blocks from this list",
+            );
 
-            if ui.add_enabled(!state.subscribing_in_progress, egui::Button::new("Subscribe")).clicked() {
+            if ui
+                .add_enabled(
+                    !state.subscribing_in_progress,
+                    egui::Button::new("Subscribe"),
+                )
+                .clicked()
+            {
                 app.spawn_subscribe_blocklist(state);
             }
 
@@ -230,7 +248,13 @@ fn render_ip_blocks_tab(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut B
                     ui.label(RichText::new("•").weak());
                     ui.label(RichText::new(format!("Hits: {}", stats.total_hits)).weak());
                 });
-                ui.label(RichText::new(format!("Exact IPs: {} | Ranges: {}", stats.exact_ip_blocks, stats.range_blocks)).weak());
+                ui.label(
+                    RichText::new(format!(
+                        "Exact IPs: {} | Ranges: {}",
+                        stats.exact_ip_blocks, stats.range_blocks
+                    ))
+                    .weak(),
+                );
                 ui.add_space(5.0);
             }
 
@@ -251,10 +275,16 @@ fn render_ip_blocks_tab(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut B
 
             // Clear all / Export buttons
             ui.horizontal(|ui| {
-                if ui.add_enabled(!state.ip_blocks.is_empty(), egui::Button::new("Clear All")).clicked() {
+                if ui
+                    .add_enabled(!state.ip_blocks.is_empty(), egui::Button::new("Clear All"))
+                    .clicked()
+                {
                     state.showing_clear_all_confirmation = true;
                 }
-                if ui.add_enabled(!state.exporting_ips, egui::Button::new("Export Blocklist")).clicked() {
+                if ui
+                    .add_enabled(!state.exporting_ips, egui::Button::new("Export Blocklist"))
+                    .clicked()
+                {
                     app.spawn_export_ip_blocks();
                 }
                 if state.exporting_ips {
@@ -270,7 +300,7 @@ fn render_ip_blocks_tab(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut B
                 ui.add(
                     egui::TextEdit::multiline(&mut text)
                         .desired_rows(6)
-                        .interactive(true)
+                        .interactive(true),
                 );
                 if ui.small_button("Close").clicked() {
                     state.ip_export_text = None;
@@ -285,7 +315,7 @@ fn render_ip_blocks_tab(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut B
                 ui.label("IP/Range:");
                 ui.add(
                     egui::TextEdit::singleline(&mut state.new_ip_block)
-                        .hint_text("e.g., 192.168.1.1 or 41.0.0.0/8")
+                        .hint_text("e.g., 192.168.1.1 or 41.0.0.0/8"),
                 );
             });
 
@@ -293,11 +323,14 @@ fn render_ip_blocks_tab(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut B
                 ui.label("Reason:");
                 ui.add(
                     egui::TextEdit::singleline(&mut state.new_ip_block_reason)
-                        .hint_text("Optional reason...")
+                        .hint_text("Optional reason..."),
                 );
             });
 
-            if ui.add_enabled(!state.adding_ip_block, egui::Button::new("Block IP")).clicked() {
+            if ui
+                .add_enabled(!state.adding_ip_block, egui::Button::new("Block IP"))
+                .clicked()
+            {
                 app.spawn_add_ip_block(state);
             }
 
@@ -320,10 +353,13 @@ fn render_ip_blocks_tab(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut B
             ui.add(
                 egui::TextEdit::multiline(&mut state.import_text)
                     .desired_rows(8)
-                    .hint_text("192.168.1.1 # Spam bot\n41.0.0.0/8 # Country block")
+                    .hint_text("192.168.1.1 # Spam bot\n41.0.0.0/8 # Country block"),
             );
 
-            if ui.add_enabled(!state.importing_ips, egui::Button::new("Import")).clicked() {
+            if ui
+                .add_enabled(!state.importing_ips, egui::Button::new("Import"))
+                .clicked()
+            {
                 app.spawn_import_ip_blocks(state);
             }
 
@@ -356,7 +392,9 @@ fn render_blocked_peers_list(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &
 
                     ui.horizontal(|ui| {
                         // Look up peer info if available
-                        let peer_name = app.peers.get(&blocked.peer_id)
+                        let peer_name = app
+                            .peers
+                            .get(&blocked.peer_id)
                             .and_then(|p| p.username.as_deref().or(p.alias.as_deref()))
                             .unwrap_or(&blocked.peer_id);
 
@@ -372,10 +410,18 @@ fn render_blocked_peers_list(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &
                     ui.label(RichText::new(&blocked.peer_id).monospace().size(10.0));
 
                     if let Some(reason) = &blocked.reason {
-                        ui.label(RichText::new(format!("Reason: {}", reason)).size(11.0).weak());
+                        ui.label(
+                            RichText::new(format!("Reason: {}", reason))
+                                .size(11.0)
+                                .weak(),
+                        );
                     }
 
-                    ui.label(RichText::new(format!("Blocked: {}", blocked.blocked_at)).size(9.0).weak());
+                    ui.label(
+                        RichText::new(format!("Blocked: {}", blocked.blocked_at))
+                            .size(9.0)
+                            .weak(),
+                    );
                 });
 
             ui.add_space(8.0);
@@ -421,21 +467,32 @@ fn render_blocklists_list(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut
                                 ui.label(
                                     RichText::new("AUTO-APPLY")
                                         .color(Color32::from_rgb(255, 200, 100))
-                                        .strong()
+                                        .strong(),
                                 );
                             }
                         });
                     });
 
-                    ui.label(RichText::new(format!("ID: {}", blocklist.id)).monospace().size(10.0));
-                    ui.label(RichText::new(format!("Maintainer: {}", blocklist.maintainer_peer_id)).size(10.0));
+                    ui.label(
+                        RichText::new(format!("ID: {}", blocklist.id))
+                            .monospace()
+                            .size(10.0),
+                    );
+                    ui.label(
+                        RichText::new(format!("Maintainer: {}", blocklist.maintainer_peer_id))
+                            .size(10.0),
+                    );
 
                     if let Some(desc) = &blocklist.description {
                         ui.label(RichText::new(desc).size(11.0).weak());
                     }
 
                     if let Some(last_synced) = &blocklist.last_synced_at {
-                        ui.label(RichText::new(format!("Last synced: {}", last_synced)).size(9.0).weak());
+                        ui.label(
+                            RichText::new(format!("Last synced: {}", last_synced))
+                                .size(9.0)
+                                .weak(),
+                        );
                     }
                 });
 
@@ -485,20 +542,28 @@ fn render_ip_blocks_list(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut 
                                 ui.label(
                                     RichText::new(format!("Hits: {}", block.hit_count))
                                         .color(Color32::from_rgb(255, 200, 100))
-                                        .size(10.0)
+                                        .size(10.0),
                                 );
                             }
                         });
                     });
 
                     if let Some(reason) = &block.reason {
-                        ui.label(RichText::new(format!("Reason: {}", reason)).size(11.0).weak());
+                        ui.label(
+                            RichText::new(format!("Reason: {}", reason))
+                                .size(11.0)
+                                .weak(),
+                        );
                     }
 
                     let blocked_time = chrono::DateTime::from_timestamp(block.blocked_at, 0)
                         .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
                         .unwrap_or_else(|| "Unknown".to_string());
-                    ui.label(RichText::new(format!("Blocked: {}", blocked_time)).size(9.0).weak());
+                    ui.label(
+                        RichText::new(format!("Blocked: {}", blocked_time))
+                            .size(9.0)
+                            .weak(),
+                    );
                 });
 
             ui.add_space(8.0);
@@ -510,7 +575,11 @@ fn render_ip_blocks_list(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut 
     }
 }
 
-pub fn render_blocklist_entries_dialog(_app: &mut GraphchanApp, ctx: &egui::Context, state: &mut BlockingState) {
+pub fn render_blocklist_entries_dialog(
+    _app: &mut GraphchanApp,
+    ctx: &egui::Context,
+    state: &mut BlockingState,
+) {
     if let Some(blocklist_id) = &state.viewing_blocklist_id.clone() {
         egui::Window::new("Blocklist Entries")
             .default_width(500.0)
@@ -538,10 +607,18 @@ pub fn render_blocklist_entries_dialog(_app: &mut GraphchanApp, ctx: &egui::Cont
                                     ui.label(RichText::new(&entry.peer_id).monospace());
 
                                     if let Some(reason) = &entry.reason {
-                                        ui.label(RichText::new(format!("Reason: {}", reason)).size(11.0).weak());
+                                        ui.label(
+                                            RichText::new(format!("Reason: {}", reason))
+                                                .size(11.0)
+                                                .weak(),
+                                        );
                                     }
 
-                                    ui.label(RichText::new(format!("Added: {}", entry.added_at)).size(9.0).weak());
+                                    ui.label(
+                                        RichText::new(format!("Added: {}", entry.added_at))
+                                            .size(9.0)
+                                            .weak(),
+                                    );
                                 });
 
                             ui.add_space(4.0);
@@ -559,7 +636,11 @@ pub fn render_blocklist_entries_dialog(_app: &mut GraphchanApp, ctx: &egui::Cont
     }
 }
 
-pub fn render_clear_all_ip_blocks_dialog(app: &mut GraphchanApp, ctx: &egui::Context, state: &mut BlockingState) {
+pub fn render_clear_all_ip_blocks_dialog(
+    app: &mut GraphchanApp,
+    ctx: &egui::Context,
+    state: &mut BlockingState,
+) {
     if state.showing_clear_all_confirmation {
         egui::Window::new("Confirm Clear All IP Blocks")
             .collapsible(false)
@@ -575,7 +656,10 @@ pub fn render_clear_all_ip_blocks_dialog(app: &mut GraphchanApp, ctx: &egui::Con
                         state.showing_clear_all_confirmation = false;
                     }
 
-                    if ui.button(RichText::new("Clear All").color(Color32::RED)).clicked() {
+                    if ui
+                        .button(RichText::new("Clear All").color(Color32::RED))
+                        .clicked()
+                    {
                         app.spawn_clear_all_ip_blocks();
                         state.showing_clear_all_confirmation = false;
                     }

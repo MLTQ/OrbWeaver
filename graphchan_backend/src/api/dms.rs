@@ -1,4 +1,4 @@
-use super::{AppState, ApiError, ApiResult};
+use super::{ApiError, ApiResult, AppState};
 use crate::dms::{ConversationView, DirectMessageView, DmService};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;

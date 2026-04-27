@@ -24,10 +24,11 @@ impl<'conn> super::TopicRepository for SqliteTopicRepository<'conn> {
     }
 
     fn list_subscribed(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT topic_id FROM user_topics ORDER BY subscribed_at DESC"
-        )?;
-        let topics = stmt.query_map([], |row| row.get(0))?
+        let mut stmt = self
+            .conn
+            .prepare("SELECT topic_id FROM user_topics ORDER BY subscribed_at DESC")?;
+        let topics = stmt
+            .query_map([], |row| row.get(0))?
             .collect::<Result<Vec<String>, _>>()?;
         Ok(topics)
     }
@@ -58,19 +59,21 @@ impl<'conn> super::TopicRepository for SqliteTopicRepository<'conn> {
     }
 
     fn list_thread_topics(&self, thread_id: &str) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT topic_id FROM thread_topics WHERE thread_id = ?1"
-        )?;
-        let topics = stmt.query_map(params![thread_id], |row| row.get(0))?
+        let mut stmt = self
+            .conn
+            .prepare("SELECT topic_id FROM thread_topics WHERE thread_id = ?1")?;
+        let topics = stmt
+            .query_map(params![thread_id], |row| row.get(0))?
             .collect::<Result<Vec<String>, _>>()?;
         Ok(topics)
     }
 
     fn list_threads_for_topic(&self, topic_id: &str) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT thread_id FROM thread_topics WHERE topic_id = ?1"
-        )?;
-        let threads = stmt.query_map(params![topic_id], |row| row.get(0))?
+        let mut stmt = self
+            .conn
+            .prepare("SELECT thread_id FROM thread_topics WHERE topic_id = ?1")?;
+        let threads = stmt
+            .query_map(params![topic_id], |row| row.get(0))?
             .collect::<Result<Vec<String>, _>>()?;
         Ok(threads)
     }

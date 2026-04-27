@@ -1,4 +1,4 @@
-use super::{AppState, ApiError, ApiResult};
+use super::{ApiError, ApiResult, AppState};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
@@ -18,7 +18,8 @@ pub(crate) async fn get_setting_handler(
     State(state): State<AppState>,
     Path(key): Path<String>,
 ) -> ApiResult<Option<String>> {
-    let value = state.database
+    let value = state
+        .database
         .get_setting(&key)
         .map_err(ApiError::Internal)?;
     Ok(Json(value))
@@ -29,20 +30,20 @@ pub(crate) async fn set_setting_handler(
     Path(key): Path<String>,
     Json(req): Json<SetSettingRequest>,
 ) -> Result<StatusCode, ApiError> {
-    state.database
+    state
+        .database
         .set_setting(&key, &req.value)
         .map_err(ApiError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub(crate) async fn list_topics_handler(
-    State(state): State<AppState>,
-) -> ApiResult<Vec<String>> {
+pub(crate) async fn list_topics_handler(State(state): State<AppState>) -> ApiResult<Vec<String>> {
     use crate::database::repositories::TopicRepository;
 
-    let topics = state.database.with_repositories(|repos| {
-        repos.topics().list_subscribed()
-    }).map_err(ApiError::Internal)?;
+    let topics = state
+        .database
+        .with_repositories(|repos| repos.topics().list_subscribed())
+        .map_err(ApiError::Internal)?;
 
     Ok(Json(topics))
 }
@@ -54,12 +55,16 @@ pub(crate) async fn subscribe_topic_handler(
     use crate::database::repositories::TopicRepository;
 
     // Subscribe in database
-    state.database.with_repositories(|repos| {
-        repos.topics().subscribe(&req.topic_id)
-    }).map_err(ApiError::Internal)?;
+    state
+        .database
+        .with_repositories(|repos| repos.topics().subscribe(&req.topic_id))
+        .map_err(ApiError::Internal)?;
 
     // Subscribe to the gossip topic
-    state.network.subscribe_to_topic(&req.topic_id).await
+    state
+        .network
+        .subscribe_to_topic(&req.topic_id)
+        .await
         .map_err(ApiError::Internal)?;
 
     Ok(StatusCode::NO_CONTENT)
@@ -71,9 +76,10 @@ pub(crate) async fn unsubscribe_topic_handler(
 ) -> Result<StatusCode, ApiError> {
     use crate::database::repositories::TopicRepository;
 
-    state.database.with_repositories(|repos| {
-        repos.topics().unsubscribe(&topic_id)
-    }).map_err(ApiError::Internal)?;
+    state
+        .database
+        .with_repositories(|repos| repos.topics().unsubscribe(&topic_id))
+        .map_err(ApiError::Internal)?;
 
     // Note: We don't unsubscribe from the gossip topic because it's harmless to stay subscribed
     // and might cause issues if we re-subscribe later

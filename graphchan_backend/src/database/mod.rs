@@ -127,7 +127,10 @@ const VERSIONED_MIGRATIONS: &[(i64, &str)] = &[
     // base schema is still defined in MIGRATIONS above for first-run
     // bootstrapping; any column or table added after the initial release
     // belongs in a new entry here.
-    (1, "-- baseline (no-op; pre-existing schema lives in MIGRATIONS)"),
+    (
+        1,
+        "-- baseline (no-op; pre-existing schema lives in MIGRATIONS)",
+    ),
     // version 2: decrypt_status on direct_messages.
     // Values: 'decrypted' (default — message was successfully decrypted on
     // receipt), 'pending_key' (sender's x25519 key was not yet known —
@@ -342,11 +345,9 @@ impl Database {
     /// Get a setting value by key
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
         self.with_conn(|conn| {
-            conn.query_row(
-                "SELECT value FROM settings WHERE key = ?1",
-                [key],
-                |row| row.get::<_, String>(0),
-            )
+            conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
+                row.get::<_, String>(0)
+            })
             .optional()
             .context("failed to query setting")
         })

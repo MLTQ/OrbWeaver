@@ -107,7 +107,8 @@ impl<'conn> super::SearchRepository for SqliteSearchRepository<'conn> {
 
         // Re-sort combined results by score
         results.sort_by(|a, b| {
-            a.bm25_score.partial_cmp(&b.bm25_score)
+            a.bm25_score
+                .partial_cmp(&b.bm25_score)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| b.post.created_at.cmp(&a.post.created_at))
         });

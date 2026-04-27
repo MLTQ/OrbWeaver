@@ -1,6 +1,9 @@
-use eframe::egui::{self, Color32, RichText};
+use super::super::{
+    state::{SearchState, ThreadState, ViewState},
+    GraphchanApp,
+};
 use crate::models::SearchResultView;
-use super::super::{GraphchanApp, state::{SearchState, ViewState, ThreadState}};
+use eframe::egui::{self, Color32, RichText};
 
 pub fn render_search_results(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut SearchState) {
     ui.heading(format!("Search: \"{}\"", state.query));
@@ -60,21 +63,28 @@ fn render_search_result(
 
             // Header
             ui.horizontal(|ui| {
-                let type_badge = if result.result_type == "file" { "📎 File" } else { "💬 Post" };
+                let type_badge = if result.result_type == "file" {
+                    "📎 File"
+                } else {
+                    "💬 Post"
+                };
                 ui.label(RichText::new(type_badge).small().weak());
 
-                ui.label(RichText::new(&result.thread_title)
-                    .strong()
-                    .color(Color32::from_rgb(100, 149, 237)));
+                ui.label(
+                    RichText::new(&result.thread_title)
+                        .strong()
+                        .color(Color32::from_rgb(100, 149, 237)),
+                );
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("📍 View in context").clicked() {
                         *thread_to_open = Some((result.thread_id.clone(), result.post.id.clone()));
                     }
 
-                    ui.label(RichText::new(
-                        &super::super::format_timestamp(&result.post.created_at)
-                    ).weak());
+                    ui.label(
+                        RichText::new(&super::super::format_timestamp(&result.post.created_at))
+                            .weak(),
+                    );
                 });
             });
 
@@ -82,10 +92,16 @@ fn render_search_result(
 
             // Author
             if let Some(author_id) = &result.post.author_peer_id {
-                let author_name = app.peers.get(author_id)
+                let author_name = app
+                    .peers
+                    .get(author_id)
                     .and_then(|p| p.username.as_deref())
                     .unwrap_or("Unknown");
-                ui.label(RichText::new(format!("by {}", author_name)).italics().weak());
+                ui.label(
+                    RichText::new(format!("by {}", author_name))
+                        .italics()
+                        .weak(),
+                );
 
                 // Display agent badge if post has agent metadata
                 if let Some(metadata) = &result.post.metadata {
@@ -98,7 +114,7 @@ fn render_search_result(
                         ui.label(
                             RichText::new(badge_text)
                                 .size(10.0)
-                                .color(Color32::from_rgb(150, 200, 255))
+                                .color(Color32::from_rgb(150, 200, 255)),
                         );
                     }
                 }
@@ -108,7 +124,15 @@ fn render_search_result(
 
             // File info for file results
             if let Some(file) = &result.file {
-                ui.label(RichText::new(&file.original_name.clone().unwrap_or_else(|| "Unnamed file".to_string())).strong());
+                ui.label(
+                    RichText::new(
+                        &file
+                            .original_name
+                            .clone()
+                            .unwrap_or_else(|| "Unnamed file".to_string()),
+                    )
+                    .strong(),
+                );
                 if let Some(size) = file.size_bytes {
                     ui.label(RichText::new(format!("{} bytes", size)).small().weak());
                 }
@@ -122,10 +146,12 @@ fn render_search_result(
 
             // Footer
             ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("Score: {:.2}", result.bm25_score))
-                    .small().weak());
-                ui.label(RichText::new(&result.post.id)
-                    .small().monospace().weak());
+                ui.label(
+                    RichText::new(format!("Score: {:.2}", result.bm25_score))
+                        .small()
+                        .weak(),
+                );
+                ui.label(RichText::new(&result.post.id).small().monospace().weak());
             });
         });
 }
@@ -145,9 +171,11 @@ fn render_snippet(ui: &mut egui::Ui, snippet: &str) {
                 if let Some(mark_end) = snippet[search_from..].find("</mark>") {
                     let absolute_end = search_from + mark_end;
 
-                    ui.label(RichText::new(&snippet[search_from..absolute_end])
-                        .background_color(Color32::from_rgb(255, 255, 100))
-                        .strong());
+                    ui.label(
+                        RichText::new(&snippet[search_from..absolute_end])
+                            .background_color(Color32::from_rgb(255, 255, 100))
+                            .strong(),
+                    );
 
                     current_pos = absolute_end + 7;
                 } else {

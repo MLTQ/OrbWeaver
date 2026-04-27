@@ -17,10 +17,9 @@ mod redacted_posts;
 mod search;
 
 use super::models::{
-    FileRecord, PeerRecord, PostRecord, ReactionRecord, ThreadRecord, ThreadMemberKey,
-    DirectMessageRecord, ConversationRecord, BlockedPeerRecord, BlocklistSubscriptionRecord,
-    BlocklistEntryRecord, RedactedPostRecord, SearchResultRecord,
-    PeerIpRecord, IpBlockRecord,
+    BlockedPeerRecord, BlocklistEntryRecord, BlocklistSubscriptionRecord, ConversationRecord,
+    DirectMessageRecord, FileRecord, IpBlockRecord, PeerIpRecord, PeerRecord, PostRecord,
+    ReactionRecord, RedactedPostRecord, SearchResultRecord, ThreadMemberKey, ThreadRecord,
 };
 use anyhow::Result;
 use rusqlite::Connection;
@@ -93,7 +92,11 @@ pub trait ThreadMemberKeyRepository {
 pub trait DirectMessageRepository {
     fn create(&self, record: &DirectMessageRecord) -> Result<()>;
     fn get(&self, id: &str) -> Result<Option<DirectMessageRecord>>;
-    fn list_for_conversation(&self, conversation_id: &str, limit: usize) -> Result<Vec<DirectMessageRecord>>;
+    fn list_for_conversation(
+        &self,
+        conversation_id: &str,
+        limit: usize,
+    ) -> Result<Vec<DirectMessageRecord>>;
     fn mark_as_read(&self, id: &str, read_at: &str) -> Result<()>;
     /// Mark every unread incoming message in a conversation as read.
     /// Returns the number of rows updated. Pairs with
@@ -120,7 +123,12 @@ pub trait ConversationRepository {
     fn get(&self, id: &str) -> Result<Option<ConversationRecord>>;
     fn list(&self) -> Result<Vec<ConversationRecord>>;
     fn update_unread_count(&self, conversation_id: &str, count: i64) -> Result<()>;
-    fn update_last_message(&self, conversation_id: &str, message_at: &str, preview: &str) -> Result<()>;
+    fn update_last_message(
+        &self,
+        conversation_id: &str,
+        message_at: &str,
+        preview: &str,
+    ) -> Result<()>;
     /// Atomically increment unread_count by 1, creating the conversation row if
     /// missing and updating last_message_at / preview in the same statement.
     /// Used by receive_dm — separate from upsert() because upsert clobbers the

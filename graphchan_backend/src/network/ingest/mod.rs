@@ -3,7 +3,9 @@ mod profile;
 mod reactions;
 mod resync;
 
-use files::{apply_file_announcement, download_blob, ensure_download_directory, file_needs_download};
+use files::{
+    apply_file_announcement, download_blob, ensure_download_directory, file_needs_download,
+};
 use profile::apply_profile_update;
 use reactions::apply_reaction_update;
 use resync::download_thread_snapshot_blob;
@@ -11,12 +13,12 @@ use resync::download_thread_snapshot_blob;
 use crate::blocking::IpBlockChecker;
 use crate::config::GraphchanPaths;
 use crate::database::models::{FileRecord, PostRecord, ThreadRecord};
-use crate::database::repositories::{FileRepository, PeerIpRepository, PeerRepository, PostRepository, ThreadRepository};
+use crate::database::repositories::{
+    FileRepository, PeerIpRepository, PeerRepository, PostRepository, ThreadRepository,
+};
 use crate::database::Database;
 use crate::events::{AppEvent, EventPublisher};
-use crate::network::events::{
-    EventPayload, FileAnnouncement, InboundGossip, NetworkEvent,
-};
+use crate::network::events::{EventPayload, FileAnnouncement, InboundGossip, NetworkEvent};
 use crate::threading::{PostView, ThreadDetails};
 use anyhow::{Context, Result};
 use blake3::Hasher;
@@ -71,9 +73,9 @@ pub async fn run_ingest_loop(
     // Cache of recently seen message IDs to prevent re-broadcast loops.
     // Bounded LRU: events older than SEEN_MESSAGES_CAPACITY may rebroadcast once
     // more, but iroh-gossip itself dedups so this is harmless.
-    let seen_messages: Arc<Mutex<LruCache<String, ()>>> = Arc::new(Mutex::new(
-        LruCache::new(NonZeroUsize::new(SEEN_MESSAGES_CAPACITY).expect("non-zero")),
-    ));
+    let seen_messages: Arc<Mutex<LruCache<String, ()>>> = Arc::new(Mutex::new(LruCache::new(
+        NonZeroUsize::new(SEEN_MESSAGES_CAPACITY).expect("non-zero"),
+    )));
 
     while let Some(message) = rx.recv().await {
         let peer = message.peer_id.clone();
@@ -89,7 +91,9 @@ pub async fn run_ingest_loop(
             &local_peer_id,
             &ip_blocker,
             &events,
-        ).await {
+        )
+        .await
+        {
             Ok(Some(resync_request)) => {
                 // Spawn background task to re-download thread
                 let db = database.clone();
@@ -110,7 +114,9 @@ pub async fn run_ingest_loop(
                         resync_request.ticket,
                         blobs_clone,
                         ep,
-                    ).await {
+                    )
+                    .await
+                    {
                         tracing::warn!(
                             error = ?err,
                             thread_id = %resync_request.thread_id,
@@ -151,31 +157,35 @@ async fn capture_peer_ip(
     endpoint: &Endpoint,
     iroh_peer_id_str: &str,
 ) -> Result<()> {
-    use iroh::endpoint::ConnectionType;
-    use n0_watcher::Watcher;
+    use iroh::endpoint::TransportAddrUsage;
+    use iroh_base::TransportAddr;
 
     let endpoint_id: iroh::PublicKey = match iroh_peer_id_str.parse() {
         Ok(id) => id,
         Err(_) => return Ok(()), // Not an iroh PublicKey — nothing to do
     };
 
-    let Some(mut watcher) = endpoint.conn_type(endpoint_id) else {
+    let Some(info) = endpoint.remote_info(endpoint_id).await else {
         return Ok(());
     };
 
-    let socket_addr = match watcher.get() {
-        ConnectionType::Direct(addr) => Some(addr),
-        ConnectionType::Mixed(addr, _relay) => Some(addr),
-        ConnectionType::Relay(_) | ConnectionType::None => None,
-    };
+    let socket_addr = info.addrs().find_map(|addr_info| {
+        if !matches!(addr_info.usage(), TransportAddrUsage::Active) {
+            return None;
+        }
+        match addr_info.addr() {
+            TransportAddr::Ip(addr) => Some(*addr),
+            TransportAddr::Relay(_) => None,
+            _ => None,
+        }
+    });
 
     let Some(addr) = socket_addr else {
         return Ok(());
     };
 
-    let canonical_id: Option<String> = database.with_repositories(|repos| {
-        Ok(repos.peers().id_for_iroh_peer(iroh_peer_id_str)?)
-    })?;
+    let canonical_id: Option<String> = database
+        .with_repositories(|repos| Ok(repos.peers().id_for_iroh_peer(iroh_peer_id_str)?))?;
 
     let Some(peer_id) = canonical_id else {
         tracing::trace!(
@@ -188,7 +198,9 @@ async fn capture_peer_ip(
 
     let timestamp = chrono::Utc::now().timestamp();
     database.with_repositories(|repos| {
-        repos.peer_ips().update(&peer_id, &addr.ip().to_string(), timestamp)
+        repos
+            .peer_ips()
+            .update(&peer_id, &addr.ip().to_string(), timestamp)
     })?;
     Ok(())
 }
@@ -223,7 +235,10 @@ async fn handle_message(
                 "📢 received thread announcement (will download on-demand)"
             );
 
-            let msg_id = format!("thread:{}:{}", announcement.thread_id, announcement.thread_hash);
+            let msg_id = format!(
+                "thread:{}:{}",
+                announcement.thread_id, announcement.thread_hash
+            );
             let should_rebroadcast = mark_seen(seen_messages, msg_id).await;
 
             apply_thread_announcement(database, announcement.clone())?;
@@ -241,7 +256,12 @@ async fn handle_message(
                 let mut rebroadcast_announcement = announcement.clone();
                 rebroadcast_announcement.announcer_peer_id = local_peer_id.to_string();
                 tokio::spawn(async move {
-                    if let Err(err) = publisher_clone.send(NetworkEvent::Broadcast(EventPayload::ThreadAnnouncement(rebroadcast_announcement))).await {
+                    if let Err(err) = publisher_clone
+                        .send(NetworkEvent::Broadcast(EventPayload::ThreadAnnouncement(
+                            rebroadcast_announcement,
+                        )))
+                        .await
+                    {
                         tracing::warn!(error = ?err, "failed to re-broadcast ThreadAnnouncement");
                     }
                 });
@@ -273,7 +293,12 @@ async fn handle_message(
                 let publisher_clone = publisher.clone();
                 let post_clone = post.clone();
                 tokio::spawn(async move {
-                    if let Err(err) = publisher_clone.send(NetworkEvent::Broadcast(EventPayload::PostUpdate(post_clone))).await {
+                    if let Err(err) = publisher_clone
+                        .send(NetworkEvent::Broadcast(EventPayload::PostUpdate(
+                            post_clone,
+                        )))
+                        .await
+                    {
                         tracing::warn!(error = ?err, "failed to re-broadcast PostUpdate");
                     }
                 });
@@ -326,7 +351,12 @@ async fn handle_message(
                 let publisher_clone = publisher.clone();
                 let announcement_clone = announcement.clone();
                 tokio::spawn(async move {
-                    if let Err(err) = publisher_clone.send(NetworkEvent::Broadcast(EventPayload::FileAvailable(announcement_clone))).await {
+                    if let Err(err) = publisher_clone
+                        .send(NetworkEvent::Broadcast(EventPayload::FileAvailable(
+                            announcement_clone,
+                        )))
+                        .await
+                    {
                         tracing::warn!(error = ?err, "failed to re-broadcast FileAvailable");
                     }
                 });
@@ -339,7 +369,9 @@ async fn handle_message(
             let should_rebroadcast = mark_seen(seen_messages, msg_id).await;
 
             // Download avatar blob if a ticket is provided and we don't have it locally
-            if let (Some(ref avatar_id), Some(ref ticket)) = (&update.avatar_file_id, &update.ticket) {
+            if let (Some(ref avatar_id), Some(ref ticket)) =
+                (&update.avatar_file_id, &update.ticket)
+            {
                 let hash = ticket.hash();
                 let has_blob = blobs.has(hash).await.unwrap_or(false);
                 if !has_blob {
@@ -416,7 +448,12 @@ async fn handle_message(
                 let publisher_clone = publisher.clone();
                 let update_clone = update.clone();
                 tokio::spawn(async move {
-                    if let Err(err) = publisher_clone.send(NetworkEvent::Broadcast(EventPayload::ProfileUpdate(update_clone))).await {
+                    if let Err(err) = publisher_clone
+                        .send(NetworkEvent::Broadcast(EventPayload::ProfileUpdate(
+                            update_clone,
+                        )))
+                        .await
+                    {
                         tracing::warn!(error = ?err, "failed to re-broadcast ProfileUpdate");
                     }
                 });
@@ -427,10 +464,7 @@ async fn handle_message(
         EventPayload::ReactionUpdate(reaction) => {
             let msg_id = format!(
                 "reaction:{}:{}:{}:{}",
-                reaction.post_id,
-                reaction.reactor_peer_id,
-                reaction.emoji,
-                reaction.is_removal
+                reaction.post_id, reaction.reactor_peer_id, reaction.emoji, reaction.is_removal
             );
             let should_rebroadcast = mark_seen(seen_messages, msg_id).await;
 
@@ -447,7 +481,12 @@ async fn handle_message(
                 let publisher_clone = publisher.clone();
                 let reaction_clone = reaction.clone();
                 tokio::spawn(async move {
-                    if let Err(err) = publisher_clone.send(NetworkEvent::Broadcast(EventPayload::ReactionUpdate(reaction_clone))).await {
+                    if let Err(err) = publisher_clone
+                        .send(NetworkEvent::Broadcast(EventPayload::ReactionUpdate(
+                            reaction_clone,
+                        )))
+                        .await
+                    {
                         tracing::warn!(error = ?err, "failed to re-broadcast ReactionUpdate");
                     }
                 });
@@ -520,7 +559,8 @@ async fn handle_message(
                         if action.is_unblock {
                             let _ = checker.unblock_peer(&action.blocked_peer_id);
                         } else {
-                            let _ = checker.block_peer(&action.blocked_peer_id, action.reason.clone());
+                            let _ =
+                                checker.block_peer(&action.blocked_peer_id, action.reason.clone());
                         }
                         break;
                     }
@@ -539,7 +579,7 @@ fn apply_thread_announcement(
     database: &Database,
     announcement: crate::network::events::ThreadAnnouncement,
 ) -> Result<()> {
-    use crate::database::models::{PeerRecord, ThreadRecord, PostRecord};
+    use crate::database::models::{PeerRecord, PostRecord, ThreadRecord};
 
     database.with_repositories(|repos| {
         // Check if we already have this thread
@@ -604,7 +644,10 @@ fn apply_thread_announcement(
             let stub_peer = PeerRecord {
                 id: announcement.creator_peer_id.clone(),
                 alias: None,
-                username: Some(format!("Unknown ({})", crate::utils::short_id(&announcement.creator_peer_id, 8))),
+                username: Some(format!(
+                    "Unknown ({})",
+                    crate::utils::short_id(&announcement.creator_peer_id, 8)
+                )),
                 bio: None,
                 friendcode: None,
                 iroh_peer_id: None,
@@ -628,7 +671,7 @@ fn apply_thread_announcement(
             thread_hash: Some(announcement.thread_hash.clone()),
             visibility: "social".to_string(),
             topic_secret: None,
-            sync_status: "announced".to_string(),  // Mark as announced but not yet downloaded
+            sync_status: "announced".to_string(), // Mark as announced but not yet downloaded
             source_url: None,
             source_platform: None,
             last_refreshed_at: None,
@@ -807,9 +850,7 @@ fn apply_thread_snapshot(
     // After creating posts, check for any files that need downloading
     // (Files might have arrived before the posts existed)
     for post_id in post_ids {
-        let files = database.with_repositories(|repos| {
-            repos.files().list_for_post(&post_id)
-        })?;
+        let files = database.with_repositories(|repos| repos.files().list_for_post(&post_id))?;
 
         for file in files {
             tracing::debug!(
@@ -916,7 +957,9 @@ fn create_stub_post_for_blocked_ip(
         repos.posts().upsert(&stub_record)?;
 
         // Preserve parent relationships for DAG integrity
-        repos.posts().add_relationships(&post.id, &post.parent_post_ids)?;
+        repos
+            .posts()
+            .add_relationships(&post.id, &post.parent_post_ids)?;
 
         tracing::info!(
             post_id = %post.id,
@@ -928,7 +971,11 @@ fn create_stub_post_for_blocked_ip(
     })
 }
 
-async fn apply_post_update(database: &Database, ip_blocker: &IpBlockChecker, post: PostView) -> Result<Option<ResyncRequest>> {
+async fn apply_post_update(
+    database: &Database,
+    ip_blocker: &IpBlockChecker,
+    post: PostView,
+) -> Result<Option<ResyncRequest>> {
     // Check if author's IP is blocked (using previously stored IP from peer_ips table)
     if let Some(author_id) = &post.author_peer_id {
         match ip_blocker.is_peer_blocked(author_id).await {
@@ -1165,9 +1212,10 @@ where
     R: PostRepository,
 {
     // Serialize metadata to JSON if present
-    let metadata_json = post.metadata.as_ref().and_then(|meta| {
-        serde_json::to_string(meta).ok()
-    });
+    let metadata_json = post
+        .metadata
+        .as_ref()
+        .and_then(|meta| serde_json::to_string(meta).ok());
 
     let record = PostRecord {
         id: post.id.clone(),
@@ -1183,7 +1231,6 @@ where
     repo.add_relationships(&record.id, &post.parent_post_ids)?;
     Ok(())
 }
-
 
 /// Public wrapper for applying a downloaded thread to the database.
 /// This is called when a user manually downloads a thread on-demand.
@@ -1201,14 +1248,7 @@ pub async fn apply_thread_from_download(
     let endpoint = network.endpoint();
 
     // Apply the thread to database
-    apply_thread_snapshot(
-        database,
-        paths,
-        &tx,
-        thread_details,
-        blobs,
-        &endpoint,
-    )?;
+    apply_thread_snapshot(database, paths, &tx, thread_details, blobs, &endpoint)?;
 
     // Subscribe to thread-specific topic to receive future PostUpdates and FileAnnouncements
     network.subscribe_to_thread(&thread_id).await?;
@@ -1276,7 +1316,7 @@ mod tests {
 
         let secret = SecretKey::from_bytes(&[9u8; 32]);
         let endpoint = Arc::new(
-            iroh::endpoint::Endpoint::builder()
+            iroh::endpoint::Endpoint::empty_builder()
                 .secret_key(secret.clone())
                 .bind()
                 .await

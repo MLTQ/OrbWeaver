@@ -58,7 +58,11 @@ impl<'conn> super::DirectMessageRepository for SqliteDirectMessageRepository<'co
         Ok(result)
     }
 
-    fn list_for_conversation(&self, conversation_id: &str, limit: usize) -> Result<Vec<DirectMessageRecord>> {
+    fn list_for_conversation(
+        &self,
+        conversation_id: &str,
+        limit: usize,
+    ) -> Result<Vec<DirectMessageRecord>> {
         // Inner query takes the N most recent messages (DESC + LIMIT); outer
         // query re-sorts ASC so the UI can append new sends to the end of the
         // list naturally. Without the wrapper, clients would have to choose
@@ -87,7 +91,8 @@ impl<'conn> super::DirectMessageRepository for SqliteDirectMessageRepository<'co
                 nonce: row.get(5)?,
                 created_at: row.get(6)?,
                 read_at: row.get(7)?,
-                decrypt_status: row.get::<_, Option<String>>(8)?
+                decrypt_status: row
+                    .get::<_, Option<String>>(8)?
                     .unwrap_or_else(|| "decrypted".into()),
             })
         })?;
@@ -164,7 +169,8 @@ impl<'conn> super::DirectMessageRepository for SqliteDirectMessageRepository<'co
                 nonce: row.get(5)?,
                 created_at: row.get(6)?,
                 read_at: row.get(7)?,
-                decrypt_status: row.get::<_, Option<String>>(8)?
+                decrypt_status: row
+                    .get::<_, Option<String>>(8)?
                     .unwrap_or_else(|| "decrypted".into()),
             })
         })?;

@@ -1,6 +1,6 @@
+use log::error;
 use std::sync::mpsc::Sender;
 use std::thread;
-use log::error;
 
 use crate::api::ApiClient;
 use crate::importer;
@@ -36,12 +36,14 @@ pub fn load_thread(client: ApiClient, tx: Sender<AppMessage>, thread_id: String,
             client.get_thread(&thread_id)
         } else {
             // For initial load, try to download from peers first
-            client.download_thread(&thread_id)
-                .or_else(|download_err| {
-                    // If download fails (e.g., no ticket available), fall back to regular get
-                    log::info!("Thread download failed ({}), falling back to get_thread", download_err);
-                    client.get_thread(&thread_id)
-                })
+            client.download_thread(&thread_id).or_else(|download_err| {
+                // If download fails (e.g., no ticket available), fall back to regular get
+                log::info!(
+                    "Thread download failed ({}), falling back to get_thread",
+                    download_err
+                );
+                client.get_thread(&thread_id)
+            })
         };
 
         let message = AppMessage::ThreadLoaded { thread_id, result };
@@ -51,7 +53,12 @@ pub fn load_thread(client: ApiClient, tx: Sender<AppMessage>, thread_id: String,
     });
 }
 
-pub fn create_thread(client: ApiClient, tx: Sender<AppMessage>, payload: CreateThreadInput, files: Vec<std::path::PathBuf>) {
+pub fn create_thread(
+    client: ApiClient,
+    tx: Sender<AppMessage>,
+    payload: CreateThreadInput,
+    files: Vec<std::path::PathBuf>,
+) {
     thread::spawn(move || {
         let result = client.create_thread(&payload, &files);
         if tx.send(AppMessage::ThreadCreated(result)).is_err() {
@@ -74,7 +81,7 @@ pub fn create_post(
             Ok(post) => {
                 let post_id = post.id.clone();
                 let mut uploaded_files = Vec::new();
-                
+
                 // 2. Upload Attachments
                 for path in attachments {
                     match client.upload_file(&post_id, &path) {
@@ -82,9 +89,12 @@ pub fn create_post(
                         Err(e) => error!("Failed to upload attachment {:?}: {}", path, e),
                     }
                 }
-                
+
                 // 3. Send Success Message
-                let message = AppMessage::PostCreated { thread_id: thread_id.clone(), result: Ok(post) };
+                let message = AppMessage::PostCreated {
+                    thread_id: thread_id.clone(),
+                    result: Ok(post),
+                };
                 if tx.send(message).is_err() {
                     error!("failed to send PostCreated message");
                 }
@@ -102,7 +112,10 @@ pub fn create_post(
                 }
             }
             Err(e) => {
-                let message = AppMessage::PostCreated { thread_id, result: Err(e) };
+                let message = AppMessage::PostCreated {
+                    thread_id,
+                    result: Err(e),
+                };
                 if tx.send(message).is_err() {
                     error!("failed to send PostCreated message");
                 }
@@ -111,7 +124,12 @@ pub fn create_post(
     });
 }
 
-pub fn import_fourchan(client: ApiClient, tx: Sender<AppMessage>, url: String, topics: Vec<String>) {
+pub fn import_fourchan(
+    client: ApiClient,
+    tx: Sender<AppMessage>,
+    url: String,
+    topics: Vec<String>,
+) {
     thread::spawn(move || {
         let result = importer::import_fourchan_thread(&client, &url, topics);
         if tx.send(AppMessage::ImportFinished(result)).is_err() {
@@ -120,12 +138,7 @@ pub fn import_fourchan(client: ApiClient, tx: Sender<AppMessage>, url: String, t
     });
 }
 
-pub fn import_reddit(
-    api: ApiClient,
-    tx: Sender<AppMessage>,
-    url: String,
-    topics: Vec<String>,
-) {
+pub fn import_reddit(api: ApiClient, tx: Sender<AppMessage>, url: String, topics: Vec<String>) {
     std::thread::spawn(move || {
         let result = crate::importer::import_reddit_thread(&api, &url, topics);
         match result {
@@ -142,7 +155,10 @@ pub fn import_reddit(
 pub fn refresh_thread_source(client: ApiClient, tx: Sender<AppMessage>, thread_id: String) {
     thread::spawn(move || {
         let result = client.refresh_thread(&thread_id);
-        if tx.send(AppMessage::ThreadSourceRefreshed { thread_id, result }).is_err() {
+        if tx
+            .send(AppMessage::ThreadSourceRefreshed { thread_id, result })
+            .is_err()
+        {
             error!("failed to send ThreadSourceRefreshed message");
         }
     });
@@ -173,7 +189,8 @@ pub fn download_image(tx: Sender<AppMessage>, file_id: String, url: String) {
         log::info!("Downloading image from URL: {}", url);
 
         let result = (|| {
-            let client = crate::api::get_shared_client().map_err(|e| format!("HTTP client error: {}", e))?;
+            let client =
+                crate::api::get_shared_client().map_err(|e| format!("HTTP client error: {}", e))?;
 
             // Retry up to 3 times for transient errors
             let mut last_error = String::new();
@@ -188,7 +205,8 @@ pub fn download_image(tx: Sender<AppMessage>, file_id: String, url: String) {
 
                         match resp.bytes() {
                             Ok(bytes) => {
-                                let dyn_img = image::load_from_memory(&bytes).map_err(|e| format!("Image decode error: {}", e))?;
+                                let dyn_img = image::load_from_memory(&bytes)
+                                    .map_err(|e| format!("Image decode error: {}", e))?;
                                 let rgba = dyn_img.to_rgba8();
                                 let size = [dyn_img.width() as usize, dyn_img.height() as usize];
                                 return Ok(LoadedImage {
@@ -199,8 +217,15 @@ pub fn download_image(tx: Sender<AppMessage>, file_id: String, url: String) {
                             Err(e) => {
                                 last_error = format!("Download error: {}", e);
                                 if attempt < 3 {
-                                    log::warn!("Image download attempt {} failed for {}: {}, retrying...", attempt, file_id, last_error);
-                                    std::thread::sleep(std::time::Duration::from_millis(500 * attempt as u64));
+                                    log::warn!(
+                                        "Image download attempt {} failed for {}: {}, retrying...",
+                                        attempt,
+                                        file_id,
+                                        last_error
+                                    );
+                                    std::thread::sleep(std::time::Duration::from_millis(
+                                        500 * attempt as u64,
+                                    ));
                                     continue;
                                 }
                             }
@@ -209,8 +234,15 @@ pub fn download_image(tx: Sender<AppMessage>, file_id: String, url: String) {
                     Err(e) => {
                         last_error = format!("Request error: {}", e);
                         if attempt < 3 {
-                            log::warn!("Image download attempt {} failed for {}: {}, retrying...", attempt, file_id, last_error);
-                            std::thread::sleep(std::time::Duration::from_millis(500 * attempt as u64));
+                            log::warn!(
+                                "Image download attempt {} failed for {}: {}, retrying...",
+                                attempt,
+                                file_id,
+                                last_error
+                            );
+                            std::thread::sleep(std::time::Duration::from_millis(
+                                500 * attempt as u64,
+                            ));
                             continue;
                         }
                     }
@@ -246,7 +278,12 @@ pub fn upload_avatar(client: ApiClient, tx: Sender<AppMessage>, path: String) {
     });
 }
 
-pub fn update_profile(client: ApiClient, tx: Sender<AppMessage>, username: Option<String>, bio: Option<String>) {
+pub fn update_profile(
+    client: ApiClient,
+    tx: Sender<AppMessage>,
+    username: Option<String>,
+    bio: Option<String>,
+) {
     thread::spawn(move || {
         let result = client.update_profile(username, bio);
         if tx.send(AppMessage::ProfileUpdated(result)).is_err() {
@@ -390,10 +427,7 @@ pub fn ignore_thread(client: ApiClient, tx: Sender<AppMessage>, thread_id: Strin
 pub fn load_reactions(client: ApiClient, tx: Sender<AppMessage>, post_id: String) {
     thread::spawn(move || {
         let result = client.get_reactions(&post_id);
-        let message = AppMessage::ReactionsLoaded {
-            post_id,
-            result,
-        };
+        let message = AppMessage::ReactionsLoaded { post_id, result };
         if tx.send(message).is_err() {
             error!("failed to send ReactionsLoaded message");
         }
@@ -403,10 +437,7 @@ pub fn load_reactions(client: ApiClient, tx: Sender<AppMessage>, post_id: String
 pub fn add_reaction(client: ApiClient, tx: Sender<AppMessage>, post_id: String, emoji: String) {
     thread::spawn(move || {
         let result = client.add_reaction(&post_id, &emoji);
-        let message = AppMessage::ReactionAdded {
-            post_id,
-            result,
-        };
+        let message = AppMessage::ReactionAdded { post_id, result };
         if tx.send(message).is_err() {
             error!("failed to send ReactionAdded message");
         }
@@ -416,10 +447,7 @@ pub fn add_reaction(client: ApiClient, tx: Sender<AppMessage>, post_id: String, 
 pub fn remove_reaction(client: ApiClient, tx: Sender<AppMessage>, post_id: String, emoji: String) {
     thread::spawn(move || {
         let result = client.remove_reaction(&post_id, &emoji);
-        let message = AppMessage::ReactionRemoved {
-            post_id,
-            result,
-        };
+        let message = AppMessage::ReactionRemoved { post_id, result };
         if tx.send(message).is_err() {
             error!("failed to send ReactionRemoved message");
         }
@@ -477,10 +505,7 @@ pub fn load_messages(client: ApiClient, tx: Sender<AppMessage>, peer_id: String)
 pub fn send_dm(client: ApiClient, tx: Sender<AppMessage>, to_peer_id: String, body: String) {
     thread::spawn(move || {
         let result = client.send_dm(&to_peer_id, &body);
-        let message = AppMessage::DmSent {
-            to_peer_id,
-            result,
-        };
+        let message = AppMessage::DmSent { to_peer_id, result };
         if tx.send(message).is_err() {
             error!("failed to send DmSent message");
         }
@@ -497,7 +522,12 @@ pub fn load_blocked_peers(client: ApiClient, tx: Sender<AppMessage>) {
     });
 }
 
-pub fn block_peer(client: ApiClient, tx: Sender<AppMessage>, peer_id: String, reason: Option<String>) {
+pub fn block_peer(
+    client: ApiClient,
+    tx: Sender<AppMessage>,
+    peer_id: String,
+    reason: Option<String>,
+) {
     thread::spawn(move || {
         let result = client.block_peer(&peer_id, reason);
         let message = AppMessage::PeerBlocked { peer_id, result };
@@ -544,7 +574,10 @@ pub fn subscribe_blocklist(
             auto_apply,
         };
         let result = client.subscribe_blocklist(&request);
-        let message = AppMessage::BlocklistSubscribed { blocklist_id, result };
+        let message = AppMessage::BlocklistSubscribed {
+            blocklist_id,
+            result,
+        };
         if tx.send(message).is_err() {
             error!("failed to send BlocklistSubscribed message");
         }
@@ -554,7 +587,10 @@ pub fn subscribe_blocklist(
 pub fn unsubscribe_blocklist(client: ApiClient, tx: Sender<AppMessage>, blocklist_id: String) {
     thread::spawn(move || {
         let result = client.unsubscribe_blocklist(&blocklist_id);
-        let message = AppMessage::BlocklistUnsubscribed { blocklist_id, result };
+        let message = AppMessage::BlocklistUnsubscribed {
+            blocklist_id,
+            result,
+        };
         if tx.send(message).is_err() {
             error!("failed to send BlocklistUnsubscribed message");
         }
@@ -564,7 +600,10 @@ pub fn unsubscribe_blocklist(client: ApiClient, tx: Sender<AppMessage>, blocklis
 pub fn load_blocklist_entries(client: ApiClient, tx: Sender<AppMessage>, blocklist_id: String) {
     thread::spawn(move || {
         let result = client.list_blocklist_entries(&blocklist_id);
-        let message = AppMessage::BlocklistEntriesLoaded { blocklist_id, result };
+        let message = AppMessage::BlocklistEntriesLoaded {
+            blocklist_id,
+            result,
+        };
         if tx.send(message).is_err() {
             error!("failed to send BlocklistEntriesLoaded message");
         }
@@ -593,7 +632,12 @@ pub fn load_ip_block_stats(client: ApiClient, tx: Sender<AppMessage>) {
     });
 }
 
-pub fn add_ip_block(client: ApiClient, tx: Sender<AppMessage>, ip_or_range: String, reason: Option<String>) {
+pub fn add_ip_block(
+    client: ApiClient,
+    tx: Sender<AppMessage>,
+    ip_or_range: String,
+    reason: Option<String>,
+) {
     thread::spawn(move || {
         let result = client.add_ip_block(&ip_or_range, reason);
         let message = AppMessage::IpBlockAdded { result };
@@ -663,14 +707,22 @@ pub fn clear_all_ip_blocks(client: ApiClient, tx: Sender<AppMessage>) {
     });
 }
 
-pub fn trigger_file_download(client: ApiClient, tx: Sender<AppMessage>, file_id: String, thread_id: String) {
+pub fn trigger_file_download(
+    client: ApiClient,
+    tx: Sender<AppMessage>,
+    file_id: String,
+    thread_id: String,
+) {
     thread::spawn(move || {
         let result = client.trigger_file_download(&file_id);
         if result.is_ok() {
             // Reload thread to get updated download status
             let thread_result = client.get_thread(&thread_id);
             if thread_result.is_ok() {
-                let message = AppMessage::ThreadLoaded { thread_id: thread_id.clone(), result: thread_result };
+                let message = AppMessage::ThreadLoaded {
+                    thread_id: thread_id.clone(),
+                    result: thread_result,
+                };
                 if tx.send(message).is_err() {
                     error!("failed to send ThreadLoaded message after file download trigger");
                 }
@@ -764,10 +816,7 @@ pub fn load_theme_color(client: ApiClient, tx: Sender<AppMessage>) {
 pub fn subscribe_topic(client: ApiClient, tx: Sender<AppMessage>, topic_id: String) {
     thread::spawn(move || {
         let result = client.subscribe_topic(&topic_id);
-        let message = AppMessage::TopicSubscribed {
-            topic_id,
-            result,
-        };
+        let message = AppMessage::TopicSubscribed { topic_id, result };
         if tx.send(message).is_err() {
             error!("failed to send TopicSubscribed message");
         }
@@ -777,10 +826,7 @@ pub fn subscribe_topic(client: ApiClient, tx: Sender<AppMessage>, topic_id: Stri
 pub fn unsubscribe_topic(client: ApiClient, tx: Sender<AppMessage>, topic_id: String) {
     thread::spawn(move || {
         let result = client.unsubscribe_topic(&topic_id);
-        let message = AppMessage::TopicUnsubscribed {
-            topic_id,
-            result,
-        };
+        let message = AppMessage::TopicUnsubscribed { topic_id, result };
         if tx.send(message).is_err() {
             error!("failed to send TopicUnsubscribed message");
         }

@@ -118,25 +118,28 @@ impl<'conn> super::IpBlockRepository for SqliteIpBlockRepository<'conn> {
     }
 
     fn get(&self, id: i64) -> Result<Option<IpBlockRecord>> {
-        let result = self.conn.query_row(
-            r#"
+        let result = self
+            .conn
+            .query_row(
+                r#"
             SELECT id, ip_or_range, block_type, blocked_at, reason, active, hit_count
             FROM ip_blocks
             WHERE id = ?1
             "#,
-            params![id],
-            |row| {
-                Ok(IpBlockRecord {
-                    id: row.get(0)?,
-                    ip_or_range: row.get(1)?,
-                    block_type: row.get(2)?,
-                    blocked_at: row.get(3)?,
-                    reason: row.get(4)?,
-                    active: row.get::<_, i64>(5)? != 0,
-                    hit_count: row.get(6)?,
-                })
-            },
-        ).optional()?;
+                params![id],
+                |row| {
+                    Ok(IpBlockRecord {
+                        id: row.get(0)?,
+                        ip_or_range: row.get(1)?,
+                        block_type: row.get(2)?,
+                        blocked_at: row.get(3)?,
+                        reason: row.get(4)?,
+                        active: row.get::<_, i64>(5)? != 0,
+                        hit_count: row.get(6)?,
+                    })
+                },
+            )
+            .optional()?;
         Ok(result)
     }
 }

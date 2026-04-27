@@ -47,7 +47,11 @@ impl GraphchanApp {
         self.importer.error = Some(err);
     }
 
-    pub(super) fn handle_thread_source_refreshed(&mut self, thread_id: String, result: Result<crate::models::ThreadDetails, anyhow::Error>) {
+    pub(super) fn handle_thread_source_refreshed(
+        &mut self,
+        thread_id: String,
+        result: Result<crate::models::ThreadDetails, anyhow::Error>,
+    ) {
         if let ViewState::Thread(ref mut state) = self.view {
             if state.summary.id == thread_id {
                 state.refreshing_source = false;
@@ -128,7 +132,10 @@ impl GraphchanApp {
         match result {
             Ok(peer) => {
                 self.peers.insert(peer.id.clone(), peer.clone());
-                self.info_banner = Some(format!("Added peer: {}", peer.username.as_deref().unwrap_or("Unknown")));
+                self.info_banner = Some(format!(
+                    "Added peer: {}",
+                    peer.username.as_deref().unwrap_or("Unknown")
+                ));
                 state.friendcode_input.clear();
                 state.error = None;
             }
@@ -144,7 +151,11 @@ impl GraphchanApp {
 
     // Reaction handlers
 
-    pub(super) fn handle_reactions_loaded(&mut self, post_id: String, result: Result<ReactionsResponse, anyhow::Error>) {
+    pub(super) fn handle_reactions_loaded(
+        &mut self,
+        post_id: String,
+        result: Result<ReactionsResponse, anyhow::Error>,
+    ) {
         if let ViewState::Thread(state) = &mut self.view {
             state.reactions_loading.remove(&post_id);
             match result {
@@ -158,7 +169,11 @@ impl GraphchanApp {
         }
     }
 
-    pub(super) fn handle_reaction_added(&mut self, post_id: String, result: Result<(), anyhow::Error>) {
+    pub(super) fn handle_reaction_added(
+        &mut self,
+        post_id: String,
+        result: Result<(), anyhow::Error>,
+    ) {
         match result {
             Ok(()) => {
                 // Reload reactions for this post
@@ -170,7 +185,11 @@ impl GraphchanApp {
         }
     }
 
-    pub(super) fn handle_reaction_removed(&mut self, post_id: String, result: Result<(), anyhow::Error>) {
+    pub(super) fn handle_reaction_removed(
+        &mut self,
+        post_id: String,
+        result: Result<(), anyhow::Error>,
+    ) {
         match result {
             Ok(()) => {
                 // Reload reactions for this post
@@ -184,7 +203,10 @@ impl GraphchanApp {
 
     // DM handlers
 
-    pub(super) fn handle_conversations_loaded(&mut self, result: Result<Vec<ConversationView>, anyhow::Error>) {
+    pub(super) fn handle_conversations_loaded(
+        &mut self,
+        result: Result<Vec<ConversationView>, anyhow::Error>,
+    ) {
         self.dm_state.conversations_loading = false;
         match result {
             Ok(conversations) => {
@@ -224,11 +246,7 @@ impl GraphchanApp {
                         state.messages_loading = true;
                         state.messages_error = None;
                     }
-                    super::tasks::load_messages(
-                        self.api.clone(),
-                        self.tx.clone(),
-                        from_peer_id,
-                    );
+                    super::tasks::load_messages(self.api.clone(), self.tx.clone(), from_peer_id);
                 }
             }
             ServerEvent::ProfileUpdated { peer_id: _ } => {
@@ -273,7 +291,11 @@ impl GraphchanApp {
         }
     }
 
-    pub(super) fn handle_messages_loaded(&mut self, peer_id: String, result: Result<Vec<DirectMessageView>, anyhow::Error>) {
+    pub(super) fn handle_messages_loaded(
+        &mut self,
+        peer_id: String,
+        result: Result<Vec<DirectMessageView>, anyhow::Error>,
+    ) {
         if let ViewState::Conversation(ref mut state) = self.view {
             if state.peer_id == peer_id {
                 state.messages_loading = false;
@@ -295,7 +317,11 @@ impl GraphchanApp {
         }
     }
 
-    pub(super) fn handle_dm_sent(&mut self, to_peer_id: String, result: Result<DirectMessageView, anyhow::Error>) {
+    pub(super) fn handle_dm_sent(
+        &mut self,
+        to_peer_id: String,
+        result: Result<DirectMessageView, anyhow::Error>,
+    ) {
         if let ViewState::Conversation(ref mut state) = self.view {
             if state.peer_id == to_peer_id {
                 state.sending = false;
@@ -318,7 +344,11 @@ impl GraphchanApp {
 
     // Search handler
 
-    pub(super) fn handle_search_completed(&mut self, query: String, result: Result<SearchResponse, anyhow::Error>) {
+    pub(super) fn handle_search_completed(
+        &mut self,
+        query: String,
+        result: Result<SearchResponse, anyhow::Error>,
+    ) {
         if let ViewState::SearchResults(state) = &mut self.view {
             if state.query == query {
                 state.is_loading = false;
@@ -338,7 +368,10 @@ impl GraphchanApp {
 
     // Recent posts handler
 
-    pub(super) fn handle_recent_posts_loaded(&mut self, result: Result<crate::models::RecentPostsResponse, anyhow::Error>) {
+    pub(super) fn handle_recent_posts_loaded(
+        &mut self,
+        result: Result<crate::models::RecentPostsResponse, anyhow::Error>,
+    ) {
         self.recent_posts_loading = false;
         match result {
             Ok(response) => {
@@ -368,7 +401,11 @@ impl GraphchanApp {
         }
     }
 
-    pub(super) fn handle_topic_subscribed(&mut self, topic_id: String, result: Result<(), anyhow::Error>) {
+    pub(super) fn handle_topic_subscribed(
+        &mut self,
+        topic_id: String,
+        result: Result<(), anyhow::Error>,
+    ) {
         match result {
             Ok(()) => {
                 if !self.subscribed_topics.contains(&topic_id) {
@@ -384,7 +421,11 @@ impl GraphchanApp {
         }
     }
 
-    pub(super) fn handle_topic_unsubscribed(&mut self, topic_id: String, result: Result<(), anyhow::Error>) {
+    pub(super) fn handle_topic_unsubscribed(
+        &mut self,
+        topic_id: String,
+        result: Result<(), anyhow::Error>,
+    ) {
         match result {
             Ok(()) => {
                 self.subscribed_topics.retain(|t| t != &topic_id);
@@ -400,7 +441,10 @@ impl GraphchanApp {
 
     // Theme handler
 
-    pub(super) fn handle_theme_color_loaded(&mut self, result: Result<(u8, u8, u8), anyhow::Error>) {
+    pub(super) fn handle_theme_color_loaded(
+        &mut self,
+        result: Result<(u8, u8, u8), anyhow::Error>,
+    ) {
         match result {
             Ok((r, g, b)) => {
                 self.primary_color = egui::Color32::from_rgb(r, g, b);

@@ -31,15 +31,15 @@ impl GraphchanApp {
                         .hint_text("Write the opening post..."),
                 );
                 ui.add_space(6.0);
-                
+
                 if !self.create_thread.files.is_empty() {
                     ui.label("Attachments:");
                     for file in &self.create_thread.files {
-                         ui.label(file.file_name().unwrap_or_default().to_string_lossy());
+                        ui.label(file.file_name().unwrap_or_default().to_string_lossy());
                     }
                     ui.add_space(6.0);
                 }
-                
+
                 if ui.button("Attach Files").clicked() {
                     tasks::pick_files(self.tx.clone());
                 }
@@ -79,9 +79,15 @@ impl GraphchanApp {
 
                     ui.add_space(4.0);
                     if self.selected_topics.is_empty() {
-                        ui.colored_label(Color32::YELLOW, "⚠ No topics selected - thread will be friends-only");
+                        ui.colored_label(
+                            Color32::YELLOW,
+                            "⚠ No topics selected - thread will be friends-only",
+                        );
                     } else {
-                        ui.label(format!("✓ Will announce to {} topic(s)", self.selected_topics.len()));
+                        ui.label(format!(
+                            "✓ Will announce to {} topic(s)",
+                            self.selected_topics.len()
+                        ));
                     }
                 });
 
@@ -125,8 +131,16 @@ impl GraphchanApp {
                 // Platform selector
                 ui.horizontal(|ui| {
                     ui.label("Platform:");
-                    ui.selectable_value(&mut self.importer.platform, ImportPlatform::FourChan, "4chan");
-                    ui.selectable_value(&mut self.importer.platform, ImportPlatform::Reddit, "Reddit");
+                    ui.selectable_value(
+                        &mut self.importer.platform,
+                        ImportPlatform::FourChan,
+                        "4chan",
+                    );
+                    ui.selectable_value(
+                        &mut self.importer.platform,
+                        ImportPlatform::Reddit,
+                        "Reddit",
+                    );
                 });
 
                 ui.add_space(4.0);
@@ -162,7 +176,8 @@ impl GraphchanApp {
                             .max_height(100.0)
                             .show(ui, |ui| {
                                 for topic_id in &self.subscribed_topics.clone() {
-                                    let mut is_selected = self.importer.selected_topics.contains(topic_id);
+                                    let mut is_selected =
+                                        self.importer.selected_topics.contains(topic_id);
                                     if ui.checkbox(&mut is_selected, topic_id).clicked() {
                                         if is_selected {
                                             self.importer.selected_topics.insert(topic_id.clone());
@@ -176,9 +191,15 @@ impl GraphchanApp {
 
                     ui.add_space(4.0);
                     if self.importer.selected_topics.is_empty() {
-                        ui.colored_label(Color32::YELLOW, "No topics selected - thread will be friends-only");
+                        ui.colored_label(
+                            Color32::YELLOW,
+                            "No topics selected - thread will be friends-only",
+                        );
                     } else {
-                        ui.label(format!("Will announce to {} topic(s)", self.importer.selected_topics.len()));
+                        ui.label(format!(
+                            "Will announce to {} topic(s)",
+                            self.importer.selected_topics.len()
+                        ));
                     }
                 });
 

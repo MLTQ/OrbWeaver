@@ -38,19 +38,19 @@ pub enum EventPayload {
 pub struct ThreadAnnouncement {
     pub thread_id: String,
     pub creator_peer_id: String,
-    pub announcer_peer_id: String,  // Who's broadcasting this (may differ from creator)
+    pub announcer_peer_id: String, // Who's broadcasting this (may differ from creator)
     pub title: String,
-    pub preview: String,             // First ~140 chars of OP body
-    pub ticket: BlobTicket,          // Where to download full ThreadDetails
-    pub post_count: usize,           // Number of posts (version number)
+    pub preview: String,    // First ~140 chars of OP body
+    pub ticket: BlobTicket, // Where to download full ThreadDetails
+    pub post_count: usize,  // Number of posts (version number)
     pub has_images: bool,
     pub created_at: String,
-    pub last_activity: String,       // Most recent post timestamp
-    pub thread_hash: String,         // Hash of all post hashes - for sync detection
+    pub last_activity: String, // Most recent post timestamp
+    pub thread_hash: String,   // Hash of all post hashes - for sync detection
     #[serde(default = "default_visibility")]
-    pub visibility: String,          // "social", "private", or "global" (DEPRECATED - use topics)
+    pub visibility: String, // "social", "private", or "global" (DEPRECATED - use topics)
     #[serde(default)]
-    pub topics: Vec<String>,         // List of topic IDs to announce on
+    pub topics: Vec<String>, // List of topic IDs to announce on
 }
 
 fn default_visibility() -> String {
@@ -148,7 +148,15 @@ pub async fn run_event_loop(
                         // Broadcast to all topics
                         for topic_id in &announcement.topics {
                             let topic_name = format!("topic:{}", topic_id);
-                            if let Err(err) = broadcast_to_topic(&gossip, &topics, &dht_senders, &topic_name, payload.clone()).await {
+                            if let Err(err) = broadcast_to_topic(
+                                &gossip,
+                                &topics,
+                                &dht_senders,
+                                &topic_name,
+                                payload.clone(),
+                            )
+                            .await
+                            {
                                 tracing::warn!(error = ?err, topic = %topic_name, "failed to broadcast thread announcement to topic");
                             }
                         }
@@ -158,7 +166,9 @@ pub async fn run_event_loop(
 
                 // Default routing for all other payloads
                 let topic_name = topic_for_payload(&payload);
-                if let Err(err) = broadcast_to_topic(&gossip, &topics, &dht_senders, &topic_name, payload).await {
+                if let Err(err) =
+                    broadcast_to_topic(&gossip, &topics, &dht_senders, &topic_name, payload).await
+                {
                     tracing::warn!(error = ?err, topic = %topic_name, "failed to broadcast event");
                 }
             }
@@ -168,7 +178,9 @@ pub async fn run_event_loop(
             } => {
                 // iroh-gossip doesn't support direct messaging, so broadcast instead
                 let topic_name = topic_for_payload(&payload);
-                if let Err(err) = broadcast_to_topic(&gossip, &topics, &dht_senders, &topic_name, payload).await {
+                if let Err(err) =
+                    broadcast_to_topic(&gossip, &topics, &dht_senders, &topic_name, payload).await
+                {
                     tracing::warn!(error = ?err, topic = %topic_name, "failed to broadcast direct event");
                 }
             }

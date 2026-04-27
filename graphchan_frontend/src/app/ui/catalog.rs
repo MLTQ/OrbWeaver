@@ -20,7 +20,10 @@ impl GraphchanApp {
             // Individual topic chips
             for topic_id in &self.subscribed_topics.clone() {
                 let is_selected = self.catalog_topic_filter.as_ref() == Some(topic_id);
-                if ui.selectable_label(is_selected, format!("📡 {}", topic_id)).clicked() {
+                if ui
+                    .selectable_label(is_selected, format!("📡 {}", topic_id))
+                    .clicked()
+                {
                     if is_selected {
                         self.catalog_topic_filter = None; // Deselect
                     } else {
@@ -46,7 +49,9 @@ impl GraphchanApp {
         ui.add_space(10.0);
 
         // Filter threads based on global visibility setting and topic
-        let filtered_threads: Vec<ThreadSummary> = self.threads.iter()
+        let filtered_threads: Vec<ThreadSummary> = self
+            .threads
+            .iter()
             .filter(|t| {
                 // Filter by global visibility
                 if !self.show_global_threads && matches!(t.visibility.as_deref(), Some("global")) {
@@ -67,9 +72,10 @@ impl GraphchanApp {
 
         // Partition threads based on sync_status
         let (my_threads, network_threads): (Vec<ThreadSummary>, Vec<ThreadSummary>) =
-            filtered_threads.iter().cloned().partition(|t| {
-                t.sync_status == "downloaded"
-            });
+            filtered_threads
+                .iter()
+                .cloned()
+                .partition(|t| t.sync_status == "downloaded");
 
         self.render_catalog_three_columns(
             ui,
@@ -81,7 +87,11 @@ impl GraphchanApp {
         );
     }
 
-    pub(crate) fn render_friend_catalog(&mut self, ui: &mut egui::Ui, peer: &crate::models::PeerView) {
+    pub(crate) fn render_friend_catalog(
+        &mut self,
+        ui: &mut egui::Ui,
+        peer: &crate::models::PeerView,
+    ) {
         let peer_name = peer.username.as_deref().unwrap_or("Peer");
 
         // Toggle to show/hide ignored threads
@@ -90,16 +100,18 @@ impl GraphchanApp {
         });
         ui.add_space(10.0);
 
-        let (authored_threads, other_threads): (Vec<ThreadSummary>, Vec<ThreadSummary>) = self.threads.iter().cloned().partition(|t| {
-            t.creator_peer_id.as_ref() == Some(&peer.id)
-        });
+        let (authored_threads, other_threads): (Vec<ThreadSummary>, Vec<ThreadSummary>) = self
+            .threads
+            .iter()
+            .cloned()
+            .partition(|t| t.creator_peer_id.as_ref() == Some(&peer.id));
 
         self.render_catalog_split(
             ui,
             &format!("Authored by {}", peer_name),
             &authored_threads,
             "Network Threads",
-            &other_threads
+            &other_threads,
         );
     }
 
@@ -136,7 +148,11 @@ impl GraphchanApp {
                 ui.heading(title2);
                 ui.add_space(10.0);
                 if threads2.is_empty() {
-                    ui.label(RichText::new("No network threads available").italics().weak());
+                    ui.label(
+                        RichText::new("No network threads available")
+                            .italics()
+                            .weak(),
+                    );
                     ui.add_space(5.0);
                     ui.label("Thread announcements from peers will appear here.");
                 } else {
@@ -159,7 +175,7 @@ impl GraphchanApp {
         title1: &str,
         threads1: &[ThreadSummary],
         title2: &str,
-        threads2: &[ThreadSummary]
+        threads2: &[ThreadSummary],
     ) {
         if self.threads_loading && self.threads.is_empty() {
             ui.add(egui::Spinner::new());
@@ -214,7 +230,9 @@ impl GraphchanApp {
                                 } else if !self.image_loading.contains(&file.id) {
                                     // Queue image for loading - prefer download_url, fall back to blob_id
                                     let url = if let Some(download_url) = &file.download_url {
-                                        if download_url.starts_with("http://") || download_url.starts_with("https://") {
+                                        if download_url.starts_with("http://")
+                                            || download_url.starts_with("https://")
+                                        {
                                             Some(download_url.clone())
                                         } else {
                                             Some(format!("{}{}", self.api.base_url(), download_url))
@@ -248,10 +266,16 @@ impl GraphchanApp {
                                 }
                                 // Show creator with username lookup
                                 if let Some(peer_id) = &thread.creator_peer_id {
-                                    let display_name = self.peers.get(peer_id)
+                                    let display_name = self
+                                        .peers
+                                        .get(peer_id)
                                         .and_then(|p| p.username.as_deref())
                                         .unwrap_or("Anonymous");
-                                    ui.label(RichText::new(format!("Created by {}", display_name)).size(11.0).weak());
+                                    ui.label(
+                                        RichText::new(format!("Created by {}", display_name))
+                                            .size(11.0)
+                                            .weak(),
+                                    );
                                 }
                             });
 
@@ -326,7 +350,9 @@ impl GraphchanApp {
 
                     // Post preview - truncate to ~200 characters (char-safe)
                     let preview = if post.body.len() > 200 {
-                        let end = post.body.char_indices()
+                        let end = post
+                            .body
+                            .char_indices()
                             .map(|(i, _)| i)
                             .take_while(|&i| i <= 200)
                             .last()
@@ -349,14 +375,25 @@ impl GraphchanApp {
                                             ui.image((texture.id(), egui::vec2(32.0, 32.0)));
                                         } else if !self.image_loading.contains(&file.id) {
                                             // Queue image for loading - prefer download_url, fall back to blob_id
-                                            let url = if let Some(download_url) = &file.download_url {
-                                                if download_url.starts_with("http://") || download_url.starts_with("https://") {
+                                            let url = if let Some(download_url) = &file.download_url
+                                            {
+                                                if download_url.starts_with("http://")
+                                                    || download_url.starts_with("https://")
+                                                {
                                                     Some(download_url.clone())
                                                 } else {
-                                                    Some(format!("{}{}", self.api.base_url(), download_url))
+                                                    Some(format!(
+                                                        "{}{}",
+                                                        self.api.base_url(),
+                                                        download_url
+                                                    ))
                                                 }
                                             } else if let Some(blob_id) = &file.blob_id {
-                                                Some(format!("{}/blobs/{}", self.api.base_url(), blob_id))
+                                                Some(format!(
+                                                    "{}/blobs/{}",
+                                                    self.api.base_url(),
+                                                    blob_id
+                                                ))
                                             } else {
                                                 None
                                             };
@@ -381,7 +418,11 @@ impl GraphchanApp {
 
                     // Timestamp and click to navigate
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(format_timestamp(&post.created_at)).size(10.0).weak());
+                        ui.label(
+                            RichText::new(format_timestamp(&post.created_at))
+                                .size(10.0)
+                                .weak(),
+                        );
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.small_button("View →").clicked() {

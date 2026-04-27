@@ -13,9 +13,11 @@ pub(super) fn apply_reaction_update(database: &Database, reaction: ReactionUpdat
                 emoji = %reaction.emoji,
                 "👎 removing reaction via gossip"
             );
-            repos
-                .reactions()
-                .remove(&reaction.post_id, &reaction.reactor_peer_id, &reaction.emoji)?;
+            repos.reactions().remove(
+                &reaction.post_id,
+                &reaction.reactor_peer_id,
+                &reaction.emoji,
+            )?;
         } else {
             tracing::info!(
                 post_id = %reaction.post_id,

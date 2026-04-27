@@ -400,7 +400,9 @@ async fn call_tool(backend: &Backend, params: Option<Value>) -> Result<Value> {
         }
         "read_recent_posts" => {
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50);
-            backend.get_json(&format!("/posts/recent?limit={limit}")).await
+            backend
+                .get_json(&format!("/posts/recent?limit={limit}"))
+                .await
         }
         "read_parents" => {
             // Find the post inside the thread and return entries matching parent_post_ids.
@@ -445,10 +447,7 @@ async fn call_tool(backend: &Backend, params: Option<Value>) -> Result<Value> {
             // The /threads endpoint is multipart (json + optional files) so we
             // bypass post_json and use a plain multipart with a single json field.
             let title = require_str(args, "title")?.to_string();
-            let body = args
-                .get("body")
-                .and_then(|v| v.as_str())
-                .map(String::from);
+            let body = args.get("body").and_then(|v| v.as_str()).map(String::from);
             let topics: Vec<String> = args
                 .get("topics")
                 .and_then(|v| v.as_array())
@@ -574,7 +573,10 @@ async fn call_tool(backend: &Backend, params: Option<Value>) -> Result<Value> {
         // -- moderation ----
         "block_peer" => {
             let peer_id = require_str(args, "peer_id")?;
-            let reason = args.get("reason").and_then(|v| v.as_str()).map(String::from);
+            let reason = args
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             backend
                 .post_json(
                     &format!("/blocking/peers/{peer_id}"),
@@ -584,7 +586,9 @@ async fn call_tool(backend: &Backend, params: Option<Value>) -> Result<Value> {
         }
         "unblock_peer" => {
             let peer_id = require_str(args, "peer_id")?;
-            backend.delete(&format!("/blocking/peers/{peer_id}")).await?;
+            backend
+                .delete(&format!("/blocking/peers/{peer_id}"))
+                .await?;
             Ok(json!({ "ok": true }))
         }
         "list_blocked_peers" => backend.get_json("/blocking/peers").await,

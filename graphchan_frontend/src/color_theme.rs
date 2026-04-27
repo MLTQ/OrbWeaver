@@ -176,12 +176,15 @@ impl ColorScheme {
         // Widgets - use our color scheme with lighter values
         // Inactive state: primary color, light
         visuals.widgets.inactive.bg_fill = adjust_saturation(adjust_value(self.primary, 0.9), 0.3);
-        visuals.widgets.inactive.weak_bg_fill = adjust_saturation(adjust_value(self.primary, 0.95), 0.2);
+        visuals.widgets.inactive.weak_bg_fill =
+            adjust_saturation(adjust_value(self.primary, 0.95), 0.2);
         visuals.widgets.inactive.bg_stroke.color = adjust_value(self.primary, 0.7);
 
         // Hovered state: secondary color
-        visuals.widgets.hovered.bg_fill = adjust_saturation(adjust_value(self.secondary, 0.85), 0.4);
-        visuals.widgets.hovered.weak_bg_fill = adjust_saturation(adjust_value(self.secondary, 0.92), 0.3);
+        visuals.widgets.hovered.bg_fill =
+            adjust_saturation(adjust_value(self.secondary, 0.85), 0.4);
+        visuals.widgets.hovered.weak_bg_fill =
+            adjust_saturation(adjust_value(self.secondary, 0.92), 0.3);
         visuals.widgets.hovered.bg_stroke.color = adjust_value(self.secondary, 0.6);
 
         // Active state: primary color, saturated

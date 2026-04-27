@@ -70,7 +70,12 @@ impl<'conn> super::BlocklistRepository for SqliteBlocklistRepository<'conn> {
             INSERT OR REPLACE INTO blocklist_entries (blocklist_id, peer_id, reason, added_at)
             VALUES (?1, ?2, ?3, ?4)
             "#,
-            params![entry.blocklist_id, entry.peer_id, entry.reason, entry.added_at],
+            params![
+                entry.blocklist_id,
+                entry.peer_id,
+                entry.reason,
+                entry.added_at
+            ],
         )?;
         Ok(())
     }

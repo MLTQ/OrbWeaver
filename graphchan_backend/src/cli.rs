@@ -233,7 +233,9 @@ impl CliSession {
         println!("Available commands:");
         println!("  help                 Show this help message");
         println!("  friendcode           Print your friend code (short and legacy formats)");
-        println!("  add-friend <code>    Register a friend code (accepts both short and legacy formats)");
+        println!(
+            "  add-friend <code>    Register a friend code (accepts both short and legacy formats)"
+        );
         println!("  list-friends         Show known peers and online status");
         println!("  list-threads [N]     List recent threads (default 20)");
         println!("  view-thread <id>     Display posts within a thread");
@@ -259,8 +261,8 @@ impl CliSession {
 
     /// Generate a full friend code with current network addresses (including relay URL)
     fn generate_full_friendcode(&self, addresses: &[String]) -> String {
-        use base64::Engine;
         use crate::identity::FriendCodePayload;
+        use base64::Engine;
 
         let payload = FriendCodePayload {
             version: 2,
@@ -406,14 +408,16 @@ impl CliSession {
             pinned: Some(false),
             created_at: None, // Use current time for interactive posts
             visibility: Some("social".to_string()), // CLI defaults to social visibility
-            topics: vec![], // CLI doesn't support topic selection yet
+            topics: vec![],   // CLI doesn't support topic selection yet
         };
         let details = self.thread_service.create_thread(input)?;
         println!("Created thread {}", details.thread.id);
         self.network
             .publish_thread_announcement(details.clone(), &self.identity.gpg_fingerprint)
             .await
-            .inspect_err(|err| tracing::warn!(error = ?err, "failed to broadcast thread announcement"))
+            .inspect_err(
+                |err| tracing::warn!(error = ?err, "failed to broadcast thread announcement"),
+            )
             .ok();
         if let Some(last) = details.posts.last() {
             self.last_seen_posts
@@ -428,7 +432,7 @@ impl CliSession {
             author_peer_id: Some(self.identity.gpg_fingerprint.clone()),
             body,
             parent_post_ids: vec![],
-            created_at: None, // Use current time for interactive posts
+            created_at: None,  // Use current time for interactive posts
             rebroadcast: true, // CLI defaults to Host mode
             metadata: None,
         };
@@ -519,7 +523,8 @@ impl CliSession {
             .as_deref()
             .and_then(|blob| self.network.make_blob_ticket(blob));
         view.ticket = ticket.as_ref().map(|t| t.to_string());
-        let thread_id_actual = self.thread_service
+        let thread_id_actual = self
+            .thread_service
             .get_post(thread_id)
             .ok()
             .flatten()

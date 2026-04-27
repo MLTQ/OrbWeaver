@@ -92,7 +92,10 @@ impl<'conn> super::FileRepository for SqliteFileRepository<'conn> {
     }
 
     fn list_for_thread(&self, thread_id: &str) -> Result<Vec<FileRecord>> {
-        tracing::info!("FileRepository::list_for_thread called for thread_id: {}", thread_id);
+        tracing::info!(
+            "FileRepository::list_for_thread called for thread_id: {}",
+            thread_id
+        );
         let query = r#"
             SELECT f.id, f.post_id, f.path, f.original_name, f.mime, f.blob_id, f.size_bytes, f.checksum, f.ticket, f.download_status
             FROM files f
@@ -101,11 +104,10 @@ impl<'conn> super::FileRepository for SqliteFileRepository<'conn> {
             ORDER BY f.id ASC
             "#;
         tracing::info!("Preparing query: {}", query);
-        let mut stmt = self.conn.prepare(query)
-            .map_err(|e| {
-                tracing::error!("PREPARE FAILED: {:?}", e);
-                e
-            })?;
+        let mut stmt = self.conn.prepare(query).map_err(|e| {
+            tracing::error!("PREPARE FAILED: {:?}", e);
+            e
+        })?;
         tracing::info!("Query prepared successfully, executing query_map");
         let rows = stmt.query_map(params![thread_id], |row| {
             Ok(FileRecord {

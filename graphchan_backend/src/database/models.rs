@@ -25,11 +25,11 @@ pub struct ThreadRecord {
     pub created_at: String,
     pub pinned: bool,
     pub thread_hash: Option<String>,
-    pub visibility: String,  // 'social' or 'private'
-    pub topic_secret: Option<String>,  // base64-encoded 32-byte secret for private threads
-    pub sync_status: String,  // 'announced', 'downloading', 'downloaded', 'failed'
-    pub source_url: Option<String>,       // Original import URL (4chan/Reddit)
-    pub source_platform: Option<String>,  // "4chan" or "reddit"
+    pub visibility: String,                // 'social' or 'private'
+    pub topic_secret: Option<String>,      // base64-encoded 32-byte secret for private threads
+    pub sync_status: String,               // 'announced', 'downloading', 'downloaded', 'failed'
+    pub source_url: Option<String>,        // Original import URL (4chan/Reddit)
+    pub source_platform: Option<String>,   // "4chan" or "reddit"
     pub last_refreshed_at: Option<String>, // ISO timestamp of last refresh
 }
 
@@ -139,7 +139,7 @@ pub struct RedactedPostRecord {
     pub id: String,
     pub thread_id: String,
     pub author_peer_id: String,
-    pub parent_post_ids: String, // JSON array
+    pub parent_post_ids: String,         // JSON array
     pub known_child_ids: Option<String>, // JSON array
     pub redaction_reason: String,
     pub discovered_at: String,
@@ -165,15 +165,15 @@ pub struct SearchResultRecord {
 pub struct PeerIpRecord {
     pub peer_id: String,
     pub ip_address: String,
-    pub last_seen: i64,  // Unix timestamp
+    pub last_seen: i64, // Unix timestamp
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpBlockRecord {
     pub id: i64,
     pub ip_or_range: String,
-    pub block_type: String,  // "exact" or "range"
-    pub blocked_at: i64,     // Unix timestamp
+    pub block_type: String, // "exact" or "range"
+    pub blocked_at: i64,    // Unix timestamp
     pub reason: Option<String>,
     pub active: bool,
     pub hit_count: i64,

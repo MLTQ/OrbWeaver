@@ -175,25 +175,39 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
         match message {
             // Thread/Post handlers (handlers_threads.rs)
             AppMessage::ThreadsLoaded(result) => app.handle_threads_loaded(result),
-            AppMessage::ThreadLoaded { thread_id, result } => app.handle_thread_loaded(thread_id, result),
-            AppMessage::ThreadCreated(result) => app.handle_thread_created(result),
-            AppMessage::PostCreated { thread_id, result } => app.handle_post_created(thread_id, result),
-            AppMessage::PostAttachmentsLoaded { thread_id, post_id, result } => {
-                app.handle_post_attachments_loaded(thread_id, post_id, result)
+            AppMessage::ThreadLoaded { thread_id, result } => {
+                app.handle_thread_loaded(thread_id, result)
             }
+            AppMessage::ThreadCreated(result) => app.handle_thread_created(result),
+            AppMessage::PostCreated { thread_id, result } => {
+                app.handle_post_created(thread_id, result)
+            }
+            AppMessage::PostAttachmentsLoaded {
+                thread_id,
+                post_id,
+                result,
+            } => app.handle_post_attachments_loaded(thread_id, post_id, result),
 
             // File handlers (handlers_files.rs)
             AppMessage::ImageLoaded { file_id, result } => app.handle_image_loaded(file_id, result),
-            AppMessage::TextFileLoaded { file_id, result } => app.handle_text_file_loaded(file_id, result),
-            AppMessage::MediaFileLoaded { file_id, result } => app.handle_media_file_loaded(file_id, result),
-            AppMessage::PdfFileLoaded { file_id, result } => app.handle_pdf_file_loaded(file_id, result),
+            AppMessage::TextFileLoaded { file_id, result } => {
+                app.handle_text_file_loaded(file_id, result)
+            }
+            AppMessage::MediaFileLoaded { file_id, result } => {
+                app.handle_media_file_loaded(file_id, result)
+            }
+            AppMessage::PdfFileLoaded { file_id, result } => {
+                app.handle_pdf_file_loaded(file_id, result)
+            }
             AppMessage::FileSaved { file_id: _, result } => app.handle_file_saved(result),
 
             // Import handlers (handlers_misc.rs)
             AppMessage::ImportFinished(result) => app.handle_import_finished(result),
             AppMessage::ThreadImported(thread_id) => app.handle_thread_imported(thread_id),
             AppMessage::ImportError(err) => app.handle_import_error(err),
-            AppMessage::ThreadSourceRefreshed { thread_id, result } => app.handle_thread_source_refreshed(thread_id, result),
+            AppMessage::ThreadSourceRefreshed { thread_id, result } => {
+                app.handle_thread_source_refreshed(thread_id, result)
+            }
 
             // Identity/Peer handlers (handlers_misc.rs)
             AppMessage::IdentityLoaded(result) => app.handle_identity_loaded(result),
@@ -204,46 +218,78 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
             AppMessage::ThreadFilesSelected(files) => app.handle_thread_files_selected(files),
 
             // Reaction handlers (handlers_misc.rs)
-            AppMessage::ReactionsLoaded { post_id, result } => app.handle_reactions_loaded(post_id, result),
-            AppMessage::ReactionAdded { post_id, result } => app.handle_reaction_added(post_id, result),
-            AppMessage::ReactionRemoved { post_id, result } => app.handle_reaction_removed(post_id, result),
+            AppMessage::ReactionsLoaded { post_id, result } => {
+                app.handle_reactions_loaded(post_id, result)
+            }
+            AppMessage::ReactionAdded { post_id, result } => {
+                app.handle_reaction_added(post_id, result)
+            }
+            AppMessage::ReactionRemoved { post_id, result } => {
+                app.handle_reaction_removed(post_id, result)
+            }
 
             // DM handlers (handlers_misc.rs)
             AppMessage::ConversationsLoaded(result) => app.handle_conversations_loaded(result),
-            AppMessage::MessagesLoaded { peer_id, result } => app.handle_messages_loaded(peer_id, result),
+            AppMessage::MessagesLoaded { peer_id, result } => {
+                app.handle_messages_loaded(peer_id, result)
+            }
             AppMessage::DmSent { to_peer_id, result } => app.handle_dm_sent(to_peer_id, result),
 
             // Blocking handlers (handlers_blocking.rs)
             AppMessage::BlockedPeersLoaded(result) => app.handle_blocked_peers_loaded(result),
             AppMessage::PeerBlocked { peer_id, result } => app.handle_peer_blocked(peer_id, result),
-            AppMessage::PeerUnblocked { peer_id, result } => app.handle_peer_unblocked(peer_id, result),
+            AppMessage::PeerUnblocked { peer_id, result } => {
+                app.handle_peer_unblocked(peer_id, result)
+            }
             AppMessage::BlocklistsLoaded(result) => app.handle_blocklists_loaded(result),
-            AppMessage::BlocklistSubscribed { blocklist_id, result } => app.handle_blocklist_subscribed(blocklist_id, result),
-            AppMessage::BlocklistUnsubscribed { blocklist_id, result } => app.handle_blocklist_unsubscribed(blocklist_id, result),
-            AppMessage::BlocklistEntriesLoaded { blocklist_id, result } => app.handle_blocklist_entries_loaded(blocklist_id, result),
+            AppMessage::BlocklistSubscribed {
+                blocklist_id,
+                result,
+            } => app.handle_blocklist_subscribed(blocklist_id, result),
+            AppMessage::BlocklistUnsubscribed {
+                blocklist_id,
+                result,
+            } => app.handle_blocklist_unsubscribed(blocklist_id, result),
+            AppMessage::BlocklistEntriesLoaded {
+                blocklist_id,
+                result,
+            } => app.handle_blocklist_entries_loaded(blocklist_id, result),
 
             // IP Blocking handlers (handlers_blocking.rs)
             AppMessage::IpBlocksLoaded(result) => app.handle_ip_blocks_loaded(result),
             AppMessage::IpBlockStatsLoaded(result) => app.handle_ip_block_stats_loaded(result),
             AppMessage::IpBlockAdded { result } => app.handle_ip_block_added(result),
-            AppMessage::IpBlockRemoved { block_id, result } => app.handle_ip_block_removed(block_id, result),
+            AppMessage::IpBlockRemoved { block_id, result } => {
+                app.handle_ip_block_removed(block_id, result)
+            }
             AppMessage::IpBlocksImported { result } => app.handle_ip_blocks_imported(result),
             AppMessage::IpBlocksExported { result } => app.handle_ip_blocks_exported(result),
             AppMessage::PeerBlocksExported { result } => app.handle_peer_blocks_exported(result),
             AppMessage::PeerBlocksImported { result } => app.handle_peer_blocks_imported(result),
             AppMessage::IpBlocksCleared { result } => app.handle_ip_blocks_cleared(result),
-            AppMessage::PeerIpBlocked { peer_id, blocked_ips } => app.handle_peer_ip_blocked(peer_id, blocked_ips),
-            AppMessage::PeerIpBlockFailed { peer_id, error } => app.handle_peer_ip_block_failed(peer_id, error),
+            AppMessage::PeerIpBlocked {
+                peer_id,
+                blocked_ips,
+            } => app.handle_peer_ip_blocked(peer_id, blocked_ips),
+            AppMessage::PeerIpBlockFailed { peer_id, error } => {
+                app.handle_peer_ip_block_failed(peer_id, error)
+            }
 
             // Search/Recent/Topics/Theme handlers (handlers_misc.rs)
-            AppMessage::SearchCompleted { query, result } => app.handle_search_completed(query, result),
+            AppMessage::SearchCompleted { query, result } => {
+                app.handle_search_completed(query, result)
+            }
             AppMessage::RecentPostsLoaded(result) => app.handle_recent_posts_loaded(result),
             AppMessage::UploadProgress { .. } => {
                 // TODO: Display upload progress in UI
             }
             AppMessage::TopicsLoaded(result) => app.handle_topics_loaded(result),
-            AppMessage::TopicSubscribed { topic_id, result } => app.handle_topic_subscribed(topic_id, result),
-            AppMessage::TopicUnsubscribed { topic_id, result } => app.handle_topic_unsubscribed(topic_id, result),
+            AppMessage::TopicSubscribed { topic_id, result } => {
+                app.handle_topic_subscribed(topic_id, result)
+            }
+            AppMessage::TopicUnsubscribed { topic_id, result } => {
+                app.handle_topic_unsubscribed(topic_id, result)
+            }
             AppMessage::ThemeColorLoaded(result) => app.handle_theme_color_loaded(result),
 
             AppMessage::ServerEvent(event) => app.handle_server_event(event),

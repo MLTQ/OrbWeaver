@@ -1,5 +1,5 @@
-use eframe::egui::{self, Context};
 use crate::app::GraphchanApp;
+use eframe::egui::{self, Context};
 use rfd::FileDialog;
 
 pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
@@ -316,8 +316,7 @@ pub fn render_identity_drawer(app: &mut GraphchanApp, ctx: &Context) {
 }
 
 fn load_image_for_cropping(path: &std::path::Path) -> Result<egui::ColorImage, String> {
-    let image_bytes = std::fs::read(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let image_bytes = std::fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
     let image = image::load_from_memory(&image_bytes)
         .map_err(|e| format!("Failed to decode image: {}", e))?;
@@ -326,7 +325,10 @@ fn load_image_for_cropping(path: &std::path::Path) -> Result<egui::ColorImage, S
     let size = [rgba.width() as usize, rgba.height() as usize];
     let pixels = rgba.as_flat_samples();
 
-    Ok(egui::ColorImage::from_rgba_unmultiplied(size, pixels.as_slice()))
+    Ok(egui::ColorImage::from_rgba_unmultiplied(
+        size,
+        pixels.as_slice(),
+    ))
 }
 
 pub(crate) fn render_avatar_cropper(app: &mut crate::app::GraphchanApp, ctx: &egui::Context) {
@@ -348,10 +350,8 @@ pub(crate) fn render_avatar_cropper(app: &mut crate::app::GraphchanApp, ctx: &eg
                 ui.add_space(10.0);
 
                 // Draw the cropper canvas
-                let (response, painter) = ui.allocate_painter(
-                    egui::vec2(512.0, 512.0),
-                    egui::Sense::click_and_drag(),
-                );
+                let (response, painter) =
+                    ui.allocate_painter(egui::vec2(512.0, 512.0), egui::Sense::click_and_drag());
 
                 let rect = response.rect;
                 let center = rect.center();
@@ -371,12 +371,10 @@ pub(crate) fn render_avatar_cropper(app: &mut crate::app::GraphchanApp, ctx: &eg
                 }
 
                 // Draw the image
-                let img_size = egui::vec2(cropper.image.width() as f32, cropper.image.height() as f32);
+                let img_size =
+                    egui::vec2(cropper.image.width() as f32, cropper.image.height() as f32);
                 let scaled_size = img_size * cropper.zoom;
-                let img_rect = egui::Rect::from_center_size(
-                    center + cropper.pan,
-                    scaled_size,
-                );
+                let img_rect = egui::Rect::from_center_size(center + cropper.pan, scaled_size);
 
                 // Create and draw texture from the image
                 let texture_id = format!("avatar_cropper_{}", cropper.source_path);
@@ -398,7 +396,11 @@ pub(crate) fn render_avatar_cropper(app: &mut crate::app::GraphchanApp, ctx: &eg
 
                 // Draw darkened overlay with circle cutout
                 // We'll use a mesh to draw the overlay with transparency
-                painter.rect_filled(rect, egui::Rounding::ZERO, egui::Color32::from_black_alpha(100));
+                painter.rect_filled(
+                    rect,
+                    egui::Rounding::ZERO,
+                    egui::Color32::from_black_alpha(100),
+                );
 
                 // Draw circle outline
                 painter.circle_stroke(
@@ -437,7 +439,8 @@ pub(crate) fn render_avatar_cropper(app: &mut crate::app::GraphchanApp, ctx: &eg
                     // Save to a temporary file
                     let temp_path = std::env::temp_dir().join("graphchan_avatar_cropped.png");
                     if let Err(e) = std::fs::write(&temp_path, cropped_bytes) {
-                        app.identity_state.error = Some(format!("Failed to save cropped avatar: {}", e));
+                        app.identity_state.error =
+                            Some(format!("Failed to save cropped avatar: {}", e));
                     } else {
                         app.identity_state.avatar_path = Some(temp_path.display().to_string());
                         // Auto-upload
@@ -458,7 +461,7 @@ pub(crate) fn render_avatar_cropper(app: &mut crate::app::GraphchanApp, ctx: &eg
 }
 
 fn crop_to_circle(cropper: &crate::app::state::AvatarCropperState) -> Result<Vec<u8>, String> {
-    use image::{RgbaImage, Rgba};
+    use image::{Rgba, RgbaImage};
 
     // Create a 512x512 output image
     let output_size = 512u32;
@@ -522,7 +525,8 @@ fn crop_to_circle(cropper: &crate::app::state::AvatarCropperState) -> Result<Vec
     // Encode to PNG
     let mut png_bytes = Vec::new();
     let mut cursor = std::io::Cursor::new(&mut png_bytes);
-    output.write_to(&mut cursor, image::ImageFormat::Png)
+    output
+        .write_to(&mut cursor, image::ImageFormat::Png)
         .map_err(|e| format!("Failed to encode PNG: {}", e))?;
 
     Ok(png_bytes)

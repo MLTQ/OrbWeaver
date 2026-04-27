@@ -12,10 +12,7 @@ impl GraphchanApp {
                 .resizable(true)
                 .show(ctx, |ui| {
                     if let Some(tex) = self.image_textures.get(id) {
-                        ui.add(
-                            egui::Image::from_texture(tex)
-                                .shrink_to_fit()
-                        );
+                        ui.add(egui::Image::from_texture(tex).shrink_to_fit());
                     } else {
                         ui.label("Loading image...");
                     }

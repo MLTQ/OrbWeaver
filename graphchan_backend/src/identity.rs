@@ -11,9 +11,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use uuid::Uuid;
 
-use sequoia_openpgp as openpgp;
 use openpgp::cert::CertBuilder;
-use openpgp::serialize::Serialize as _; // Import trait anonymously to avoid conflict with serde::Serialize
+use openpgp::serialize::Serialize as _;
+use sequoia_openpgp as openpgp; // Import trait anonymously to avoid conflict with serde::Serialize
 
 const FINGERPRINT_FILE: &str = "fingerprint.txt";
 
@@ -99,10 +99,13 @@ fn generate_gpg_identity(paths: &GraphchanPaths) -> Result<String> {
     let fingerprint = cert.fingerprint().to_string();
 
     // Export Public Key
-    cert.armored().serialize(&mut fs::File::create(&paths.gpg_public_key)?)?;
+    cert.armored()
+        .serialize(&mut fs::File::create(&paths.gpg_public_key)?)?;
 
     // Export Private Key
-    cert.as_tsk().armored().serialize(&mut fs::File::create(&paths.gpg_private_key)?)?;
+    cert.as_tsk()
+        .armored()
+        .serialize(&mut fs::File::create(&paths.gpg_private_key)?)?;
 
     tighten_permissions(&paths.gpg_private_key.parent().unwrap_or(homedir))?;
     tighten_permissions(&paths.gpg_private_key)?;
@@ -157,7 +160,11 @@ fn load_iroh_identity(path: &Path) -> Result<(String, SecretKey)> {
     Ok((stored.peer_id, secret))
 }
 
-pub fn encode_friendcode(peer_id: &str, gpg_fingerprint: &str, x25519_pubkey: Option<&str>) -> Result<String> {
+pub fn encode_friendcode(
+    peer_id: &str,
+    gpg_fingerprint: &str,
+    x25519_pubkey: Option<&str>,
+) -> Result<String> {
     let version = if x25519_pubkey.is_some() { 2 } else { 1 };
     let payload = FriendCodePayload {
         version,
@@ -221,7 +228,7 @@ pub fn decode_friendcode_auto(friendcode: &str) -> Result<FriendCodePayload> {
             peer_id,
             gpg_fingerprint,
             x25519_pubkey: None, // Will be negotiated on connection via DH key exchange
-            addresses: vec![], // DHT will resolve addresses automatically
+            addresses: vec![],   // DHT will resolve addresses automatically
         });
     }
 

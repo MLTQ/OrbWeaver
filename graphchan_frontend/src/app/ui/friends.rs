@@ -1,5 +1,5 @@
-use eframe::egui;
 use crate::app::GraphchanApp;
+use eframe::egui;
 
 pub fn render_friends_page(app: &mut GraphchanApp, ui: &mut egui::Ui) {
     ui.heading("Following Management");
@@ -17,22 +17,22 @@ pub fn render_friends_page(app: &mut GraphchanApp, ui: &mut egui::Ui) {
             ui.add_space(10.0);
 
             ui.label("Enter a friend code to follow a peer:");
-            ui.label(egui::RichText::new("(Supports both short and legacy formats)").italics().small());
+            ui.label(
+                egui::RichText::new("(Supports both short and legacy formats)")
+                    .italics()
+                    .small(),
+            );
             ui.horizontal(|ui| {
                 ui.text_edit_singleline(&mut app.identity_state.friendcode_input);
 
-                if ui.button("Follow").clicked() 
-                    && !app.identity_state.adding_peer 
-                    && !app.identity_state.friendcode_input.trim().is_empty() 
+                if ui.button("Follow").clicked()
+                    && !app.identity_state.adding_peer
+                    && !app.identity_state.friendcode_input.trim().is_empty()
                 {
                     app.identity_state.adding_peer = true;
                     app.identity_state.error = None;
                     let friendcode = app.identity_state.friendcode_input.trim().to_string();
-                    crate::app::tasks::add_peer(
-                        app.api.clone(),
-                        app.tx.clone(),
-                        friendcode,
-                    );
+                    crate::app::tasks::add_peer(app.api.clone(), app.tx.clone(), friendcode);
                 }
 
                 if app.identity_state.adding_peer {

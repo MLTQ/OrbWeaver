@@ -20,9 +20,7 @@ fn compute_ring_depths(posts: &[PostView], op_id: &str) -> HashMap<String, usize
     let mut depths: HashMap<String, usize> = HashMap::new();
 
     // Build a map from post ID to post for quick lookup
-    let post_map: HashMap<&str, &PostView> = posts.iter()
-        .map(|p| (p.id.as_str(), p))
-        .collect();
+    let post_map: HashMap<&str, &PostView> = posts.iter().map(|p| (p.id.as_str(), p)).collect();
 
     // Recursive function to compute depth with memoization
     fn get_depth(
@@ -58,7 +56,9 @@ fn compute_ring_depths(posts: &[PostView], op_id: &str) -> HashMap<String, usize
         }
 
         // Find max depth of all parents
-        let max_parent_depth = post.parent_post_ids.iter()
+        let max_parent_depth = post
+            .parent_post_ids
+            .iter()
             .map(|pid| get_depth(pid, op_id, post_map, depths))
             .max()
             .unwrap_or(0);
@@ -85,7 +85,8 @@ pub fn build_radial_layout(posts: &[PostView]) -> HashMap<String, RadialNode> {
     }
 
     // Find OP (earliest post)
-    let op_id = posts.iter()
+    let op_id = posts
+        .iter()
         .min_by_key(|p| &p.created_at)
         .map(|p| p.id.clone())
         .unwrap_or_default();
@@ -112,11 +113,14 @@ pub fn build_radial_layout(posts: &[PostView]) -> HashMap<String, RadialNode> {
         if *ring == 0 {
             // OP at center
             for post in posts_in_ring {
-                nodes.insert(post.id.clone(), RadialNode {
-                    ring: 0,
-                    angle: 0.0,
-                    size: egui::vec2(320.0, 150.0),
-                });
+                nodes.insert(
+                    post.id.clone(),
+                    RadialNode {
+                        ring: 0,
+                        angle: 0.0,
+                        size: egui::vec2(320.0, 150.0),
+                    },
+                );
             }
         } else {
             // Distribute evenly around the ring
@@ -128,11 +132,14 @@ pub fn build_radial_layout(posts: &[PostView]) -> HashMap<String, RadialNode> {
                     (i as f32 / count as f32) * 2.0 * PI - PI / 2.0
                 };
 
-                nodes.insert(post.id.clone(), RadialNode {
-                    ring: *ring,
-                    angle,
-                    size: egui::vec2(320.0, 150.0),
-                });
+                nodes.insert(
+                    post.id.clone(),
+                    RadialNode {
+                        ring: *ring,
+                        angle,
+                        size: egui::vec2(320.0, 150.0),
+                    },
+                );
             }
         }
     }
@@ -141,13 +148,7 @@ pub fn build_radial_layout(posts: &[PostView]) -> HashMap<String, RadialNode> {
 }
 
 /// Convert radial coordinates to screen position
-fn radial_to_screen(
-    ring: usize,
-    angle: f32,
-    center: Pos2,
-    zoom: f32,
-    rotation: f32,
-) -> Pos2 {
+fn radial_to_screen(ring: usize, angle: f32, center: Pos2, zoom: f32, rotation: f32) -> Pos2 {
     if ring == 0 {
         return center;
     }
@@ -193,7 +194,10 @@ pub fn render_radial(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Thre
     let mut children_map: HashMap<String, Vec<String>> = HashMap::new();
     for post in &posts {
         for parent_id in &post.parent_post_ids {
-            children_map.entry(parent_id.clone()).or_default().push(post.id.clone());
+            children_map
+                .entry(parent_id.clone())
+                .or_default()
+                .push(post.id.clone());
         }
     }
 
@@ -239,10 +243,14 @@ pub fn render_radial(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Thre
 
     if dot_spacing > 10.0 {
         let mut x = (center.x + state.graph_offset.x) % dot_spacing;
-        if x < rect.left() { x += dot_spacing; }
+        if x < rect.left() {
+            x += dot_spacing;
+        }
         while x < rect.right() {
             let mut y = (center.y + state.graph_offset.y) % dot_spacing;
-            if y < rect.top() { y += dot_spacing; }
+            if y < rect.top() {
+                y += dot_spacing;
+            }
             while y < rect.bottom() {
                 canvas.circle_filled(egui::pos2(x, y), 1.5, dot_color);
                 y += dot_spacing;
@@ -252,7 +260,9 @@ pub fn render_radial(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Thre
     }
 
     // Draw concentric ring guides
-    let max_ring = state.radial_nodes.values()
+    let max_ring = state
+        .radial_nodes
+        .values()
         .map(|n| n.ring)
         .max()
         .unwrap_or(0);
@@ -281,7 +291,9 @@ pub fn render_radial(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Thre
     }
 
     // Handle pan
-    if response.dragged_by(egui::PointerButton::Secondary) || response.dragged_by(egui::PointerButton::Middle) {
+    if response.dragged_by(egui::PointerButton::Secondary)
+        || response.dragged_by(egui::PointerButton::Middle)
+    {
         state.graph_offset += response.drag_delta();
     }
 
@@ -338,7 +350,10 @@ pub fn render_radial(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Thre
 
     // Render nodes
     for (layout, node_rotation, screen_pos) in layouts {
-        let children = children_map.get(&layout.post.id).cloned().unwrap_or_default();
+        let children = children_map
+            .get(&layout.post.id)
+            .cloned()
+            .unwrap_or_default();
 
         // Handle node interaction
         let drag_id = ui.make_persistent_id(format!("radial_node_{}", layout.post.id));
@@ -360,7 +375,9 @@ pub fn render_radial(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut Thre
             if sel_id == &layout.post.id {
                 false
             } else {
-                let is_parent_of_selected = state.details.as_ref()
+                let is_parent_of_selected = state
+                    .details
+                    .as_ref()
                     .and_then(|d| d.posts.iter().find(|p| p.id == *sel_id))
                     .map(|p| p.parent_post_ids.contains(&layout.post.id))
                     .unwrap_or(false);
@@ -454,10 +471,14 @@ fn draw_radial_edges(
                 None => continue,
             };
 
-            let parent_pos = radial_to_screen(parent_node.ring, parent_node.angle, center, zoom, rotation);
+            let parent_pos =
+                radial_to_screen(parent_node.ring, parent_node.angle, center, zoom, rotation);
 
             // Determine edge color
-            let is_reply_edge = state.reply_to.iter().any(|id| id == parent_id || id == &post.id);
+            let is_reply_edge = state
+                .reply_to
+                .iter()
+                .any(|id| id == parent_id || id == &post.id);
             let sel = state.selected_post.as_ref();
             let is_selected_edge = sel == Some(&post.id) || sel == Some(parent_id);
 
@@ -469,7 +490,11 @@ fn draw_radial_edges(
                 Color32::from_rgb(90, 110, 170)
             };
 
-            let stroke_width = if is_reply_edge || is_selected_edge { 3.4 * zoom } else { 2.0 * zoom };
+            let stroke_width = if is_reply_edge || is_selected_edge {
+                3.4 * zoom
+            } else {
+                2.0 * zoom
+            };
 
             // Draw curved edge using quadratic bezier
             // Control point is offset towards the center for a nice curve
@@ -489,16 +514,24 @@ fn draw_radial_edges(
                     let t = i as f32 / 20.0;
                     let inv_t = 1.0 - t;
                     Pos2::new(
-                        inv_t * inv_t * parent_pos.x + 2.0 * inv_t * t * control.x + t * t * child_pos.x,
-                        inv_t * inv_t * parent_pos.y + 2.0 * inv_t * t * control.y + t * t * child_pos.y,
+                        inv_t * inv_t * parent_pos.x
+                            + 2.0 * inv_t * t * control.x
+                            + t * t * child_pos.x,
+                        inv_t * inv_t * parent_pos.y
+                            + 2.0 * inv_t * t * control.y
+                            + t * t * child_pos.y,
                     )
                 })
                 .collect();
 
-            painter.add(egui::Shape::line(points.clone(), egui::Stroke::new(stroke_width, color)));
+            painter.add(egui::Shape::line(
+                points.clone(),
+                egui::Stroke::new(stroke_width, color),
+            ));
 
             // Draw arrow at child end
-            if let (Some(&second_last), Some(&last)) = (points.get(points.len() - 2), points.last()) {
+            if let (Some(&second_last), Some(&last)) = (points.get(points.len() - 2), points.last())
+            {
                 draw_arrow(painter, second_last, last, color, zoom);
             }
         }

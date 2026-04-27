@@ -166,7 +166,10 @@ pub async fn serve_http(
 
     // Configure body limit for file uploads (default 10GB if not specified)
     // Media files (images/video/audio) are limited to 50MB at the handler level
-    let max_upload_bytes = config.file.max_upload_bytes.unwrap_or(10 * 1024 * 1024 * 1024);
+    let max_upload_bytes = config
+        .file
+        .max_upload_bytes
+        .unwrap_or(10 * 1024 * 1024 * 1024);
 
     // Auth setup: derive whether we run authenticated based on config + bind address.
     let auth_token = config.auth.token.clone();
@@ -182,10 +185,16 @@ pub async fn serve_http(
         .route("/health", get(threads::health_handler))
         .route("/openapi.json", get(openapi::openapi_handler))
         .route("/events", get(events::stream_events))
-        .route("/threads", get(threads::list_threads).post(threads::create_thread))
+        .route(
+            "/threads",
+            get(threads::list_threads).post(threads::create_thread),
+        )
         .route("/threads/:id", get(threads::get_thread))
         .route("/threads/:id/download", post(threads::download_thread))
-        .route("/threads/:id/refresh", post(threads::refresh_thread_handler))
+        .route(
+            "/threads/:id/refresh",
+            post(threads::refresh_thread_handler),
+        )
         .route("/threads/:id/delete", post(threads::delete_thread))
         .route("/threads/:id/ignore", post(threads::set_thread_ignored))
         .route("/threads/:id/posts", post(threads::create_post))
@@ -205,38 +214,95 @@ pub async fn serve_http(
         .route("/identity/profile", post(peers::update_profile_handler))
         .route("/identity/agents", get(peers::get_agents_handler))
         .route("/identity/agents", post(peers::add_agent_handler))
-        .route("/identity/agents/:name", delete(peers::remove_agent_handler))
+        .route(
+            "/identity/agents/:name",
+            delete(peers::remove_agent_handler),
+        )
         .route("/identity/theme_color", get(peers::get_theme_color_handler))
-        .route("/identity/theme_color", post(peers::set_theme_color_handler))
+        .route(
+            "/identity/theme_color",
+            post(peers::set_theme_color_handler),
+        )
         .route("/blobs/:blob_id", get(files::get_blob))
         .route("/import", post(threads::import_thread_handler))
         .route("/dms/conversations", get(dms::list_conversations_handler))
         .route("/dms/send", post(dms::send_dm_handler))
         .route("/dms/:peer_id/messages", get(dms::get_messages_handler))
-        .route("/dms/messages/:message_id/read", post(dms::mark_message_read_handler))
-        .route("/dms/:peer_id/read", post(dms::mark_conversation_read_handler))
+        .route(
+            "/dms/messages/:message_id/read",
+            post(dms::mark_message_read_handler),
+        )
+        .route(
+            "/dms/:peer_id/read",
+            post(dms::mark_conversation_read_handler),
+        )
         .route("/dms/unread/count", get(dms::count_unread_handler))
         .route("/blocking/peers", get(blocking::list_blocked_peers_handler))
-        .route("/blocking/peers/:peer_id", post(blocking::block_peer_handler))
-        .route("/blocking/peers/:peer_id", delete(blocking::unblock_peer_handler))
-        .route("/blocking/peers/export", get(blocking::export_peer_blocks_handler))
-        .route("/blocking/peers/import", post(blocking::import_peer_blocks_handler))
-        .route("/blocking/blocklists", get(blocking::list_blocklists_handler))
-        .route("/blocking/blocklists", post(blocking::subscribe_blocklist_handler))
-        .route("/blocking/blocklists/:id", delete(blocking::unsubscribe_blocklist_handler))
-        .route("/blocking/blocklists/:id/entries", get(blocking::list_blocklist_entries_handler))
+        .route(
+            "/blocking/peers/:peer_id",
+            post(blocking::block_peer_handler),
+        )
+        .route(
+            "/blocking/peers/:peer_id",
+            delete(blocking::unblock_peer_handler),
+        )
+        .route(
+            "/blocking/peers/export",
+            get(blocking::export_peer_blocks_handler),
+        )
+        .route(
+            "/blocking/peers/import",
+            post(blocking::import_peer_blocks_handler),
+        )
+        .route(
+            "/blocking/blocklists",
+            get(blocking::list_blocklists_handler),
+        )
+        .route(
+            "/blocking/blocklists",
+            post(blocking::subscribe_blocklist_handler),
+        )
+        .route(
+            "/blocking/blocklists/:id",
+            delete(blocking::unsubscribe_blocklist_handler),
+        )
+        .route(
+            "/blocking/blocklists/:id/entries",
+            get(blocking::list_blocklist_entries_handler),
+        )
         .route("/blocking/ips", get(blocking::list_ip_blocks_handler))
         .route("/blocking/ips", post(blocking::add_ip_block_handler))
-        .route("/blocking/ips/:id", delete(blocking::remove_ip_block_handler))
-        .route("/blocking/ips/import", post(blocking::import_ip_blocks_handler))
-        .route("/blocking/ips/export", get(blocking::export_ip_blocks_handler))
-        .route("/blocking/ips/clear", post(blocking::clear_all_ip_blocks_handler))
+        .route(
+            "/blocking/ips/:id",
+            delete(blocking::remove_ip_block_handler),
+        )
+        .route(
+            "/blocking/ips/import",
+            post(blocking::import_ip_blocks_handler),
+        )
+        .route(
+            "/blocking/ips/export",
+            get(blocking::export_ip_blocks_handler),
+        )
+        .route(
+            "/blocking/ips/clear",
+            post(blocking::clear_all_ip_blocks_handler),
+        )
         .route("/blocking/ips/stats", get(blocking::ip_block_stats_handler))
         .route("/peers/:peer_id/ip", get(blocking::get_peer_ip_handler))
         .route("/search", get(search::search_handler))
-        .route("/settings/:key", get(settings::get_setting_handler).put(settings::set_setting_handler))
-        .route("/topics", get(settings::list_topics_handler).post(settings::subscribe_topic_handler))
-        .route("/topics/:topic_id", delete(settings::unsubscribe_topic_handler))
+        .route(
+            "/settings/:key",
+            get(settings::get_setting_handler).put(settings::set_setting_handler),
+        )
+        .route(
+            "/topics",
+            get(settings::list_topics_handler).post(settings::subscribe_topic_handler),
+        )
+        .route(
+            "/topics/:topic_id",
+            delete(settings::unsubscribe_topic_handler),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer_token,

@@ -28,8 +28,8 @@ mod handlers_files;
 mod handlers_misc;
 mod handlers_threads;
 
+pub use file_viewer::{FileDownloadState, FileType, FileViewerContent, FileViewerState};
 use messages::AppMessage;
-pub use file_viewer::{FileType, FileDownloadState, FileViewerState, FileViewerContent};
 use state::{
     BlockingState, ConversationState, CreateThreadState, DmState, ImporterState, LoadedImage,
     ThreadDisplayMode, ThreadState, ViewState,
@@ -64,14 +64,14 @@ pub struct GraphchanApp {
     file_viewers: HashMap<String, FileViewerState>,
     ctx: Option<egui::Context>,
     audio_device: Option<AudioDevice>,
-    video_volume: f32, // 0.0 to 1.0
-    show_ignored_threads: bool, // Toggle to show/hide ignored threads in peer catalog
-    show_global_threads: bool, // Toggle to show/hide global discovery threads
+    video_volume: f32,                    // 0.0 to 1.0
+    show_ignored_threads: bool,           // Toggle to show/hide ignored threads in peer catalog
+    show_global_threads: bool,            // Toggle to show/hide global discovery threads
     catalog_topic_filter: Option<String>, // Filter catalog by topic (None = show all)
     dm_state: DmState,
     blocking_state: BlockingState,
     auto_refresh_enabled: bool, // Toggle for auto-refresh
-    is_refreshing: bool, // Track if currently refreshing
+    is_refreshing: bool,        // Track if currently refreshing
     last_refresh_time: Option<std::time::Instant>, // Track animation timing
     search_query_input: String,
     search_focused: bool,
@@ -131,26 +131,22 @@ impl GraphchanApp {
 
         // Initialize SDL2 audio for video playback
         let audio_device = match sdl2::init() {
-            Ok(sdl_context) => {
-                match sdl_context.audio() {
-                    Ok(audio_subsystem) => {
-                        match AudioDevice::from_subsystem(&audio_subsystem) {
-                            Ok(device) => {
-                                log::info!("SDL2 audio initialized successfully");
-                                Some(device)
-                            }
-                            Err(e) => {
-                                log::error!("Failed to create audio device: {}", e);
-                                None
-                            }
-                        }
+            Ok(sdl_context) => match sdl_context.audio() {
+                Ok(audio_subsystem) => match AudioDevice::from_subsystem(&audio_subsystem) {
+                    Ok(device) => {
+                        log::info!("SDL2 audio initialized successfully");
+                        Some(device)
                     }
                     Err(e) => {
-                        log::error!("Failed to initialize SDL2 audio subsystem: {}", e);
+                        log::error!("Failed to create audio device: {}", e);
                         None
                     }
+                },
+                Err(e) => {
+                    log::error!("Failed to initialize SDL2 audio subsystem: {}", e);
+                    None
                 }
-            }
+            },
             Err(e) => {
                 log::error!("Failed to initialize SDL2: {}", e);
                 None
@@ -185,10 +181,10 @@ impl GraphchanApp {
             file_viewers: HashMap::new(),
             ctx: None,
             audio_device,
-            video_volume: 0.8, // Default to 80% volume
+            video_volume: 0.8,           // Default to 80% volume
             show_ignored_threads: false, // Default to hiding ignored threads
-            show_global_threads: true, // Default to showing global threads
-            catalog_topic_filter: None, // Default to showing all topics
+            show_global_threads: true,   // Default to showing global threads
+            catalog_topic_filter: None,  // Default to showing all topics
             dm_state: DmState::default(),
             blocking_state: BlockingState::default(),
             auto_refresh_enabled: true, // Auto-refresh on by default
@@ -301,7 +297,8 @@ impl eframe::App for GraphchanApp {
         self.process_messages();
 
         // Request repaint for animation (show for 1 second after refresh starts)
-        let show_animation = self.last_refresh_time
+        let show_animation = self
+            .last_refresh_time
             .map(|t| t.elapsed().as_secs_f32() < 1.0)
             .unwrap_or(false);
         if show_animation {
@@ -310,7 +307,8 @@ impl eframe::App for GraphchanApp {
 
         // Auto-refresh logic - poll every 5 seconds
         if self.auto_refresh_enabled && !self.threads_loading {
-            let should_refresh = self.last_refresh_time
+            let should_refresh = self
+                .last_refresh_time
                 .map(|t| t.elapsed().as_secs() >= 5)
                 .unwrap_or(true);
 
@@ -329,7 +327,8 @@ impl eframe::App for GraphchanApp {
 
         // Recent posts polling
         if !self.recent_posts_loading {
-            let should_poll = self.last_recent_posts_refresh
+            let should_poll = self
+                .last_recent_posts_refresh
                 .map(|t| t.elapsed().as_secs() >= self.recent_posts_poll_interval)
                 .unwrap_or(true);
 
@@ -366,7 +365,10 @@ impl eframe::App for GraphchanApp {
                 if ui.button("Blocking").clicked() {
                     self.view = ViewState::Blocking;
                 }
-                if ui.selectable_label(self.show_identity, "Identity").clicked() {
+                if ui
+                    .selectable_label(self.show_identity, "Identity")
+                    .clicked()
+                {
                     self.show_identity = !self.show_identity;
                 }
 
@@ -390,7 +392,7 @@ impl eframe::App for GraphchanApp {
                     let search_response = ui.add_sized(
                         egui::vec2(200.0, 20.0),
                         egui::TextEdit::singleline(&mut self.search_query_input)
-                            .hint_text("Search posts & files...")
+                            .hint_text("Search posts & files..."),
                     );
 
                     if self.search_focused {
@@ -398,7 +400,8 @@ impl eframe::App for GraphchanApp {
                         self.search_focused = false;
                     }
 
-                    if search_response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    if search_response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                    {
                         if !self.search_query_input.trim().is_empty() {
                             self.execute_search(self.search_query_input.clone());
                         }
@@ -411,14 +414,16 @@ impl eframe::App for GraphchanApp {
                     // Auto-refresh toggle with animated indicator
                     ui.horizontal(|ui| {
                         // Show animation for 1 second after refresh starts
-                        let show_animation = self.last_refresh_time
+                        let show_animation = self
+                            .last_refresh_time
                             .map(|t| t.elapsed().as_secs_f32() < 1.0)
                             .unwrap_or(false);
 
                         // Animated green dot
                         let (dot_size, dot_color) = if show_animation {
                             // Pulsing animation - faster and more pronounced
-                            let elapsed = self.last_refresh_time
+                            let elapsed = self
+                                .last_refresh_time
                                 .map(|t| t.elapsed().as_secs_f32())
                                 .unwrap_or(0.0);
                             let pulse = (elapsed * 8.0).sin().abs(); // Faster pulse
@@ -433,9 +438,10 @@ impl eframe::App for GraphchanApp {
 
                         let (rect, _) = ui.allocate_exact_size(
                             egui::vec2(dot_size, dot_size),
-                            egui::Sense::hover()
+                            egui::Sense::hover(),
                         );
-                        ui.painter().circle_filled(rect.center(), dot_size / 2.0, dot_color);
+                        ui.painter()
+                            .circle_filled(rect.center(), dot_size / 2.0, dot_color);
 
                         // Toggle button
                         let button_text = if self.auto_refresh_enabled {
@@ -493,7 +499,11 @@ impl eframe::App for GraphchanApp {
             });
         } else if view_type == "messages" {
             egui::CentralPanel::default().show(ctx, |ui| {
-                ui::conversations::render_conversations_list(self, ui, &self.dm_state.conversations.clone());
+                ui::conversations::render_conversations_list(
+                    self,
+                    ui,
+                    &self.dm_state.conversations.clone(),
+                );
             });
         } else if view_type == "following" {
             egui::CentralPanel::default().show(ctx, |ui| {
@@ -521,10 +531,7 @@ impl eframe::App for GraphchanApp {
         } else if view_type == "thread" {
             // Extract thread state temporarily
             let mut temp_state = if let ViewState::Thread(state) = &mut self.view {
-                std::mem::replace(
-                    state,
-                    ThreadState::default(),
-                )
+                std::mem::replace(state, ThreadState::default())
             } else {
                 unreachable!()
             };
@@ -559,10 +566,7 @@ impl eframe::App for GraphchanApp {
         } else if view_type == "conversation" {
             // Extract conversation state temporarily
             let mut temp_state = if let ViewState::Conversation(state) = &mut self.view {
-                std::mem::replace(
-                    state,
-                    ConversationState::default(),
-                )
+                std::mem::replace(state, ConversationState::default())
             } else {
                 unreachable!()
             };
@@ -596,10 +600,7 @@ impl eframe::App for GraphchanApp {
         } else if view_type == "search" {
             // Extract search state temporarily
             let mut temp_state = if let ViewState::SearchResults(state) = &mut self.view {
-                std::mem::replace(
-                    state,
-                    state::SearchState::default(),
-                )
+                std::mem::replace(state, state::SearchState::default())
             } else {
                 unreachable!()
             };
@@ -613,8 +614,6 @@ impl eframe::App for GraphchanApp {
                 *state = temp_state;
             }
         }
-
-
 
         self.render_create_thread_dialog(ctx);
         self.render_import_dialog(ctx);

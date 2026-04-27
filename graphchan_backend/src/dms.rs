@@ -1,7 +1,9 @@
 use crate::config::GraphchanPaths;
 use crate::crypto::{decrypt_dm, encrypt_dm, load_x25519_secret};
 use crate::database::models::DirectMessageRecord;
-use crate::database::repositories::{ConversationRepository, DirectMessageRepository, PeerRepository};
+use crate::database::repositories::{
+    ConversationRepository, DirectMessageRepository, PeerRepository,
+};
 use crate::database::Database;
 use crate::utils::now_utc_iso;
 use anyhow::{anyhow, Context, Result};
@@ -83,7 +85,8 @@ impl DmService {
                 return Ok(None);
             };
 
-            let pubkey_bytes = BASE64_STANDARD.decode(&pubkey_str)
+            let pubkey_bytes = BASE64_STANDARD
+                .decode(&pubkey_str)
                 .with_context(|| "failed to decode X25519 public key")?;
             if pubkey_bytes.len() != 32 {
                 anyhow::bail!("invalid X25519 public key length: {}", pubkey_bytes.len());
@@ -95,7 +98,11 @@ impl DmService {
     }
 
     /// Send a direct message to a peer. Returns (view, ciphertext, nonce) for gossip broadcast.
-    pub fn send_dm(&self, to_peer_id: &str, body: &str) -> Result<(DirectMessageView, Vec<u8>, Vec<u8>)> {
+    pub fn send_dm(
+        &self,
+        to_peer_id: &str,
+        body: &str,
+    ) -> Result<(DirectMessageView, Vec<u8>, Vec<u8>)> {
         // Load our X25519 secret key
         let my_secret = load_x25519_secret(&self.paths)?;
 
@@ -193,7 +200,16 @@ impl DmService {
     /// - **Failed** (cipher/nonce error after we have the key): unrecoverable —
     ///   stored with `decrypt_status='failed'` and not surfaced. Logged loudly.
     /// - **Decrypted**: existing happy path.
-    pub fn ingest_dm(&self, from_peer_id: &str, to_peer_id: &str, encrypted_body: &[u8], nonce: &[u8], message_id: &str, conversation_id: &str, created_at: &str) -> Result<()> {
+    pub fn ingest_dm(
+        &self,
+        from_peer_id: &str,
+        to_peer_id: &str,
+        encrypted_body: &[u8],
+        nonce: &[u8],
+        message_id: &str,
+        conversation_id: &str,
+        created_at: &str,
+    ) -> Result<()> {
         let record = DirectMessageRecord {
             id: message_id.to_string(),
             conversation_id: conversation_id.to_string(),
@@ -267,7 +283,9 @@ impl DmService {
     /// unread when first received.
     pub fn retry_pending_for_sender(&self, from_peer_id: &str) -> Result<usize> {
         let pending = self.database.with_repositories(|repos| {
-            repos.direct_messages().list_pending_for_sender(from_peer_id)
+            repos
+                .direct_messages()
+                .list_pending_for_sender(from_peer_id)
         })?;
         if pending.is_empty() {
             return Ok(0);
@@ -287,7 +305,10 @@ impl DmService {
                     })?;
                     decrypted_count += 1;
                     let preview: String = view.body.chars().take(100).collect();
-                    if latest_preview.as_ref().map_or(true, |(ts, _)| view.created_at >= *ts) {
+                    if latest_preview
+                        .as_ref()
+                        .map_or(true, |(ts, _)| view.created_at >= *ts)
+                    {
                         latest_preview = Some((view.created_at.clone(), preview));
                     }
                 }
@@ -335,7 +356,10 @@ impl DmService {
     /// Receive and decrypt a direct message. Returns categorized errors so the
     /// caller (`ingest_dm` / `retry_pending_for_sender`) can decide whether the
     /// failure is recoverable (`MissingKey`) or terminal (`DecryptFailed`).
-    pub fn receive_dm(&self, record: DirectMessageRecord) -> std::result::Result<DirectMessageView, DmIngestError> {
+    pub fn receive_dm(
+        &self,
+        record: DirectMessageRecord,
+    ) -> std::result::Result<DirectMessageView, DmIngestError> {
         // Load our X25519 secret key (plumbing — bubble as Other).
         let my_secret = load_x25519_secret(&self.paths)?;
 
@@ -361,8 +385,13 @@ impl DmService {
         nonce.copy_from_slice(&record.nonce);
 
         // Decrypt the message
-        let body = decrypt_dm(&record.encrypted_body, &nonce, &my_secret.secret, &their_pubkey)
-            .map_err(DmIngestError::DecryptFailed)?;
+        let body = decrypt_dm(
+            &record.encrypted_body,
+            &nonce,
+            &my_secret.secret,
+            &their_pubkey,
+        )
+        .map_err(DmIngestError::DecryptFailed)?;
 
         // Update conversation metadata: atomic increment of unread_count rather
         // than clobbering it to 1, so receiving multiple unread DMs accumulates
@@ -437,7 +466,9 @@ impl DmService {
         };
 
         self.database.with_repositories(|repos| {
-            let records = repos.direct_messages().list_for_conversation(&conversation_id, limit)?;
+            let records = repos
+                .direct_messages()
+                .list_for_conversation(&conversation_id, limit)?;
             let mut views = Vec::new();
 
             for record in records {
@@ -456,7 +487,12 @@ impl DmService {
                 nonce.copy_from_slice(&record.nonce);
 
                 // Decrypt
-                match decrypt_dm(&record.encrypted_body, &nonce, &my_secret.secret, &their_pubkey) {
+                match decrypt_dm(
+                    &record.encrypted_body,
+                    &nonce,
+                    &my_secret.secret,
+                    &their_pubkey,
+                ) {
                     Ok(body) => {
                         views.push(DirectMessageView {
                             id: record.id,
@@ -507,7 +543,9 @@ impl DmService {
             )?;
             // Even if 0 rows changed (already-read conversation), normalize the
             // counter to 0 so any earlier inconsistency self-heals.
-            repos.conversations().update_unread_count(&conversation_id, 0)?;
+            repos
+                .conversations()
+                .update_unread_count(&conversation_id, 0)?;
             Ok(updated)
         })
     }
@@ -519,9 +557,8 @@ impl DmService {
             .get_identity()?
             .ok_or_else(|| anyhow!("no local identity found"))?;
 
-        self.database.with_repositories(|repos| {
-            repos.direct_messages().count_unread(&my_peer_id)
-        })
+        self.database
+            .with_repositories(|repos| repos.direct_messages().count_unread(&my_peer_id))
     }
 }
 
@@ -553,7 +590,9 @@ pub struct ConversationView {
 mod tests {
     use super::*;
     use crate::database::models::{DirectMessageRecord, PeerRecord};
-    use crate::database::repositories::{ConversationRepository, DirectMessageRepository, PeerRepository};
+    use crate::database::repositories::{
+        ConversationRepository, DirectMessageRepository, PeerRepository,
+    };
     use rusqlite::Connection;
 
     fn make_peer(id: &str) -> PeerRecord {
@@ -574,10 +613,8 @@ mod tests {
     }
 
     fn setup_db() -> Database {
-        let db = Database::from_connection(
-            Connection::open_in_memory().expect("in-memory db"),
-            true,
-        );
+        let db =
+            Database::from_connection(Connection::open_in_memory().expect("in-memory db"), true);
         db.ensure_migrations().expect("migrations");
         // Pre-seed the peer rows that FK constraints from direct_messages and
         // conversations expect to exist.
@@ -630,8 +667,14 @@ mod tests {
             repos.direct_messages().create(&record)?;
             // Second create with same id: should silently no-op.
             repos.direct_messages().create(&record)?;
-            let listed = repos.direct_messages().list_for_conversation("conv-1", 100)?;
-            assert_eq!(listed.len(), 1, "duplicate create should not produce two rows");
+            let listed = repos
+                .direct_messages()
+                .list_for_conversation("conv-1", 100)?;
+            assert_eq!(
+                listed.len(),
+                1,
+                "duplicate create should not produce two rows"
+            );
             Ok(())
         })
         .unwrap();
@@ -643,13 +686,22 @@ mod tests {
         let db = setup_db();
         db.with_repositories(|repos| {
             repos.conversations().record_incoming_message(
-                "conv-1", "alice", "2024-01-01T00:00:01Z", "hi",
+                "conv-1",
+                "alice",
+                "2024-01-01T00:00:01Z",
+                "hi",
             )?;
             repos.conversations().record_incoming_message(
-                "conv-1", "alice", "2024-01-01T00:00:02Z", "again",
+                "conv-1",
+                "alice",
+                "2024-01-01T00:00:02Z",
+                "again",
             )?;
             repos.conversations().record_incoming_message(
-                "conv-1", "alice", "2024-01-01T00:00:03Z", "still here",
+                "conv-1",
+                "alice",
+                "2024-01-01T00:00:03Z",
+                "still here",
             )?;
             let conv = repos.conversations().get("conv-1")?.expect("conv exists");
             assert_eq!(conv.unread_count, 3);
@@ -666,17 +718,29 @@ mod tests {
         let db = setup_db();
         db.with_repositories(|repos| {
             repos.conversations().record_incoming_message(
-                "conv-1", "alice", "2024-01-01T00:00:01Z", "hi",
+                "conv-1",
+                "alice",
+                "2024-01-01T00:00:01Z",
+                "hi",
             )?;
             repos.conversations().record_incoming_message(
-                "conv-1", "alice", "2024-01-01T00:00:02Z", "?",
+                "conv-1",
+                "alice",
+                "2024-01-01T00:00:02Z",
+                "?",
             )?;
             // We reply.
             repos.conversations().record_outgoing_message(
-                "conv-1", "alice", "2024-01-01T00:00:03Z", "hey",
+                "conv-1",
+                "alice",
+                "2024-01-01T00:00:03Z",
+                "hey",
             )?;
             let conv = repos.conversations().get("conv-1")?.expect("conv exists");
-            assert_eq!(conv.unread_count, 2, "reply must not clear peer's unread count");
+            assert_eq!(
+                conv.unread_count, 2,
+                "reply must not clear peer's unread count"
+            );
             assert_eq!(conv.last_message_preview.as_deref(), Some("hey"));
             Ok(())
         })
@@ -696,11 +760,16 @@ mod tests {
             repos.direct_messages().create(&r2)?;
             repos.direct_messages().create(&r3)?;
             repos.conversations().record_incoming_message(
-                "conv-1", "alice", "2024-01-01T00:00:02Z", "?",
+                "conv-1",
+                "alice",
+                "2024-01-01T00:00:02Z",
+                "?",
             )?;
             // Bob reads the conversation.
             let marked = repos.direct_messages().mark_conversation_read(
-                "conv-1", "bob", "2024-01-02T00:00:00Z",
+                "conv-1",
+                "bob",
+                "2024-01-02T00:00:00Z",
             )?;
             assert_eq!(marked, 2, "should mark only the two incoming messages");
             repos.conversations().update_unread_count("conv-1", 0)?;
@@ -724,7 +793,9 @@ mod tests {
             for i in 0..5 {
                 let ts = format!("2024-01-01T00:00:{:02}Z", i);
                 let id = format!("dm-{}", i);
-                repos.direct_messages().create(&make_record(&id, "conv-1", "a", "b", &ts))?;
+                repos
+                    .direct_messages()
+                    .create(&make_record(&id, "conv-1", "a", "b", &ts))?;
             }
             // Limit 3 → most recent 3 (dm-2, dm-3, dm-4) in ASC order.
             let listed = repos.direct_messages().list_for_conversation("conv-1", 3)?;
@@ -743,14 +814,32 @@ mod tests {
         db.with_repositories(|repos| {
             let mut r1 = make_record("ok-1", "conv-1", "alice", "bob", "2024-01-01T00:00:01Z");
             r1.decrypt_status = DECRYPT_STATUS_DECRYPTED.into();
-            let mut r2 = make_record("pending-1", "conv-1", "alice", "bob", "2024-01-01T00:00:02Z");
+            let mut r2 = make_record(
+                "pending-1",
+                "conv-1",
+                "alice",
+                "bob",
+                "2024-01-01T00:00:02Z",
+            );
             r2.decrypt_status = DECRYPT_STATUS_PENDING_KEY.into();
-            let mut r3 = make_record("pending-2", "conv-1", "alice", "bob", "2024-01-01T00:00:03Z");
+            let mut r3 = make_record(
+                "pending-2",
+                "conv-1",
+                "alice",
+                "bob",
+                "2024-01-01T00:00:03Z",
+            );
             r3.decrypt_status = DECRYPT_STATUS_PENDING_KEY.into();
             let mut r4 = make_record("failed-1", "conv-1", "alice", "bob", "2024-01-01T00:00:04Z");
             r4.decrypt_status = DECRYPT_STATUS_FAILED.into();
             // Different sender — must not appear.
-            let mut r5 = make_record("other-pending", "conv-2", "b", "bob", "2024-01-01T00:00:05Z");
+            let mut r5 = make_record(
+                "other-pending",
+                "conv-2",
+                "b",
+                "bob",
+                "2024-01-01T00:00:05Z",
+            );
             r5.decrypt_status = DECRYPT_STATUS_PENDING_KEY.into();
 
             repos.direct_messages().create(&r1)?;
@@ -774,7 +863,9 @@ mod tests {
             let mut r = make_record("dm-1", "conv-1", "alice", "bob", "2024-01-01T00:00:01Z");
             r.decrypt_status = DECRYPT_STATUS_PENDING_KEY.into();
             repos.direct_messages().create(&r)?;
-            repos.direct_messages().update_decrypt_status("dm-1", DECRYPT_STATUS_DECRYPTED)?;
+            repos
+                .direct_messages()
+                .update_decrypt_status("dm-1", DECRYPT_STATUS_DECRYPTED)?;
             let after = repos.direct_messages().get("dm-1")?.expect("exists");
             assert_eq!(after.decrypt_status, DECRYPT_STATUS_DECRYPTED);
             Ok(())

@@ -1,10 +1,12 @@
-use super::{AppState, ApiError, FileResponse, map_file_view};
+use super::{map_file_view, ApiError, AppState, FileResponse};
+use crate::database::repositories::{FileRepository, PostRepository, ThreadRepository};
 use crate::database::Database;
-use crate::database::repositories::{ThreadRepository, PostRepository, FileRepository};
 use crate::files::{FileService, FileView};
 use crate::identity::IdentitySummary;
-use crate::network::{FileAnnouncement, NetworkHandle, DhtStatus};
-use crate::threading::{CreatePostInput, CreateThreadInput, ThreadDetails, ThreadService, ThreadSummary};
+use crate::network::{DhtStatus, FileAnnouncement, NetworkHandle};
+use crate::threading::{
+    CreatePostInput, CreateThreadInput, ThreadDetails, ThreadService, ThreadSummary,
+};
 use anyhow::{Context, Result};
 use axum::extract::{Multipart, Path, Query, State};
 use axum::http::StatusCode;
@@ -74,7 +76,7 @@ pub(crate) struct IdentityInfo {
 pub(crate) struct NetworkInfo {
     peer_id: String,
     addresses: Vec<String>,
-    dht_status: String,  // "checking", "connected", or "unreachable"
+    dht_status: String, // "checking", "connected", or "unreachable"
 }
 
 impl NetworkInfo {
@@ -92,7 +94,8 @@ impl NetworkInfo {
             DhtStatus::Checking => "checking",
             DhtStatus::Connected => "connected",
             DhtStatus::Unreachable => "unreachable",
-        }.to_string();
+        }
+        .to_string();
 
         Self {
             peer_id: handle.peer_id(),
@@ -149,7 +152,8 @@ pub(crate) async fn get_thread(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> ApiResult<ThreadDetails> {
-    let service = ThreadService::with_file_paths(state.database.clone(), state.config.paths.clone());
+    let service =
+        ThreadService::with_file_paths(state.database.clone(), state.config.paths.clone());
     match service.get_thread(&id)? {
         Some(thread) => Ok(Json(thread)),
         None => Err(ApiError::NotFound(format!("thread {id} not found"))),
@@ -163,19 +167,25 @@ pub(crate) async fn download_thread(
     tracing::info!(thread_id = %thread_id, "📥 downloading thread from peer");
 
     // Get the blob ticket for this thread
-    let ticket_str: Option<String> = state.database.with_repositories(|repos| {
-        repos.conn().query_row(
-            "SELECT ticket FROM thread_tickets WHERE thread_id = ?1",
-            rusqlite::params![thread_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .context("failed to query thread_tickets")
-    })
-    .map_err(ApiError::Internal)?;
+    let ticket_str: Option<String> = state
+        .database
+        .with_repositories(|repos| {
+            repos
+                .conn()
+                .query_row(
+                    "SELECT ticket FROM thread_tickets WHERE thread_id = ?1",
+                    rusqlite::params![thread_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .context("failed to query thread_tickets")
+        })
+        .map_err(ApiError::Internal)?;
 
     let Some(ticket_str) = ticket_str else {
-        return Err(ApiError::NotFound(format!("no download ticket found for thread {thread_id}")));
+        return Err(ApiError::NotFound(format!(
+            "no download ticket found for thread {thread_id}"
+        )));
     };
 
     // Parse the blob ticket
@@ -188,13 +198,15 @@ pub(crate) async fn download_thread(
     let endpoint = state.network.endpoint();
 
     // Check if we already have the blob
-    let has_blob = state.blobs.has(hash).await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("failed to check blob existence: {}", e)))?;
+    let has_blob = state.blobs.has(hash).await.map_err(|e| {
+        ApiError::Internal(anyhow::anyhow!("failed to check blob existence: {}", e))
+    })?;
 
     if !has_blob {
         // Download from peer
         let downloader = state.blobs.downloader(&endpoint);
-        downloader.download(hash, Some(ticket.addr().id))
+        downloader
+            .download(hash, Some(ticket.addr().id))
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!("blob download failed: {}", e)))?;
     }
@@ -232,14 +244,18 @@ pub(crate) async fn download_thread(
     .map_err(ApiError::Internal)?;
 
     // Delete the ticket after successful download
-    state.database.with_repositories(|repos| {
-        repos.conn().execute(
-            "DELETE FROM thread_tickets WHERE thread_id = ?1",
-            rusqlite::params![thread_id],
-        )
-        .context("failed to delete thread ticket")
-    })
-    .map_err(ApiError::Internal)?;
+    state
+        .database
+        .with_repositories(|repos| {
+            repos
+                .conn()
+                .execute(
+                    "DELETE FROM thread_tickets WHERE thread_id = ?1",
+                    rusqlite::params![thread_id],
+                )
+                .context("failed to delete thread ticket")
+        })
+        .map_err(ApiError::Internal)?;
 
     // Subscribe to the thread topic to receive future updates
     if let Err(err) = state.network.subscribe_to_thread(&thread_id).await {
@@ -321,9 +337,9 @@ pub(crate) async fn create_thread(
             {
                 Ok(mut file_view) => {
                     let ticket = file_view.blob_id.as_deref().and_then(|blob_id| {
-                        Hash::from_str(blob_id).ok().map(|hash| {
-                            BlobTicket::new(addr.clone(), hash, BlobFormat::Raw)
-                        })
+                        Hash::from_str(blob_id)
+                            .ok()
+                            .map(|hash| BlobTicket::new(addr.clone(), hash, BlobFormat::Raw))
                     });
                     if let Some(t) = &ticket {
                         file_service.persist_ticket(&file_view.id, Some(t)).ok();
@@ -332,25 +348,29 @@ pub(crate) async fn create_thread(
 
                     // Broadcast file available
                     if let (Some(blob_id), Some(ticket)) = (&file_view.blob_id, &ticket) {
-                         if let Ok(_hash) = Hash::from_str(blob_id) {
-                             let announcement = FileAnnouncement {
-                                 id: file_view.id.clone(),
-                                 post_id: file_view.post_id.clone(),
-                                 thread_id: details.thread.id.clone(),
-                                 original_name: file_view.original_name.clone(),
-                                 mime: file_view.mime.clone(),
-                                 size_bytes: file_view.size_bytes,
-                                 checksum: file_view.checksum.clone(),
-                                 blob_id: file_view.blob_id.clone(),
-                                 ticket: Some(ticket.clone()),
-                             };
-                             tracing::info!(
-                                 file_id = %file_view.id,
-                                 post_id = %file_view.post_id,
-                                 "📢 broadcasting FileAnnouncement (thread creation)"
-                             );
-                             state.network.publish_file_available(announcement).await.ok();
-                         }
+                        if let Ok(_hash) = Hash::from_str(blob_id) {
+                            let announcement = FileAnnouncement {
+                                id: file_view.id.clone(),
+                                post_id: file_view.post_id.clone(),
+                                thread_id: details.thread.id.clone(),
+                                original_name: file_view.original_name.clone(),
+                                mime: file_view.mime.clone(),
+                                size_bytes: file_view.size_bytes,
+                                checksum: file_view.checksum.clone(),
+                                blob_id: file_view.blob_id.clone(),
+                                ticket: Some(ticket.clone()),
+                            };
+                            tracing::info!(
+                                file_id = %file_view.id,
+                                post_id = %file_view.post_id,
+                                "📢 broadcasting FileAnnouncement (thread creation)"
+                            );
+                            state
+                                .network
+                                .publish_file_available(announcement)
+                                .await
+                                .ok();
+                        }
                     }
                 }
                 Err(e) => {
@@ -361,7 +381,11 @@ pub(crate) async fn create_thread(
     }
 
     // Broadcast thread announcement
-    state.network.publish_thread_announcement(details.clone(), &state.identity.gpg_fingerprint).await.ok();
+    state
+        .network
+        .publish_thread_announcement(details.clone(), &state.identity.gpg_fingerprint)
+        .await
+        .ok();
 
     Ok(Json(details))
 }
@@ -383,10 +407,8 @@ pub(crate) async fn create_post(
         Ok(mut post) => {
             // Calculate thread hash for synchronization
             // Get all posts in thread to calculate the hash
-            let service_with_paths = ThreadService::with_file_paths(
-                state.database.clone(),
-                state.config.paths.clone()
-            );
+            let service_with_paths =
+                ThreadService::with_file_paths(state.database.clone(), state.config.paths.clone());
             if let Ok(Some(thread_details)) = service_with_paths.get_thread(&thread_id) {
                 let thread_hash = crate::threading::calculate_thread_hash(&thread_details.posts);
                 post.thread_hash = Some(thread_hash);
@@ -405,16 +427,15 @@ pub(crate) async fn create_post(
             // Re-announce the thread so peers can discover it (with updated post_count and hash)
             // This allows transitive discovery: if peer B adds to a thread, peer C who isn't subscribed
             // yet can discover the thread exists
-            let service_with_paths = ThreadService::with_file_paths(
-                state.database.clone(),
-                state.config.paths.clone()
-            );
+            let service_with_paths =
+                ThreadService::with_file_paths(state.database.clone(), state.config.paths.clone());
             if let Ok(Some(thread_details)) = service_with_paths.get_thread(&thread_id) {
                 // Re-announce thread with updated metadata
-                if let Err(err) = state.network.publish_thread_announcement(
-                    thread_details,
-                    &state.identity.gpg_fingerprint
-                ).await {
+                if let Err(err) = state
+                    .network
+                    .publish_thread_announcement(thread_details, &state.identity.gpg_fingerprint)
+                    .await
+                {
                     tracing::warn!(
                         error = ?err,
                         thread_id = %thread_id,
@@ -444,10 +465,8 @@ pub(crate) async fn list_recent_posts(
 ) -> ApiResult<RecentPostsResponse> {
     let limit = params.limit.unwrap_or(50);
 
-    let service = ThreadService::with_file_paths(
-        state.database.clone(),
-        state.config.paths.clone(),
-    );
+    let service =
+        ThreadService::with_file_paths(state.database.clone(), state.config.paths.clone());
 
     let file_service = FileService::new(
         state.database.clone(),
@@ -456,29 +475,40 @@ pub(crate) async fn list_recent_posts(
         state.blobs.clone(),
     );
 
-    let post_records = state.database.with_repositories(|repos| {
-        repos.posts().list_recent(limit)
-    }).map_err(ApiError::Internal)?;
+    let post_records = state
+        .database
+        .with_repositories(|repos| repos.posts().list_recent(limit))
+        .map_err(ApiError::Internal)?;
 
     let mut recent_posts = Vec::new();
 
     for post_record in post_records {
         // Get thread title
-        let thread_title = state.database.with_repositories(|repos| {
-            repos.threads().get(&post_record.thread_id)
-                .map(|t| t.map(|thread| thread.title).unwrap_or_else(|| "Unknown Thread".to_string()))
-        }).map_err(ApiError::Internal)?;
-
-        // Get parent IDs
-        let parent_post_ids = state.database.with_repositories(|repos| {
-            repos.posts().parents_of(&post_record.id)
-        }).map_err(ApiError::Internal)?;
-
-        // Get files
-        let file_views = file_service.list_post_files(&post_record.id)
+        let thread_title = state
+            .database
+            .with_repositories(|repos| {
+                repos.threads().get(&post_record.thread_id).map(|t| {
+                    t.map(|thread| thread.title)
+                        .unwrap_or_else(|| "Unknown Thread".to_string())
+                })
+            })
             .map_err(ApiError::Internal)?;
 
-        let files: Vec<FileResponse> = file_views.iter().map(|f| map_file_view(f.clone())).collect();
+        // Get parent IDs
+        let parent_post_ids = state
+            .database
+            .with_repositories(|repos| repos.posts().parents_of(&post_record.id))
+            .map_err(ApiError::Internal)?;
+
+        // Get files
+        let file_views = file_service
+            .list_post_files(&post_record.id)
+            .map_err(ApiError::Internal)?;
+
+        let files: Vec<FileResponse> = file_views
+            .iter()
+            .map(|f| map_file_view(f.clone()))
+            .collect();
 
         // Convert to PostView
         // Parse metadata JSON if present
@@ -507,7 +537,9 @@ pub(crate) async fn list_recent_posts(
         });
     }
 
-    Ok(Json(RecentPostsResponse { posts: recent_posts }))
+    Ok(Json(RecentPostsResponse {
+        posts: recent_posts,
+    }))
 }
 
 pub(crate) async fn delete_thread(
@@ -519,21 +551,24 @@ pub(crate) async fn delete_thread(
     // Get all file paths before deletion so we can clean them up
     let file_paths: Vec<std::path::PathBuf> = state.database.with_repositories(|repos| {
         tracing::info!("delete_thread: Calling FileRepository::list_for_thread");
-        let files = FileRepository::list_for_thread(&repos.files(), &id)
-            .map_err(|e| {
-                tracing::error!("delete_thread: FileRepository::list_for_thread failed: {:?}", e);
+        let files = FileRepository::list_for_thread(&repos.files(), &id).map_err(|e| {
+            tracing::error!(
+                "delete_thread: FileRepository::list_for_thread failed: {:?}",
                 e
-            })?;
+            );
+            e
+        })?;
         tracing::info!("delete_thread: Found {} files to delete", files.len());
-        Ok(files.into_iter()
+        Ok(files
+            .into_iter()
             .map(|f| std::path::PathBuf::from(f.path))
             .collect())
     })?;
 
     // Delete from database (cascades to posts, files, etc.)
-    state.database.with_repositories(|repos| {
-        repos.threads().delete(&id)
-    })?;
+    state
+        .database
+        .with_repositories(|repos| repos.threads().delete(&id))?;
 
     // Clean up actual files from disk
     for path in file_paths {
@@ -554,9 +589,9 @@ pub(crate) async fn set_thread_ignored(
     Path(id): Path<String>,
     Json(payload): Json<SetIgnoredRequest>,
 ) -> Result<StatusCode, ApiError> {
-    state.database.with_repositories(|repos| {
-        repos.threads().set_ignored(&id, payload.ignored)
-    })?;
+    state
+        .database
+        .with_repositories(|repos| repos.threads().set_ignored(&id, payload.ignored))?;
     Ok(StatusCode::OK)
 }
 

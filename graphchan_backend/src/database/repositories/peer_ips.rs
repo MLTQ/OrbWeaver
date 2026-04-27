@@ -21,23 +21,26 @@ impl<'conn> super::PeerIpRepository for SqlitePeerIpRepository<'conn> {
     }
 
     fn get(&self, peer_id: &str) -> Result<Option<PeerIpRecord>> {
-        let result = self.conn.query_row(
-            r#"
+        let result = self
+            .conn
+            .query_row(
+                r#"
             SELECT peer_id, ip_address, last_seen
             FROM peer_ips
             WHERE peer_id = ?1
             ORDER BY last_seen DESC
             LIMIT 1
             "#,
-            params![peer_id],
-            |row| {
-                Ok(PeerIpRecord {
-                    peer_id: row.get(0)?,
-                    ip_address: row.get(1)?,
-                    last_seen: row.get(2)?,
-                })
-            },
-        ).optional()?;
+                params![peer_id],
+                |row| {
+                    Ok(PeerIpRecord {
+                        peer_id: row.get(0)?,
+                        ip_address: row.get(1)?,
+                        last_seen: row.get(2)?,
+                    })
+                },
+            )
+            .optional()?;
         Ok(result)
     }
 
@@ -76,9 +79,7 @@ impl<'conn> super::PeerIpRepository for SqlitePeerIpRepository<'conn> {
             "#,
         )?;
 
-        let rows = stmt.query_map(params![peer_id], |row| {
-            row.get::<_, String>(0)
-        })?;
+        let rows = stmt.query_map(params![peer_id], |row| row.get::<_, String>(0))?;
 
         let mut ips = Vec::new();
         for row in rows {

@@ -29,23 +29,26 @@ impl<'conn> super::ConversationRepository for SqliteConversationRepository<'conn
     }
 
     fn get(&self, id: &str) -> Result<Option<ConversationRecord>> {
-        let result = self.conn.query_row(
-            r#"
+        let result = self
+            .conn
+            .query_row(
+                r#"
             SELECT id, peer_id, last_message_at, last_message_preview, unread_count
             FROM conversations
             WHERE id = ?1
             "#,
-            params![id],
-            |row| {
-                Ok(ConversationRecord {
-                    id: row.get(0)?,
-                    peer_id: row.get(1)?,
-                    last_message_at: row.get(2)?,
-                    last_message_preview: row.get(3)?,
-                    unread_count: row.get(4)?,
-                })
-            },
-        ).optional()?;
+                params![id],
+                |row| {
+                    Ok(ConversationRecord {
+                        id: row.get(0)?,
+                        peer_id: row.get(1)?,
+                        last_message_at: row.get(2)?,
+                        last_message_preview: row.get(3)?,
+                        unread_count: row.get(4)?,
+                    })
+                },
+            )
+            .optional()?;
         Ok(result)
     }
 
@@ -87,7 +90,12 @@ impl<'conn> super::ConversationRepository for SqliteConversationRepository<'conn
         Ok(())
     }
 
-    fn update_last_message(&self, conversation_id: &str, message_at: &str, preview: &str) -> Result<()> {
+    fn update_last_message(
+        &self,
+        conversation_id: &str,
+        message_at: &str,
+        preview: &str,
+    ) -> Result<()> {
         self.conn.execute(
             r#"
             UPDATE conversations

@@ -1,11 +1,15 @@
 use log::error;
 
 use super::file_viewer::{get_video_cache_dir, FileViewerContent};
-use super::GraphchanApp;
 use super::state::{LoadedImage, ViewState};
+use super::GraphchanApp;
 
 impl GraphchanApp {
-    pub(super) fn handle_image_loaded(&mut self, file_id: String, result: Result<LoadedImage, String>) {
+    pub(super) fn handle_image_loaded(
+        &mut self,
+        file_id: String,
+        result: Result<LoadedImage, String>,
+    ) {
         self.image_loading.remove(&file_id);
         match result {
             Ok(img) => {
@@ -20,7 +24,11 @@ impl GraphchanApp {
         self.on_download_complete();
     }
 
-    pub(super) fn handle_text_file_loaded(&mut self, file_id: String, result: Result<String, String>) {
+    pub(super) fn handle_text_file_loaded(
+        &mut self,
+        file_id: String,
+        result: Result<String, String>,
+    ) {
         if let Some(viewer) = self.file_viewers.get_mut(&file_id) {
             viewer.content = match result {
                 Ok(text) => {
@@ -42,7 +50,11 @@ impl GraphchanApp {
         }
     }
 
-    pub(super) fn handle_media_file_loaded(&mut self, file_id: String, result: Result<Vec<u8>, String>) {
+    pub(super) fn handle_media_file_loaded(
+        &mut self,
+        file_id: String,
+        result: Result<Vec<u8>, String>,
+    ) {
         if let Some(viewer) = self.file_viewers.get_mut(&file_id) {
             viewer.content = match result {
                 Ok(bytes) => {
@@ -55,24 +67,40 @@ impl GraphchanApp {
                                     log::info!("Cached video to: {}", cache_path.display());
 
                                     // Create player with audio support
-                                    let player_result = if let Some(audio_device) = &mut self.audio_device {
-                                        egui_video::Player::new(self.ctx.as_ref().unwrap(), &cache_path.to_string_lossy().to_string())
-                                            .and_then(|mut player| {
+                                    let player_result = if let Some(audio_device) =
+                                        &mut self.audio_device
+                                    {
+                                        egui_video::Player::new(
+                                            self.ctx.as_ref().unwrap(),
+                                            &cache_path.to_string_lossy().to_string(),
+                                        )
+                                        .and_then(
+                                            |mut player| {
                                                 // Set initial volume
                                                 player.options.set_audio_volume(self.video_volume);
                                                 player.with_audio(audio_device)
-                                            })
+                                            },
+                                        )
                                     } else {
                                         log::warn!("No audio device available, creating player without audio");
-                                        egui_video::Player::new(self.ctx.as_ref().unwrap(), &cache_path.to_string_lossy().to_string())
+                                        egui_video::Player::new(
+                                            self.ctx.as_ref().unwrap(),
+                                            &cache_path.to_string_lossy().to_string(),
+                                        )
                                     };
 
                                     match player_result {
                                         Ok(player) => FileViewerContent::Video(player),
-                                        Err(err) => FileViewerContent::Error(format!("Failed to load video: {}", err)),
+                                        Err(err) => FileViewerContent::Error(format!(
+                                            "Failed to load video: {}",
+                                            err
+                                        )),
                                     }
                                 }
-                                Err(err) => FileViewerContent::Error(format!("Failed to cache video: {}", err)),
+                                Err(err) => FileViewerContent::Error(format!(
+                                    "Failed to cache video: {}",
+                                    err
+                                )),
                             }
                         }
                         Err(err) => FileViewerContent::Error(err),
@@ -83,7 +111,11 @@ impl GraphchanApp {
         }
     }
 
-    pub(super) fn handle_pdf_file_loaded(&mut self, file_id: String, result: Result<Vec<u8>, String>) {
+    pub(super) fn handle_pdf_file_loaded(
+        &mut self,
+        file_id: String,
+        result: Result<Vec<u8>, String>,
+    ) {
         if let Some(viewer) = self.file_viewers.get_mut(&file_id) {
             viewer.content = match result {
                 Ok(bytes) => FileViewerContent::Pdf(bytes),

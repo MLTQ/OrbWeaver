@@ -89,6 +89,8 @@ fn emoji_to_rgb_delta(emoji: &str) -> (f32, f32, f32) {
 
 /// Calculate the maximum reaction score across all posts in a thread
 /// Not used in additive model but kept for API compatibility
-pub fn calculate_max_score_from_responses(_all_reactions: &HashMap<String, crate::models::ReactionsResponse>) -> f32 {
+pub fn calculate_max_score_from_responses(
+    _all_reactions: &HashMap<String, crate::models::ReactionsResponse>,
+) -> f32 {
     1.0 // Return dummy value since we don't normalize in additive model
 }

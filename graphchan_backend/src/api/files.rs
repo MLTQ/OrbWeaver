@@ -1,4 +1,4 @@
-use super::{AppState, ApiError, FileResponse, map_file_view};
+use super::{map_file_view, ApiError, AppState, FileResponse};
 use crate::database::repositories::FileRepository;
 use crate::files::{FileService, FileView, SaveFileInput};
 use crate::network::FileAnnouncement;
@@ -191,7 +191,10 @@ pub(crate) async fn download_file(
     // If generic or missing, try to guess from extension
     if content_type == "application/octet-stream" {
         if let Some(name) = &download.metadata.original_name {
-            if let Some(ext) = std::path::Path::new(name).extension().and_then(|e| e.to_str()) {
+            if let Some(ext) = std::path::Path::new(name)
+                .extension()
+                .and_then(|e| e.to_str())
+            {
                 let mime = match ext.to_lowercase().as_str() {
                     "jpg" | "jpeg" => "image/jpeg",
                     "png" => "image/png",
@@ -232,16 +235,19 @@ pub(crate) async fn trigger_file_download(
     use crate::database::repositories::FileRepository;
 
     // Get the file record with ticket information
-    let file_record = state.database.with_repositories(|repos| {
-        FileRepository::get(&repos.files(), &id)
-    }).map_err(ApiError::Internal)?;
+    let file_record = state
+        .database
+        .with_repositories(|repos| FileRepository::get(&repos.files(), &id))
+        .map_err(ApiError::Internal)?;
 
     let Some(record) = file_record else {
         return Err(ApiError::NotFound(format!("file {id} not found")));
     };
 
     // Check if file has a ticket for download
-    let ticket_str = record.ticket.clone()
+    let ticket_str = record
+        .ticket
+        .clone()
         .ok_or_else(|| ApiError::BadRequest("File has no download ticket available".to_string()))?;
 
     // Parse the ticket
@@ -249,11 +255,14 @@ pub(crate) async fn trigger_file_download(
         .map_err(|e| ApiError::BadRequest(format!("Invalid ticket: {}", e)))?;
 
     // Set status to 'downloading' immediately
-    state.database.with_repositories(|repos| {
-        let mut updated_record = record.clone();
-        updated_record.download_status = Some("downloading".to_string());
-        FileRepository::upsert(&repos.files(), &updated_record)
-    }).map_err(ApiError::Internal)?;
+    state
+        .database
+        .with_repositories(|repos| {
+            let mut updated_record = record.clone();
+            updated_record.download_status = Some("downloading".to_string());
+            FileRepository::upsert(&repos.files(), &updated_record)
+        })
+        .map_err(ApiError::Internal)?;
 
     // Spawn background task to download the file
     let db = state.database.clone();
@@ -274,7 +283,9 @@ pub(crate) async fn trigger_file_download(
         // Download the blob
         let download_result = async {
             // Check if blob exists
-            let has_blob = blobs.has(hash).await
+            let has_blob = blobs
+                .has(hash)
+                .await
                 .context("failed to check blob existence")?;
 
             if !has_blob {
@@ -292,15 +303,19 @@ pub(crate) async fn trigger_file_download(
 
             // Ensure directory exists
             if let Some(parent) = absolute_path.parent() {
-                tokio::fs::create_dir_all(parent).await
+                tokio::fs::create_dir_all(parent)
+                    .await
                     .context("failed to create download directory")?;
             }
 
-            blobs.export(hash, absolute_path.clone()).await
+            blobs
+                .export(hash, absolute_path.clone())
+                .await
                 .context("failed to export blob")?;
 
             // Read and verify
-            let data = tokio::fs::read(&absolute_path).await
+            let data = tokio::fs::read(&absolute_path)
+                .await
                 .context("failed to read exported file")?;
 
             let size = data.len() as i64;
@@ -324,7 +339,8 @@ pub(crate) async fn trigger_file_download(
 
             tracing::info!(file_id = %file_id, "✅ manual download completed successfully");
             Ok::<(), anyhow::Error>(())
-        }.await;
+        }
+        .await;
 
         // Update status to failed if download failed
         if let Err(e) = download_result {
@@ -350,7 +366,8 @@ pub(crate) async fn get_blob(
     State(state): State<AppState>,
     Path(blob_id): Path<String>,
 ) -> Result<Response, ApiError> {
-    let hash = Hash::from_str(&blob_id).map_err(|_| ApiError::NotFound("invalid blob id".into()))?;
+    let hash =
+        Hash::from_str(&blob_id).map_err(|_| ApiError::NotFound("invalid blob id".into()))?;
     let reader = state.blobs.reader(hash);
     let stream = ReaderStream::new(reader);
     let body = Body::from_stream(stream);
@@ -359,7 +376,10 @@ pub(crate) async fn get_blob(
     // We don't know the mime type unless we store it or infer it.
     // For now, let's assume generic binary or try to infer from first bytes if possible (hard with stream).
     // Or just let the browser guess.
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
 
     Ok((headers, body).into_response())
 }

@@ -1,4 +1,4 @@
-use super::{AppState, ApiError, ApiResult};
+use super::{ApiError, ApiResult, AppState};
 use crate::database::repositories::PeerRepository;
 use crate::files::FileService;
 use crate::identity::decode_friendcode_auto;
@@ -62,7 +62,8 @@ pub(crate) async fn get_self_peer(State(state): State<AppState>) -> ApiResult<Op
 
     // Generate a full friend code with network addresses (including relay URL)
     // This ensures the friend code can be used for NAT traversal
-    if let (Some(iroh_peer_id), Some(gpg_fingerprint)) = (&peer.iroh_peer_id, &peer.gpg_fingerprint) {
+    if let (Some(iroh_peer_id), Some(gpg_fingerprint)) = (&peer.iroh_peer_id, &peer.gpg_fingerprint)
+    {
         let addresses = state.network.get_addresses();
         if !addresses.is_empty() {
             // Create a friend code payload with addresses
@@ -106,7 +107,11 @@ pub(crate) async fn add_peer(
 
             // Subscribe to this peer's topic to receive their announcements
             // Use the iroh peer ID as bootstrap to help establish gossip connectivity
-            if let Err(err) = state.network.subscribe_to_peer(&peer.id, iroh_peer_id).await {
+            if let Err(err) = state
+                .network
+                .subscribe_to_peer(&peer.id, iroh_peer_id)
+                .await
+            {
                 tracing::warn!(error = ?err, peer_id = %peer.id, "failed to subscribe to peer topic");
             }
 
@@ -123,9 +128,9 @@ pub(crate) async fn unfollow_peer(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    state.database.with_repositories(|repos| {
-        repos.peers().delete(&id)
-    })?;
+    state
+        .database
+        .with_repositories(|repos| repos.peers().delete(&id))?;
     Ok(StatusCode::OK)
 }
 
@@ -164,14 +169,19 @@ pub(crate) async fn upload_avatar(
         return Err(ApiError::BadRequest("missing file field".into()));
     };
 
-    let blob_id = service.import_blob(bytes).await.map_err(ApiError::Internal)?;
+    let blob_id = service
+        .import_blob(bytes)
+        .await
+        .map_err(ApiError::Internal)?;
 
     // Update local peer profile
     let peer_service = PeerService::new(state.database.clone());
     // We need the local peer ID (fingerprint).
     // We can get it from state.identity.gpg_fingerprint.
     let peer_id = state.identity.gpg_fingerprint.clone();
-    peer_service.update_profile(&peer_id, Some(blob_id.clone()), None, None, None, None).map_err(ApiError::Internal)?;
+    peer_service
+        .update_profile(&peer_id, Some(blob_id.clone()), None, None, None, None)
+        .map_err(ApiError::Internal)?;
 
     // Generate ticket
     let hash = Hash::from_str(&blob_id).map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
@@ -188,7 +198,11 @@ pub(crate) async fn upload_avatar(
         agents: None,
         x25519_pubkey: Some(state.identity.x25519_pubkey.clone()),
     };
-    state.network.publish_profile_update(update).await.map_err(ApiError::Internal)?;
+    state
+        .network
+        .publish_profile_update(update)
+        .await
+        .map_err(ApiError::Internal)?;
 
     Ok((StatusCode::OK, Json(blob_id)))
 }
@@ -200,7 +214,15 @@ pub(crate) async fn update_profile_handler(
     let peer_service = PeerService::new(state.database.clone());
     let peer_id = state.identity.gpg_fingerprint.clone();
 
-    peer_service.update_profile(&peer_id, None, payload.username.clone(), payload.bio.clone(), None, None)
+    peer_service
+        .update_profile(
+            &peer_id,
+            None,
+            payload.username.clone(),
+            payload.bio.clone(),
+            None,
+            None,
+        )
         .map_err(ApiError::Internal)?;
 
     // Broadcast ProfileUpdate
@@ -222,7 +244,11 @@ pub(crate) async fn update_profile_handler(
         agents: None,
         x25519_pubkey: Some(state.identity.x25519_pubkey.clone()),
     };
-    state.network.publish_profile_update(update).await.map_err(ApiError::Internal)?;
+    state
+        .network
+        .publish_profile_update(update)
+        .await
+        .map_err(ApiError::Internal)?;
 
     Ok(StatusCode::OK)
 }
@@ -254,7 +280,8 @@ pub(crate) async fn add_agent_handler(
         agents.push(payload.name.clone());
 
         // Update profile with new agents list
-        peer_service.update_profile(&peer_id, None, None, None, Some(agents.clone()), None)
+        peer_service
+            .update_profile(&peer_id, None, None, None, Some(agents.clone()), None)
             .map_err(ApiError::Internal)?;
 
         // Broadcast ProfileUpdate
@@ -267,7 +294,11 @@ pub(crate) async fn add_agent_handler(
             agents: Some(agents),
             x25519_pubkey: Some(state.identity.x25519_pubkey.clone()),
         };
-        state.network.publish_profile_update(update).await.map_err(ApiError::Internal)?;
+        state
+            .network
+            .publish_profile_update(update)
+            .await
+            .map_err(ApiError::Internal)?;
     }
 
     Ok(StatusCode::OK)
@@ -289,7 +320,8 @@ pub(crate) async fn remove_agent_handler(
         agents.retain(|a| a != &name);
 
         // Update profile with new agents list
-        peer_service.update_profile(&peer_id, None, None, None, Some(agents.clone()), None)
+        peer_service
+            .update_profile(&peer_id, None, None, None, Some(agents.clone()), None)
             .map_err(ApiError::Internal)?;
 
         // Broadcast ProfileUpdate
@@ -302,7 +334,11 @@ pub(crate) async fn remove_agent_handler(
             agents: Some(agents),
             x25519_pubkey: Some(state.identity.x25519_pubkey.clone()),
         };
-        state.network.publish_profile_update(update).await.map_err(ApiError::Internal)?;
+        state
+            .network
+            .publish_profile_update(update)
+            .await
+            .map_err(ApiError::Internal)?;
     }
 
     Ok(StatusCode::NO_CONTENT)
@@ -312,9 +348,15 @@ pub(crate) async fn get_theme_color_handler(
     State(state): State<AppState>,
 ) -> Result<Json<ThemeColorResponse>, ApiError> {
     // Default to a nice blue if not set
-    let default_color = ThemeColorResponse { r: 64, g: 128, b: 255 };
+    let default_color = ThemeColorResponse {
+        r: 64,
+        g: 128,
+        b: 255,
+    };
 
-    let color_str = state.database.get_setting("theme_color")
+    let color_str = state
+        .database
+        .get_setting("theme_color")
         .map_err(ApiError::Internal)?;
 
     if let Some(color_str) = color_str {
@@ -339,7 +381,9 @@ pub(crate) async fn set_theme_color_handler(
     Json(payload): Json<SetThemeColorRequest>,
 ) -> Result<StatusCode, ApiError> {
     let color_str = format!("{},{},{}", payload.r, payload.g, payload.b);
-    state.database.set_setting("theme_color", &color_str)
+    state
+        .database
+        .set_setting("theme_color", &color_str)
         .map_err(ApiError::Internal)?;
 
     Ok(StatusCode::OK)

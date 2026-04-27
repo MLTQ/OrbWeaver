@@ -2,7 +2,11 @@ use eframe::egui::{self, Color32, RichText, ScrollArea};
 
 use crate::app::{state::ConversationState, GraphchanApp};
 
-pub fn render_conversation(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mut ConversationState) {
+pub fn render_conversation(
+    app: &mut GraphchanApp,
+    ui: &mut egui::Ui,
+    state: &mut ConversationState,
+) {
     ui.horizontal(|ui| {
         if ui.button("← Back to Private Threads").clicked() {
             app.view = crate::app::state::ViewState::Catalog;
@@ -11,10 +15,16 @@ pub fn render_conversation(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
         ui.heading("Direct Message");
 
         if let Some(peer) = &state.peer_info {
-            ui.label(RichText::new(format!(
-                "with {}",
-                peer.username.as_deref().or(peer.alias.as_deref()).unwrap_or(&peer.id)
-            )).strong());
+            ui.label(
+                RichText::new(format!(
+                    "with {}",
+                    peer.username
+                        .as_deref()
+                        .or(peer.alias.as_deref())
+                        .unwrap_or(&peer.id)
+                ))
+                .strong(),
+            );
         } else {
             ui.label(RichText::new(&state.peer_id).monospace().size(10.0));
         }
@@ -63,7 +73,9 @@ pub fn render_conversation(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
                                     ui.label(&message.body);
 
                                     ui.horizontal(|ui| {
-                                        ui.label(RichText::new(&message.created_at).size(9.0).weak());
+                                        ui.label(
+                                            RichText::new(&message.created_at).size(9.0).weak(),
+                                        );
                                         if message.read_at.is_some() {
                                             ui.label(RichText::new("✓ Read").size(9.0).weak());
                                         }
@@ -86,12 +98,14 @@ pub fn render_conversation(app: &mut GraphchanApp, ui: &mut egui::Ui, state: &mu
     ui.horizontal(|ui| {
         let response = ui.add_sized(
             [ui.available_width() - 80.0, 40.0],
-            egui::TextEdit::multiline(&mut state.new_message_body)
-                .hint_text("Type a message...")
+            egui::TextEdit::multiline(&mut state.new_message_body).hint_text("Type a message..."),
         );
 
-        if ui.add_enabled(!state.sending, egui::Button::new("Send")).clicked()
-            || (response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift))
+        if ui
+            .add_enabled(!state.sending, egui::Button::new("Send"))
+            .clicked()
+            || (response.has_focus()
+                && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift))
         {
             app.spawn_send_dm(state);
         }
@@ -116,7 +130,8 @@ pub fn render_conversations_list(
         ui.heading("Messages");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button("+ New Message").clicked() {
-                app.dm_state.show_new_conversation_picker = !app.dm_state.show_new_conversation_picker;
+                app.dm_state.show_new_conversation_picker =
+                    !app.dm_state.show_new_conversation_picker;
                 app.dm_state.new_conversation_filter.clear();
             }
         });
@@ -126,10 +141,8 @@ pub fn render_conversations_list(
     let mut peer_to_open: Option<crate::models::PeerView> = None;
 
     if app.dm_state.show_new_conversation_picker {
-        let existing_peer_ids: std::collections::HashSet<&str> = conversations
-            .iter()
-            .map(|c| c.peer_id.as_str())
-            .collect();
+        let existing_peer_ids: std::collections::HashSet<&str> =
+            conversations.iter().map(|c| c.peer_id.as_str()).collect();
 
         egui::Frame::group(ui.style())
             .inner_margin(egui::vec2(12.0, 8.0))
@@ -139,7 +152,7 @@ pub fn render_conversations_list(
 
                 ui.add(
                     egui::TextEdit::singleline(&mut app.dm_state.new_conversation_filter)
-                        .hint_text("Filter friends...")
+                        .hint_text("Filter friends..."),
                 );
                 ui.add_space(4.0);
 
@@ -151,7 +164,9 @@ pub fn render_conversations_list(
 
                 for peer in &peers {
                     // Filter by search text
-                    let name = peer.username.as_deref()
+                    let name = peer
+                        .username
+                        .as_deref()
                         .or(peer.alias.as_deref())
                         .unwrap_or(&peer.id);
                     if !filter.is_empty() && !name.to_lowercase().contains(&filter) {
@@ -176,7 +191,10 @@ pub fn render_conversations_list(
 
                 if !any_shown {
                     if app.peers.is_empty() {
-                        ui.label(RichText::new("No friends yet. Add peers from the Following page.").weak());
+                        ui.label(
+                            RichText::new("No friends yet. Add peers from the Following page.")
+                                .weak(),
+                        );
                     } else {
                         ui.label(RichText::new("No matching friends.").weak());
                     }
@@ -216,7 +234,8 @@ pub fn render_conversations_list(
                     ui.set_width(ui.available_width());
 
                     ui.horizontal(|ui| {
-                        let peer_name = conv.peer_username
+                        let peer_name = conv
+                            .peer_username
                             .as_deref()
                             .or(conv.peer_alias.as_deref())
                             .unwrap_or(&conv.peer_id);
@@ -230,7 +249,7 @@ pub fn render_conversations_list(
                                 ui.label(
                                     RichText::new(format!("{} unread", conv.unread_count))
                                         .color(Color32::from_rgb(100, 200, 100))
-                                        .strong()
+                                        .strong(),
                                 );
                             }
                         });

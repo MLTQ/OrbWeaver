@@ -18,11 +18,21 @@ impl GraphchanApp {
     }
 
     pub(super) fn spawn_load_thread(&mut self, thread_id: &str) {
-        tasks::load_thread(self.api.clone(), self.tx.clone(), thread_id.to_string(), false);
+        tasks::load_thread(
+            self.api.clone(),
+            self.tx.clone(),
+            thread_id.to_string(),
+            false,
+        );
     }
 
     pub(super) fn spawn_refresh_thread(&mut self, thread_id: &str) {
-        tasks::load_thread(self.api.clone(), self.tx.clone(), thread_id.to_string(), true);
+        tasks::load_thread(
+            self.api.clone(),
+            self.tx.clone(),
+            thread_id.to_string(),
+            true,
+        );
     }
 
     pub(super) fn spawn_create_thread(&mut self) {
@@ -43,7 +53,12 @@ impl GraphchanApp {
         payload.visibility = Some("social".to_string());
         self.create_thread.submitting = true;
         self.create_thread.error = None;
-        tasks::create_thread(self.api.clone(), self.tx.clone(), payload, self.create_thread.files.clone());
+        tasks::create_thread(
+            self.api.clone(),
+            self.tx.clone(),
+            payload,
+            self.create_thread.files.clone(),
+        );
     }
 
     pub(super) fn spawn_create_post(&mut self, thread_state: &mut ThreadState) {
@@ -61,7 +76,13 @@ impl GraphchanApp {
         let attachments = thread_state.draft_attachments.clone();
         thread_state.new_post_sending = true;
         thread_state.new_post_error = None;
-        tasks::create_post(self.api.clone(), self.tx.clone(), thread_id, payload, attachments);
+        tasks::create_post(
+            self.api.clone(),
+            self.tx.clone(),
+            thread_id,
+            payload,
+            attachments,
+        );
     }
 
     pub(super) fn spawn_import_fourchan(&mut self) {
@@ -313,7 +334,11 @@ impl GraphchanApp {
 
         state.importing_peers = true;
         state.peer_import_error = None;
-        tasks::import_peer_blocks(self.api.clone(), self.tx.clone(), state.peer_import_text.clone());
+        tasks::import_peer_blocks(
+            self.api.clone(),
+            self.tx.clone(),
+            state.peer_import_text.clone(),
+        );
     }
 
     pub(super) fn spawn_clear_all_ip_blocks(&mut self) {
@@ -333,11 +358,21 @@ impl GraphchanApp {
     }
 
     pub(super) fn spawn_add_reaction(&mut self, post_id: &str, emoji: &str) {
-        tasks::add_reaction(self.api.clone(), self.tx.clone(), post_id.to_string(), emoji.to_string());
+        tasks::add_reaction(
+            self.api.clone(),
+            self.tx.clone(),
+            post_id.to_string(),
+            emoji.to_string(),
+        );
     }
 
     pub(super) fn spawn_remove_reaction(&mut self, post_id: &str, emoji: &str) {
-        tasks::remove_reaction(self.api.clone(), self.tx.clone(), post_id.to_string(), emoji.to_string());
+        tasks::remove_reaction(
+            self.api.clone(),
+            self.tx.clone(),
+            post_id.to_string(),
+            emoji.to_string(),
+        );
     }
 
     pub(super) fn spawn_search(&self, query: String) {

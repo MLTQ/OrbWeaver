@@ -1,9 +1,9 @@
+use crate::config::GraphchanPaths;
 use crate::database::models::{PostRecord, ThreadRecord};
+use crate::database::repositories::FileRepository;
 use crate::database::repositories::{PeerRepository, PostRepository, ThreadRepository};
 use crate::database::Database;
 use crate::utils::now_utc_iso;
-use crate::database::repositories::FileRepository;
-use crate::config::GraphchanPaths;
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -36,7 +36,8 @@ impl ThreadService {
 
             for thread in threads {
                 // Get first image from the thread's first post
-                let first_image = repos.posts()
+                let first_image = repos
+                    .posts()
                     .list_for_thread(&thread.id)?
                     .into_iter()
                     .next() // Get first post (OP)
@@ -46,9 +47,11 @@ impl ThreadService {
                     })
                     .and_then(|files| {
                         // Find first image file
-                        files.into_iter()
+                        files
+                            .into_iter()
                             .find(|f| {
-                                f.mime.as_ref()
+                                f.mime
+                                    .as_ref()
                                     .map(|m| m.starts_with("image/"))
                                     .unwrap_or(false)
                             })
@@ -65,7 +68,10 @@ impl ThreadService {
 
                 // Load topics for this thread
                 use crate::database::repositories::TopicRepository;
-                let topics = repos.topics().list_thread_topics(&thread.id).unwrap_or_default();
+                let topics = repos
+                    .topics()
+                    .list_thread_topics(&thread.id)
+                    .unwrap_or_default();
 
                 summaries.push(ThreadSummary {
                     id: thread.id,
@@ -98,7 +104,7 @@ impl ThreadService {
             let posts = posts_repo.list_for_thread(thread_id)?;
             let mut views = Vec::with_capacity(posts.len());
             let mut peer_ids = std::collections::HashSet::new();
-            
+
             if let Some(creator) = &thread.creator_peer_id {
                 peer_ids.insert(creator.clone());
             }
@@ -207,10 +213,11 @@ impl ThreadService {
                         if let Some(peer) = repos.peers().get(author_id)? {
                             // Reconstruct short friend code from peer record
                             if let (Some(iroh_peer_id), Some(gpg_fingerprint)) =
-                                (&peer.iroh_peer_id, &peer.gpg_fingerprint) {
+                                (&peer.iroh_peer_id, &peer.gpg_fingerprint)
+                            {
                                 Some(crate::identity::encode_short_friendcode(
                                     iroh_peer_id,
-                                    gpg_fingerprint
+                                    gpg_fingerprint,
                                 ))
                             } else {
                                 None
@@ -280,9 +287,10 @@ impl ThreadService {
         };
 
         // Serialize metadata to JSON if present
-        let metadata_json = input.metadata.as_ref().and_then(|meta| {
-            serde_json::to_string(meta).ok()
-        });
+        let metadata_json = input
+            .metadata
+            .as_ref()
+            .and_then(|meta| serde_json::to_string(meta).ok());
 
         let post_record = PostRecord {
             id: Uuid::new_v4().to_string(),
@@ -302,7 +310,9 @@ impl ThreadService {
             }
 
             // Update thread's rebroadcast flag
-            repos.threads().set_rebroadcast(&post_record.thread_id, input.rebroadcast)?;
+            repos
+                .threads()
+                .set_rebroadcast(&post_record.thread_id, input.rebroadcast)?;
 
             let posts_repo = repos.posts();
             posts_repo.create(&post_record)?;
@@ -311,9 +321,10 @@ impl ThreadService {
         })?;
 
         // Parse metadata JSON if present
-        let metadata = stored_post.metadata.as_ref().and_then(|json_str| {
-            serde_json::from_str::<PostMetadata>(json_str).ok()
-        });
+        let metadata = stored_post
+            .metadata
+            .as_ref()
+            .and_then(|json_str| serde_json::from_str::<PostMetadata>(json_str).ok());
 
         Ok(PostView {
             id: stored_post.id,
@@ -448,7 +459,7 @@ impl ThreadSummary {
             topic_secret: record.topic_secret,
             sync_status: record.sync_status,
             first_image_file: None, // Not populated in from_record
-            topics: Vec::new(), // Not populated in from_record
+            topics: Vec::new(),     // Not populated in from_record
             source_url: record.source_url,
             source_platform: record.source_platform,
             last_refreshed_at: record.last_refreshed_at,
@@ -457,11 +468,16 @@ impl ThreadSummary {
 }
 
 impl PostView {
-    fn from_record(record: PostRecord, parent_post_ids: Vec<String>, files: Vec<crate::files::FileView>) -> Self {
+    fn from_record(
+        record: PostRecord,
+        parent_post_ids: Vec<String>,
+        files: Vec<crate::files::FileView>,
+    ) -> Self {
         // Parse metadata JSON if present
-        let metadata = record.metadata.as_ref().and_then(|json_str| {
-            serde_json::from_str::<PostMetadata>(json_str).ok()
-        });
+        let metadata = record
+            .metadata
+            .as_ref()
+            .and_then(|json_str| serde_json::from_str::<PostMetadata>(json_str).ok());
 
         Self {
             id: record.id,

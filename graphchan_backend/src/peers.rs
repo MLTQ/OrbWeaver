@@ -75,7 +75,15 @@ impl PeerService {
         })
     }
 
-    pub fn update_profile(&self, peer_id: &str, avatar_file_id: Option<String>, username: Option<String>, bio: Option<String>, agents: Option<Vec<String>>, x25519_pubkey: Option<String>) -> Result<()> {
+    pub fn update_profile(
+        &self,
+        peer_id: &str,
+        avatar_file_id: Option<String>,
+        username: Option<String>,
+        bio: Option<String>,
+        agents: Option<Vec<String>>,
+        x25519_pubkey: Option<String>,
+    ) -> Result<()> {
         self.database.with_repositories(|repos| {
             if let Some(mut record) = repos.peers().get(peer_id)? {
                 if avatar_file_id.is_some() {
@@ -132,9 +140,10 @@ impl PeerView {
         };
 
         // Parse agents JSON
-        let agents = record.agents.as_ref().and_then(|json_str| {
-            serde_json::from_str::<Vec<String>>(json_str).ok()
-        });
+        let agents = record
+            .agents
+            .as_ref()
+            .and_then(|json_str| serde_json::from_str::<Vec<String>>(json_str).ok());
 
         Self {
             id: record.id,

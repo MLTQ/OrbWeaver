@@ -74,6 +74,7 @@ async fn rest_roundtrip_with_file_upload() {
         &config.network,
         blob_store.clone(),
         database.clone(),
+        identity.gpg_fingerprint.clone(),
     )
     .await
     .expect("start network");
@@ -226,6 +227,7 @@ async fn spawn_node(port: u16) -> TestNode {
         &config.network,
         blob_store.clone(),
         database.clone(),
+        identity.gpg_fingerprint.clone(),
     )
     .await
     .expect("network start");

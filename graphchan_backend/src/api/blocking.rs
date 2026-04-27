@@ -1,5 +1,7 @@
-use super::{AppState, ApiError};
-use crate::blocking::{BlockChecker, BlockedPeerView, BlocklistEntryView, BlocklistSubscriptionView};
+use super::{ApiError, AppState};
+use crate::blocking::{
+    BlockChecker, BlockedPeerView, BlocklistEntryView, BlocklistSubscriptionView,
+};
 use crate::database::repositories::PeerIpRepository;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -116,7 +118,9 @@ pub(crate) async fn subscribe_blocklist_handler(
     // Generate a blocklist ID from maintainer + name
     let blocklist_id = format!(
         "{}",
-        blake3::hash(format!("blocklist:{}:{}", payload.maintainer_peer_id, payload.name).as_bytes())
+        blake3::hash(
+            format!("blocklist:{}:{}", payload.maintainer_peer_id, payload.name).as_bytes()
+        )
     );
 
     checker
@@ -130,7 +134,11 @@ pub(crate) async fn subscribe_blocklist_handler(
         .map_err(ApiError::Internal)?;
 
     // Subscribe to blocklist maintainer's peer topic to receive block actions
-    if let Err(err) = state.network.subscribe_to_peer(&payload.maintainer_peer_id, None).await {
+    if let Err(err) = state
+        .network
+        .subscribe_to_peer(&payload.maintainer_peer_id, None)
+        .await
+    {
         tracing::warn!(error = ?err, maintainer = %payload.maintainer_peer_id, "failed to subscribe to blocklist maintainer's topic");
     }
 
@@ -164,19 +172,23 @@ pub(crate) async fn list_blocklist_entries_handler(
 pub(crate) async fn list_ip_blocks_handler(
     State(state): State<AppState>,
 ) -> ApiResult<Vec<IpBlockView>> {
-    let blocks = state.database.with_repositories(|repos| {
-        repos.ip_blocks().list_all()
-    }).map_err(ApiError::Internal)?;
+    let blocks = state
+        .database
+        .with_repositories(|repos| repos.ip_blocks().list_all())
+        .map_err(ApiError::Internal)?;
 
-    let views = blocks.into_iter().map(|block| IpBlockView {
-        id: block.id,
-        ip_or_range: block.ip_or_range,
-        block_type: block.block_type,
-        blocked_at: block.blocked_at,
-        reason: block.reason,
-        active: block.active,
-        hit_count: block.hit_count,
-    }).collect();
+    let views = blocks
+        .into_iter()
+        .map(|block| IpBlockView {
+            id: block.id,
+            ip_or_range: block.ip_or_range,
+            block_type: block.block_type,
+            blocked_at: block.blocked_at,
+            reason: block.reason,
+            active: block.active,
+            hit_count: block.hit_count,
+        })
+        .collect();
 
     Ok(Json(views))
 }
@@ -186,14 +198,16 @@ pub(crate) async fn add_ip_block_handler(
     Json(payload): Json<AddIpBlockRequest>,
 ) -> Result<StatusCode, ApiError> {
     // Validate IP or CIDR range
-    let (block_type, validated_ip_or_range) = if let Ok(ip) = payload.ip_or_range.parse::<IpAddr>() {
+    let (block_type, validated_ip_or_range) = if let Ok(ip) = payload.ip_or_range.parse::<IpAddr>()
+    {
         ("exact".to_string(), ip.to_string())
     } else if let Ok(network) = payload.ip_or_range.parse::<IpNetwork>() {
         ("range".to_string(), network.to_string())
     } else {
-        return Err(ApiError::BadRequest(
-            format!("Invalid IP address or CIDR range: {}", payload.ip_or_range)
-        ));
+        return Err(ApiError::BadRequest(format!(
+            "Invalid IP address or CIDR range: {}",
+            payload.ip_or_range
+        )));
     };
 
     let record = IpBlockRecord {
@@ -206,9 +220,10 @@ pub(crate) async fn add_ip_block_handler(
         hit_count: 0,
     };
 
-    state.database.with_repositories(|repos| {
-        repos.ip_blocks().add(&record)
-    }).map_err(ApiError::Internal)?;
+    state
+        .database
+        .with_repositories(|repos| repos.ip_blocks().add(&record))
+        .map_err(ApiError::Internal)?;
 
     // Reload cache to include new block
     let ip_blocker = IpBlockChecker::new(state.database.clone());
@@ -223,9 +238,10 @@ pub(crate) async fn remove_ip_block_handler(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    state.database.with_repositories(|repos| {
-        repos.ip_blocks().remove(id)
-    }).map_err(ApiError::Internal)?;
+    state
+        .database
+        .with_repositories(|repos| repos.ip_blocks().remove(id))
+        .map_err(ApiError::Internal)?;
 
     // Reload cache to remove block
     let ip_blocker = IpBlockChecker::new(state.database.clone());
@@ -255,7 +271,14 @@ pub(crate) async fn import_ip_blocks_handler(
         let (ip_or_range, reason) = if let Some(hash_pos) = line.find('#') {
             let ip_part = line[..hash_pos].trim();
             let reason_part = line[hash_pos + 1..].trim();
-            (ip_part, if reason_part.is_empty() { None } else { Some(reason_part.to_string()) })
+            (
+                ip_part,
+                if reason_part.is_empty() {
+                    None
+                } else {
+                    Some(reason_part.to_string())
+                },
+            )
         } else {
             (line, None)
         };
@@ -281,9 +304,10 @@ pub(crate) async fn import_ip_blocks_handler(
             hit_count: 0,
         };
 
-        match state.database.with_repositories(|repos| {
-            repos.ip_blocks().add(&record)
-        }) {
+        match state
+            .database
+            .with_repositories(|repos| repos.ip_blocks().add(&record))
+        {
             Ok(_) => added_count += 1,
             Err(err) => {
                 tracing::warn!(error = ?err, ip_or_range = %record.ip_or_range, "failed to add IP block during import");
@@ -292,7 +316,11 @@ pub(crate) async fn import_ip_blocks_handler(
         }
     }
 
-    tracing::info!(added = added_count, errors = error_count, "IP block import completed");
+    tracing::info!(
+        added = added_count,
+        errors = error_count,
+        "IP block import completed"
+    );
 
     // Reload cache
     let ip_blocker = IpBlockChecker::new(state.database.clone());
@@ -306,13 +334,17 @@ pub(crate) async fn import_ip_blocks_handler(
 pub(crate) async fn export_ip_blocks_handler(
     State(state): State<AppState>,
 ) -> Result<String, ApiError> {
-    let blocks = state.database.with_repositories(|repos| {
-        repos.ip_blocks().list_all()
-    }).map_err(ApiError::Internal)?;
+    let blocks = state
+        .database
+        .with_repositories(|repos| repos.ip_blocks().list_all())
+        .map_err(ApiError::Internal)?;
 
     let mut output = String::new();
     output.push_str("# Graphchan IP Blocklist Export\n");
-    output.push_str(&format!("# Exported: {}\n", chrono::Utc::now().to_rfc3339()));
+    output.push_str(&format!(
+        "# Exported: {}\n",
+        chrono::Utc::now().to_rfc3339()
+    ));
     output.push_str(&format!("# Total blocks: {}\n\n", blocks.len()));
 
     for block in blocks {
@@ -330,14 +362,16 @@ pub(crate) async fn clear_all_ip_blocks_handler(
     State(state): State<AppState>,
 ) -> Result<StatusCode, ApiError> {
     // Get all blocks and remove them
-    let blocks = state.database.with_repositories(|repos| {
-        repos.ip_blocks().list_all()
-    }).map_err(ApiError::Internal)?;
+    let blocks = state
+        .database
+        .with_repositories(|repos| repos.ip_blocks().list_all())
+        .map_err(ApiError::Internal)?;
 
     for block in blocks {
-        state.database.with_repositories(|repos| {
-            repos.ip_blocks().remove(block.id)
-        }).map_err(ApiError::Internal)?;
+        state
+            .database
+            .with_repositories(|repos| repos.ip_blocks().remove(block.id))
+            .map_err(ApiError::Internal)?;
     }
 
     tracing::info!("All IP blocks cleared");
@@ -354,9 +388,10 @@ pub(crate) async fn clear_all_ip_blocks_handler(
 pub(crate) async fn ip_block_stats_handler(
     State(state): State<AppState>,
 ) -> ApiResult<IpBlockStatsResponse> {
-    let blocks = state.database.with_repositories(|repos| {
-        repos.ip_blocks().list_all()
-    }).map_err(ApiError::Internal)?;
+    let blocks = state
+        .database
+        .with_repositories(|repos| repos.ip_blocks().list_all())
+        .map_err(ApiError::Internal)?;
 
     let total_blocks = blocks.len();
     let active_blocks = blocks.iter().filter(|b| b.active).count();
@@ -377,14 +412,12 @@ pub(crate) async fn get_peer_ip_handler(
     State(state): State<AppState>,
     Path(peer_id): Path<String>,
 ) -> ApiResult<PeerIpResponse> {
-    let ips = state.database.with_repositories(|repos| {
-        repos.peer_ips().get_ips(&peer_id)
-    }).map_err(ApiError::Internal)?;
+    let ips = state
+        .database
+        .with_repositories(|repos| repos.peer_ips().get_ips(&peer_id))
+        .map_err(ApiError::Internal)?;
 
-    Ok(Json(PeerIpResponse {
-        peer_id,
-        ips,
-    }))
+    Ok(Json(PeerIpResponse { peer_id, ips }))
 }
 
 /// Export blocked peers as CSV: peer_id,reason,blocked_at
@@ -399,7 +432,10 @@ pub(crate) async fn export_peer_blocks_handler(
 
     for peer in blocked {
         let reason = peer.reason.unwrap_or_default().replace(',', ";");
-        output.push_str(&format!("{},{},{}\n", peer.peer_id, reason, peer.blocked_at));
+        output.push_str(&format!(
+            "{},{},{}\n",
+            peer.peer_id, reason, peer.blocked_at
+        ));
     }
 
     Ok(output)
@@ -431,7 +467,8 @@ pub(crate) async fn import_peer_blocks_handler(
             continue;
         }
 
-        let reason = parts.get(1)
+        let reason = parts
+            .get(1)
             .map(|r| r.trim())
             .filter(|r| !r.is_empty())
             .map(|r| r.to_string());
@@ -445,6 +482,10 @@ pub(crate) async fn import_peer_blocks_handler(
         }
     }
 
-    tracing::info!(added = added_count, errors = error_count, "peer block import completed");
+    tracing::info!(
+        added = added_count,
+        errors = error_count,
+        "peer block import completed"
+    );
     Ok(StatusCode::OK)
 }

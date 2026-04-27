@@ -1,4 +1,4 @@
-use super::{AppState, ApiError, ApiResult};
+use super::{ApiError, ApiResult, AppState};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
@@ -59,8 +59,8 @@ pub(crate) async fn add_reaction(
     Path(post_id): Path<String>,
     Json(payload): Json<AddReactionRequest>,
 ) -> Result<StatusCode, ApiError> {
-    use crate::database::repositories::ReactionRepository;
     use crate::database::models::ReactionRecord;
+    use crate::database::repositories::ReactionRepository;
 
     // Get local identity to sign the reaction
     let identity: String = state.database.with_repositories(|repos| {
@@ -84,15 +84,17 @@ pub(crate) async fn add_reaction(
         created_at,
     };
 
-    state.database.with_repositories(|repos| {
-        repos.reactions().add(&reaction)
-    })?;
+    state
+        .database
+        .with_repositories(|repos| repos.reactions().add(&reaction))?;
 
     // Get thread_id for the post
     let thread_id: String = state.database.with_repositories(|repos| {
         use crate::database::repositories::PostRepository;
         let post = repos.posts().get(&post_id)?;
-        Ok(post.ok_or_else(|| anyhow::anyhow!("Post not found"))?.thread_id)
+        Ok(post
+            .ok_or_else(|| anyhow::anyhow!("Post not found"))?
+            .thread_id)
     })?;
 
     // Broadcast via gossip
@@ -106,7 +108,10 @@ pub(crate) async fn add_reaction(
         is_removal: false,
     };
 
-    state.network.publish_reaction_update(reaction_update).await?;
+    state
+        .network
+        .publish_reaction_update(reaction_update)
+        .await?;
 
     Ok(StatusCode::OK)
 }
@@ -128,14 +133,18 @@ pub(crate) async fn remove_reaction(
     })?;
 
     state.database.with_repositories(|repos| {
-        repos.reactions().remove(&post_id, &identity, &payload.emoji)
+        repos
+            .reactions()
+            .remove(&post_id, &identity, &payload.emoji)
     })?;
 
     // Get thread_id for the post
     let thread_id: String = state.database.with_repositories(|repos| {
         use crate::database::repositories::PostRepository;
         let post = repos.posts().get(&post_id)?;
-        Ok(post.ok_or_else(|| anyhow::anyhow!("Post not found"))?.thread_id)
+        Ok(post
+            .ok_or_else(|| anyhow::anyhow!("Post not found"))?
+            .thread_id)
     })?;
 
     // Broadcast unreact via gossip
@@ -149,7 +158,10 @@ pub(crate) async fn remove_reaction(
         is_removal: true,
     };
 
-    state.network.publish_reaction_update(reaction_update).await?;
+    state
+        .network
+        .publish_reaction_update(reaction_update)
+        .await?;
 
     Ok(StatusCode::OK)
 }

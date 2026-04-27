@@ -26,13 +26,13 @@ Takes a `GossipSender` (cloned from the topic's existing subscription) to call
 
 Every 30 seconds:
 1. Query BEP44 for current minute and previous minute slots
-2. Decrypt records → extract SchellingRecord
-3. Skip own node_id
-4. For each new peer: inject EndpointAddr into StaticProvider + `join_peers()` on gossip
+2. Decrypt records → extract `SchellingRecord`
+3. Skip own `node_id`
+4. For each new peer: inject `EndpointAddr` into `MemoryLookup` + `join_peers()` on gossip
 5. Publish own record to current minute slot
 
 The `join_peers()` call triggers: HyParView Join → Dialer → `endpoint.connect(peer)` →
-iroh resolves via StaticProvider (finds the relay URL we just injected) → QUIC connection.
+iroh resolves via `MemoryLookup` (finds the relay URL we just injected) → QUIC connection.
 
 ## Components
 
@@ -59,7 +59,7 @@ iroh resolves via StaticProvider (finds the relay URL we just injected) → QUIC
 ## Design Decisions
 - **Per-minute rotation**: Limits DHT pollution; stale records expire naturally
 - **Encryption**: Prevents passive DHT observers from reading peer addresses
-- **StaticProvider injection**: Correct iroh 0.95 API for out-of-band address injection
+- **MemoryLookup injection**: Current iroh API for out-of-band address injection
 - **Relay-independent**: Records contain whatever the endpoint has (relay, direct, or both)
 - **No new dependencies**: Uses mainline, ed25519-dalek, chacha20poly1305, hkdf, sha2, blake3 (all already in Cargo.toml)
 
@@ -74,5 +74,5 @@ iroh resolves via StaticProvider (finds the relay URL we just injected) → QUIC
 - DHT operations are blocking (`mainline::Dht`), wrapped with `tokio::task::block_in_place`
 - BEP44 value limit is 1000 bytes; typical encrypted record is ~200-300 bytes
 - Runs alongside DTT discovery (both active simultaneously)
-- `known_peers` HashSet prevents redundant StaticProvider injections for already-seen peers
+- `known_peers` HashSet prevents redundant `MemoryLookup` injections for already-seen peers
 - Addresses are refreshed each cycle even for known peers (relay/IP may change)

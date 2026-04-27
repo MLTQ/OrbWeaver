@@ -5,7 +5,7 @@
 //! publishes an encrypted record containing their full EndpointAddr (node ID +
 //! relay URL + direct addresses) to the DHT. Other peers on the same topic
 //! query the DHT, decrypt the records, and inject discovered addresses into
-//! iroh's StaticProvider for direct connection.
+//! iroh's MemoryLookup address cache for direct connection.
 //!
 //! Key properties:
 //! - Same topic + same minute → same BEP44 (public_key, salt) → discoverable
@@ -21,7 +21,7 @@ use chacha20poly1305::{
     ChaCha20Poly1305, Nonce,
 };
 use hkdf::Hkdf;
-use iroh::discovery::static_provider::StaticProvider;
+use iroh::address_lookup::MemoryLookup;
 use iroh::endpoint::Endpoint;
 use iroh_base::{EndpointAddr, PublicKey, RelayUrl};
 use iroh_gossip::api::GossipSender;
@@ -146,7 +146,7 @@ fn build_own_record(endpoint: &Endpoint) -> SchellingRecord {
     }
 }
 
-/// Converts a SchellingRecord into an iroh EndpointAddr for StaticProvider injection.
+/// Converts a SchellingRecord into an iroh EndpointAddr for MemoryLookup injection.
 fn record_to_endpoint_addr(record: &SchellingRecord) -> Result<EndpointAddr> {
     let pub_key: PublicKey = record
         .node_id
@@ -245,7 +245,7 @@ pub async fn run_schelling_loop(
     topic_name: String,
     endpoint: Arc<Endpoint>,
     gossip_sender: GossipSender,
-    static_provider: StaticProvider,
+    static_provider: MemoryLookup,
 ) {
     tracing::info!(topic = %topic_name, "starting schelling point discovery loop");
 
@@ -293,7 +293,7 @@ pub async fn run_schelling_loop(
 
             match record_to_endpoint_addr(record) {
                 Ok(addr) => {
-                    // Inject into StaticProvider so iroh can resolve this peer
+                    // Inject into MemoryLookup so iroh can resolve this peer
                     static_provider.add_endpoint_info(addr.clone());
 
                     if is_new {
@@ -307,12 +307,9 @@ pub async fn run_schelling_loop(
 
                         // Add peer to the existing gossip topic via join_peers()
                         // This triggers HyParView Join → Dialer → endpoint.connect()
-                        // which resolves via StaticProvider to find the relay URL we just injected
+                        // which resolves via MemoryLookup to find the relay URL we just injected
                         if let Ok(pub_key) = record.node_id.parse::<PublicKey>() {
-                            if let Err(err) = gossip_sender
-                                .join_peers(vec![pub_key])
-                                .await
-                            {
+                            if let Err(err) = gossip_sender.join_peers(vec![pub_key]).await {
                                 tracing::warn!(
                                     error = ?err,
                                     peer = %record.node_id,
@@ -491,7 +488,11 @@ mod tests {
         let encrypted = encrypt_record(&plaintext, &key).unwrap();
 
         // Verify it fits in BEP44 (1000 byte limit)
-        assert!(encrypted.len() < 1000, "encrypted record too large: {} bytes", encrypted.len());
+        assert!(
+            encrypted.len() < 1000,
+            "encrypted record too large: {} bytes",
+            encrypted.len()
+        );
 
         let decrypted = decrypt_record(&encrypted, &key).unwrap();
         let decoded: SchellingRecord = serde_json::from_slice(&decrypted).unwrap();

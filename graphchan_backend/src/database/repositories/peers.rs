@@ -106,10 +106,8 @@ impl<'conn> super::PeerRepository for SqlitePeerRepository<'conn> {
     }
 
     fn delete(&self, id: &str) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM peers WHERE id = ?1",
-            params![id],
-        )?;
+        self.conn
+            .execute("DELETE FROM peers WHERE id = ?1", params![id])?;
         Ok(())
     }
 

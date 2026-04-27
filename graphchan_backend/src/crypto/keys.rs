@@ -99,8 +99,7 @@ fn load_stored_identity(path: &std::path::Path) -> Result<StoredX25519Identity> 
     let json = fs::read_to_string(path)
         .with_context(|| format!("failed to read X25519 key from {}", path.display()))?;
 
-    serde_json::from_str(&json)
-        .context("failed to deserialize X25519 identity")
+    serde_json::from_str(&json).context("failed to deserialize X25519 identity")
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
-use eframe::egui;
-use crate::app::GraphchanApp;
 use crate::app::state::ViewState;
+use crate::app::GraphchanApp;
+use eframe::egui;
 
 impl GraphchanApp {
     pub(crate) fn render_settings(&mut self, ui: &mut egui::Ui) {
@@ -40,7 +40,13 @@ impl GraphchanApp {
                 });
 
                 ui.add_space(5.0);
-                ui.label(egui::RichText::new("⚠ Changing the backend URL will reconnect to a different instance").small().color(egui::Color32::GRAY));
+                ui.label(
+                    egui::RichText::new(
+                        "⚠ Changing the backend URL will reconnect to a different instance",
+                    )
+                    .small()
+                    .color(egui::Color32::GRAY),
+                );
             });
 
             ui.add_space(20.0);
@@ -56,7 +62,10 @@ impl GraphchanApp {
                         ui.add_space(5.0);
 
                         let _old_color = self.primary_color;
-                        if ui.color_edit_button_srgba(&mut self.primary_color).changed() {
+                        if ui
+                            .color_edit_button_srgba(&mut self.primary_color)
+                            .changed()
+                        {
                             // Mark theme as dirty to reapply on next frame
                             self.theme_dirty = true;
 
@@ -79,7 +88,8 @@ impl GraphchanApp {
                         ui.label(egui::RichText::new("Generated Color Scheme:").strong());
                         ui.add_space(5.0);
 
-                        let scheme = crate::color_theme::ColorScheme::from_primary(self.primary_color);
+                        let scheme =
+                            crate::color_theme::ColorScheme::from_primary(self.primary_color);
 
                         ui.horizontal(|ui| {
                             // Show colors from darkest to brightest (like the examples)
@@ -88,7 +98,7 @@ impl GraphchanApp {
                             ui.vertical(|ui| {
                                 let (rect, _) = ui.allocate_exact_size(
                                     egui::vec2(60.0, 60.0),
-                                    egui::Sense::hover()
+                                    egui::Sense::hover(),
                                 );
                                 ui.painter().rect_filled(rect, 4.0, scheme.quaternary);
                                 ui.label(egui::RichText::new("BG").small());
@@ -100,7 +110,7 @@ impl GraphchanApp {
                             ui.vertical(|ui| {
                                 let (rect, _) = ui.allocate_exact_size(
                                     egui::vec2(60.0, 60.0),
-                                    egui::Sense::hover()
+                                    egui::Sense::hover(),
                                 );
                                 ui.painter().rect_filled(rect, 4.0, scheme.tertiary);
                                 ui.label(egui::RichText::new("Card").small());
@@ -112,7 +122,7 @@ impl GraphchanApp {
                             ui.vertical(|ui| {
                                 let (rect, _) = ui.allocate_exact_size(
                                     egui::vec2(60.0, 60.0),
-                                    egui::Sense::hover()
+                                    egui::Sense::hover(),
                                 );
                                 ui.painter().rect_filled(rect, 4.0, scheme.secondary);
                                 ui.label(egui::RichText::new("Accent").small());
@@ -124,7 +134,7 @@ impl GraphchanApp {
                             ui.vertical(|ui| {
                                 let (rect, _) = ui.allocate_exact_size(
                                     egui::vec2(60.0, 60.0),
-                                    egui::Sense::hover()
+                                    egui::Sense::hover(),
                                 );
                                 ui.painter().rect_filled(rect, 4.0, scheme.primary);
                                 ui.label(egui::RichText::new("Primary").small());
@@ -146,7 +156,11 @@ impl GraphchanApp {
                 }
 
                 ui.add_space(5.0);
-                ui.label(egui::RichText::new("Theme will update immediately when you change the color").small().color(egui::Color32::GRAY));
+                ui.label(
+                    egui::RichText::new("Theme will update immediately when you change the color")
+                        .small()
+                        .color(egui::Color32::GRAY),
+                );
             });
 
             ui.add_space(20.0);
@@ -203,7 +217,10 @@ impl GraphchanApp {
                 ui.label("OrbWeaver / Graphchan");
                 ui.label("A decentralized peer-to-peer discussion platform");
                 ui.add_space(5.0);
-                ui.hyperlink_to("View on GitHub", "https://github.com/yourusername/orbweaver");
+                ui.hyperlink_to(
+                    "View on GitHub",
+                    "https://github.com/yourusername/orbweaver",
+                );
             });
         });
 

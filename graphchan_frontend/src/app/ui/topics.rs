@@ -62,11 +62,14 @@ impl GraphchanApp {
                             for topic_id in &self.subscribed_topics.clone() {
                                 ui.horizontal(|ui| {
                                     ui.label(format!("📡 {}", topic_id));
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        if ui.button("Unsubscribe").clicked() {
-                                            topic_to_unsubscribe = Some(topic_id.clone());
-                                        }
-                                    });
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui.button("Unsubscribe").clicked() {
+                                                topic_to_unsubscribe = Some(topic_id.clone());
+                                            }
+                                        },
+                                    );
                                 });
                                 ui.separator();
                             }

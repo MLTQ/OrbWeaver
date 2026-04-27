@@ -42,11 +42,15 @@ pub fn decrypt_dm(
         .decrypt(&nonce, ciphertext)
         .map_err(|e| anyhow::anyhow!("DM decryption failed: {}", e))?;
 
-    String::from_utf8(plaintext).map_err(|e| anyhow::anyhow!("invalid UTF-8 in decrypted DM: {}", e))
+    String::from_utf8(plaintext)
+        .map_err(|e| anyhow::anyhow!("invalid UTF-8 in decrypted DM: {}", e))
 }
 
 /// Derives a shared secret for DM topic derivation using X25519 Diffie-Hellman.
-pub fn derive_dm_shared_secret(my_secret: &X25519StaticSecret, their_pubkey: &X25519PublicKey) -> [u8; 32] {
+pub fn derive_dm_shared_secret(
+    my_secret: &X25519StaticSecret,
+    their_pubkey: &X25519PublicKey,
+) -> [u8; 32] {
     let shared = my_secret.diffie_hellman(their_pubkey);
     let derived = derive_key(shared.as_bytes(), b"orbweaver-dm-secret-v1", 32);
 
