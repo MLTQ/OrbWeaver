@@ -372,6 +372,45 @@ async fn handle_message(
                 peer_id: update.peer_id.clone(),
             });
 
+            // If the update brought in (or rotated) the peer's x25519 key,
+            // any DMs from them that landed in 'pending_key' state can now be
+            // decrypted. Run the retry on a background task — best-effort,
+            // doesn't gate the rest of profile-update processing.
+            if update.x25519_pubkey.is_some() {
+                let dm_database = database.clone();
+                let dm_paths = paths.clone();
+                let dm_events = events.clone();
+                let dm_peer = update.peer_id.clone();
+                tokio::task::spawn_blocking(move || {
+                    let service = crate::dms::DmService::new(dm_database, dm_paths);
+                    match service.retry_pending_for_sender(&dm_peer) {
+                        Ok(0) => {}
+                        Ok(n) => {
+                            tracing::info!(
+                                peer_id = %dm_peer,
+                                decrypted = n,
+                                "🔓 retried pending DMs after x25519 key arrived"
+                            );
+                            // Surface a generic "you have new readable mail"
+                            // signal — the SSE consumer reloads conversations
+                            // when it sees ProfileUpdated, so a single event is
+                            // enough; we just re-emit ProfileUpdated as the
+                            // wake-up signal rather than inventing a new event.
+                            dm_events.publish(crate::events::AppEvent::ProfileUpdated {
+                                peer_id: dm_peer.clone(),
+                            });
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                error = ?err,
+                                peer_id = %dm_peer,
+                                "pending-DM retry failed"
+                            );
+                        }
+                    }
+                });
+            }
+
             // Re-broadcast profile updates only if first time seeing this update
             if should_rebroadcast {
                 let publisher_clone = publisher.clone();

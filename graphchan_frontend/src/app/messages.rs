@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use crate::models::{
     BlockedPeerView, BlocklistEntryView, BlocklistSubscriptionView, ConversationView,
-    DirectMessageView, FileResponse, PeerView, PostView, ReactionsResponse, SearchResponse, ThreadDetails,
-    ThreadSummary,
+    DirectMessageView, FileResponse, PeerView, PostView, ReactionsResponse, SearchResponse,
+    ServerEvent, ThreadDetails, ThreadSummary,
 };
 
 use super::state::LoadedImage;
@@ -158,6 +158,15 @@ pub enum AppMessage {
     },
     // Theme management messages
     ThemeColorLoaded(Result<(u8, u8, u8), anyhow::Error>),
+
+    // Live event stream from /events SSE
+    /// A typed event from the backend. The handler decides what to refresh
+    /// (e.g. DmReceived → reload conversations + active conversation messages).
+    ServerEvent(ServerEvent),
+    /// Sentinel sent by the SSE consumer thread on (re-)connect. Used only to
+    /// detect channel closure so the consumer thread can shut down cleanly
+    /// when the UI exits; the dispatcher ignores it otherwise.
+    EventStreamConnected,
 }
 
 /// Dispatch incoming messages to domain-specific handler methods on GraphchanApp.
@@ -236,6 +245,12 @@ pub(super) fn process_messages(app: &mut GraphchanApp) {
             AppMessage::TopicSubscribed { topic_id, result } => app.handle_topic_subscribed(topic_id, result),
             AppMessage::TopicUnsubscribed { topic_id, result } => app.handle_topic_unsubscribed(topic_id, result),
             AppMessage::ThemeColorLoaded(result) => app.handle_theme_color_loaded(result),
+
+            AppMessage::ServerEvent(event) => app.handle_server_event(event),
+            AppMessage::EventStreamConnected => {
+                // Sentinel only — used by the SSE thread to notice channel
+                // closure on UI shutdown. Nothing to do here.
+            }
         }
     }
 }

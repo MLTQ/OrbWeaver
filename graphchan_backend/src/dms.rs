@@ -7,8 +7,42 @@ use crate::utils::now_utc_iso;
 use anyhow::{anyhow, Context, Result};
 use base64::prelude::*;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use uuid::Uuid;
 use x25519_dalek::PublicKey;
+
+/// Decrypt-status sentinel values stored in `direct_messages.decrypt_status`.
+/// Kept as constants (rather than an enum + serde) so the column is human-
+/// readable in sqlite shells and dirt-cheap to query against.
+pub const DECRYPT_STATUS_DECRYPTED: &str = "decrypted";
+pub const DECRYPT_STATUS_PENDING_KEY: &str = "pending_key";
+pub const DECRYPT_STATUS_FAILED: &str = "failed";
+
+/// Conversation preview shown when we have an incoming DM whose sender's
+/// x25519 key isn't known yet. Replaced with the real body on a successful
+/// retry-decrypt (see `retry_pending_for_sender`).
+pub const PENDING_KEY_PREVIEW: &str = "🔒 Encrypted message — sender key not yet known";
+
+/// Categorized failure modes for DM decryption. Lets `ingest_dm` decide whether
+/// to surface the message as pending (recoverable), failed (corrupt), or
+/// propagate as a genuine error (db / io issue).
+#[derive(Debug, Error)]
+pub enum DmIngestError {
+    /// Sender peer record absent, or peer record exists but has no x25519
+    /// pubkey. Recoverable: when the peer's profile arrives via gossip we can
+    /// retry decryption from the stored ciphertext.
+    #[error("sender x25519 key unknown for peer {peer_id}")]
+    MissingKey { peer_id: String },
+    /// Cipher / nonce / authentication failure after we had the key. Either
+    /// corruption in transit, wrong recipient (somehow routed to us), or a
+    /// peer who rotated keys without telling us. Not retried.
+    #[error("DM decryption failed: {0}")]
+    DecryptFailed(anyhow::Error),
+    /// Catch-all for plumbing failures (db lock, key file missing, identity
+    /// not loaded, etc.). Bubbles up unchanged.
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
 
 #[derive(Clone)]
 pub struct DmService {
@@ -31,6 +65,33 @@ impl DmService {
             .iter()
             .map(|b| format!("{:02x}", b))
             .collect()
+    }
+
+    /// Resolve a peer's x25519 public key. Returns `Ok(None)` when the peer
+    /// record exists but has no `x25519_pubkey`, OR the peer record is missing
+    /// entirely — both are "we should retry once their profile arrives" cases
+    /// that the caller needs to distinguish from genuine errors. Returns
+    /// `Err` only on db / decoding failures (the latter is genuinely corrupt
+    /// data the user can't fix).
+    fn lookup_sender_pubkey(&self, peer_id: &str) -> Result<Option<PublicKey>> {
+        self.database.with_repositories(|repos| {
+            let peer = match repos.peers().get(peer_id)? {
+                Some(p) => p,
+                None => return Ok(None),
+            };
+            let Some(pubkey_str) = peer.x25519_pubkey else {
+                return Ok(None);
+            };
+
+            let pubkey_bytes = BASE64_STANDARD.decode(&pubkey_str)
+                .with_context(|| "failed to decode X25519 public key")?;
+            if pubkey_bytes.len() != 32 {
+                anyhow::bail!("invalid X25519 public key length: {}", pubkey_bytes.len());
+            }
+            let mut key_array = [0u8; 32];
+            key_array.copy_from_slice(&pubkey_bytes);
+            Ok(Some(PublicKey::from(key_array)))
+        })
     }
 
     /// Send a direct message to a peer. Returns (view, ciphertext, nonce) for gossip broadcast.
@@ -87,6 +148,8 @@ impl DmService {
             nonce: nonce.to_vec(),
             created_at: created_at.clone(),
             read_at: None,
+            // Outgoing messages are always "decrypted" — we have the cleartext.
+            decrypt_status: DECRYPT_STATUS_DECRYPTED.into(),
         };
 
         let preview: String = body.chars().take(100).collect();
@@ -119,7 +182,17 @@ impl DmService {
         Ok((view, ciphertext, nonce.to_vec()))
     }
 
-    /// Ingest a DM received via gossip. Stores the encrypted record and updates conversation.
+    /// Ingest a DM received via gossip. Stores the encrypted record and updates
+    /// conversation. Decryption failures are categorized:
+    ///
+    /// - **MissingKey** (sender peer absent or has no x25519): the DM is stored
+    ///   with `decrypt_status='pending_key'` and a stub conversation row is
+    ///   surfaced with a 🔒 placeholder so the user knows there's pending mail.
+    ///   `retry_pending_for_sender()` can re-attempt later when the peer's
+    ///   profile arrives via gossip.
+    /// - **Failed** (cipher/nonce error after we have the key): unrecoverable —
+    ///   stored with `decrypt_status='failed'` and not surfaced. Logged loudly.
+    /// - **Decrypted**: existing happy path.
     pub fn ingest_dm(&self, from_peer_id: &str, to_peer_id: &str, encrypted_body: &[u8], nonce: &[u8], message_id: &str, conversation_id: &str, created_at: &str) -> Result<()> {
         let record = DirectMessageRecord {
             id: message_id.to_string(),
@@ -130,60 +203,166 @@ impl DmService {
             nonce: nonce.to_vec(),
             created_at: created_at.to_string(),
             read_at: None,
+            decrypt_status: DECRYPT_STATUS_DECRYPTED.into(), // optimistic; corrected below
         };
 
-        // Store the raw encrypted record
-        self.database.with_repositories(|repos| {
-            repos.direct_messages().create(&record)?;
-            Ok(())
-        })?;
-
-        // Decrypt and update conversation metadata (receive_dm handles conversation upsert)
-        if let Err(err) = self.receive_dm(record) {
-            tracing::warn!(error = ?err, "failed to decrypt ingested DM for preview");
+        match self.receive_dm(record.clone()) {
+            Ok(_) => {
+                // receive_dm succeeded → persist with 'decrypted'.
+                self.database.with_repositories(|repos| {
+                    repos.direct_messages().create(&record)?;
+                    Ok(())
+                })?;
+            }
+            Err(DmIngestError::MissingKey { peer_id }) => {
+                tracing::warn!(
+                    peer_id = %peer_id,
+                    message_id = %record.id,
+                    "🔒 DM stored as pending — sender's x25519 key not yet known; will retry on next ProfileUpdate from this peer"
+                );
+                let mut record = record;
+                record.decrypt_status = DECRYPT_STATUS_PENDING_KEY.into();
+                self.database.with_repositories(|repos| {
+                    repos.direct_messages().create(&record)?;
+                    // Stub conversation row so the user sees the activity. Uses
+                    // record_incoming_message so unread_count still increments
+                    // — the user has new mail even if we can't read it yet.
+                    repos.conversations().record_incoming_message(
+                        &record.conversation_id,
+                        &record.from_peer_id,
+                        &record.created_at,
+                        PENDING_KEY_PREVIEW,
+                    )?;
+                    Ok(())
+                })?;
+            }
+            Err(DmIngestError::DecryptFailed(err)) => {
+                tracing::error!(
+                    error = ?err,
+                    message_id = %record.id,
+                    from = %record.from_peer_id,
+                    "DM cipher/nonce error — message stored as failed and will not be retried"
+                );
+                let mut record = record;
+                record.decrypt_status = DECRYPT_STATUS_FAILED.into();
+                self.database.with_repositories(|repos| {
+                    repos.direct_messages().create(&record)?;
+                    Ok(())
+                })?;
+            }
+            Err(DmIngestError::Other(err)) => return Err(err),
         }
 
         Ok(())
     }
 
-    /// Receive and decrypt a direct message.
-    pub fn receive_dm(&self, record: DirectMessageRecord) -> Result<DirectMessageView> {
-        // Load our X25519 secret key
+    /// Re-attempt decryption of every pending-key DM from `from_peer_id`. Called
+    /// by the network ingest pipeline when a ProfileUpdate adds (or replaces)
+    /// the peer's x25519 key. Returns the number of messages newly transitioned
+    /// from 'pending_key' → 'decrypted'.
+    ///
+    /// On a successful retry, the conversation row's preview is updated with
+    /// the most-recently-decrypted message's body (replacing the 🔒 placeholder).
+    /// unread_count is left untouched — those messages were already counted as
+    /// unread when first received.
+    pub fn retry_pending_for_sender(&self, from_peer_id: &str) -> Result<usize> {
+        let pending = self.database.with_repositories(|repos| {
+            repos.direct_messages().list_pending_for_sender(from_peer_id)
+        })?;
+        if pending.is_empty() {
+            return Ok(0);
+        }
+
+        let mut decrypted_count = 0usize;
+        let mut latest_preview: Option<(String, String)> = None; // (created_at, preview)
+
+        for record in pending {
+            match self.receive_dm(record.clone()) {
+                Ok(view) => {
+                    self.database.with_repositories(|repos| {
+                        repos
+                            .direct_messages()
+                            .update_decrypt_status(&record.id, DECRYPT_STATUS_DECRYPTED)?;
+                        Ok(())
+                    })?;
+                    decrypted_count += 1;
+                    let preview: String = view.body.chars().take(100).collect();
+                    if latest_preview.as_ref().map_or(true, |(ts, _)| view.created_at >= *ts) {
+                        latest_preview = Some((view.created_at.clone(), preview));
+                    }
+                }
+                Err(DmIngestError::MissingKey { .. }) => {
+                    // Still no key — caller will retry again on next ProfileUpdate.
+                    continue;
+                }
+                Err(DmIngestError::DecryptFailed(err)) => {
+                    tracing::error!(
+                        error = ?err,
+                        message_id = %record.id,
+                        "pending-key DM failed cipher decode after key arrived — marking failed"
+                    );
+                    self.database.with_repositories(|repos| {
+                        repos
+                            .direct_messages()
+                            .update_decrypt_status(&record.id, DECRYPT_STATUS_FAILED)?;
+                        Ok(())
+                    })?;
+                }
+                Err(DmIngestError::Other(err)) => return Err(err),
+            }
+        }
+
+        // Replace the 🔒 placeholder preview with the actual most-recent body.
+        if decrypted_count > 0 {
+            if let Some((ts, preview)) = latest_preview {
+                let (my_peer_id, _, _) = self
+                    .database
+                    .get_identity()?
+                    .ok_or_else(|| anyhow!("no local identity found"))?;
+                let conversation_id = Self::derive_conversation_id(&my_peer_id, from_peer_id);
+                self.database.with_repositories(|repos| {
+                    repos
+                        .conversations()
+                        .update_last_message(&conversation_id, &ts, &preview)?;
+                    Ok(())
+                })?;
+            }
+        }
+
+        Ok(decrypted_count)
+    }
+
+    /// Receive and decrypt a direct message. Returns categorized errors so the
+    /// caller (`ingest_dm` / `retry_pending_for_sender`) can decide whether the
+    /// failure is recoverable (`MissingKey`) or terminal (`DecryptFailed`).
+    pub fn receive_dm(&self, record: DirectMessageRecord) -> std::result::Result<DirectMessageView, DmIngestError> {
+        // Load our X25519 secret key (plumbing — bubble as Other).
         let my_secret = load_x25519_secret(&self.paths)?;
 
-        // Get sender's X25519 public key
-        let their_pubkey = self.database.with_repositories(|repos| {
-            let peer = repos
-                .peers()
-                .get(&record.from_peer_id)?
-                .ok_or_else(|| anyhow!("sender peer not found: {}", record.from_peer_id))?;
-
-            let pubkey_str = peer
-                .x25519_pubkey
-                .ok_or_else(|| anyhow!("sender {} has no X25519 public key", record.from_peer_id))?;
-
-            // Decode base64 public key
-            let pubkey_bytes = BASE64_STANDARD.decode(&pubkey_str)
-                .with_context(|| "failed to decode X25519 public key")?;
-
-            if pubkey_bytes.len() != 32 {
-                anyhow::bail!("invalid X25519 public key length: {}", pubkey_bytes.len());
+        // Get sender's X25519 public key — categorized to MissingKey when the
+        // peer or their pubkey is absent so the caller can stash + retry later.
+        let their_pubkey = match self.lookup_sender_pubkey(&record.from_peer_id)? {
+            Some(pk) => pk,
+            None => {
+                return Err(DmIngestError::MissingKey {
+                    peer_id: record.from_peer_id.clone(),
+                });
             }
-
-            let mut key_array = [0u8; 32];
-            key_array.copy_from_slice(&pubkey_bytes);
-            Ok::<PublicKey, anyhow::Error>(PublicKey::from(key_array))
-        })?;
+        };
 
         // Convert nonce Vec<u8> to [u8; 24]
         if record.nonce.len() != 24 {
-            anyhow::bail!("invalid nonce length: {}", record.nonce.len());
+            return Err(DmIngestError::DecryptFailed(anyhow!(
+                "invalid nonce length: {}",
+                record.nonce.len()
+            )));
         }
         let mut nonce = [0u8; 24];
         nonce.copy_from_slice(&record.nonce);
 
         // Decrypt the message
-        let body = decrypt_dm(&record.encrypted_body, &nonce, &my_secret.secret, &their_pubkey)?;
+        let body = decrypt_dm(&record.encrypted_body, &nonce, &my_secret.secret, &their_pubkey)
+            .map_err(DmIngestError::DecryptFailed)?;
 
         // Update conversation metadata: atomic increment of unread_count rather
         // than clobbering it to 1, so receiving multiple unread DMs accumulates
@@ -248,36 +427,13 @@ impl DmService {
         // Load our X25519 secret key
         let my_secret = load_x25519_secret(&self.paths)?;
 
-        // Get peer's X25519 public key (may not exist for short-friendcode peers)
-        let their_pubkey = self.database.with_repositories(|repos| {
-            let peer = repos
-                .peers()
-                .get(peer_id)?
-                .ok_or_else(|| anyhow!("peer not found: {}", peer_id))?;
-
-            let pubkey_str = match &peer.x25519_pubkey {
-                Some(pk) => pk.clone(),
-                None => {
-                    // No X25519 key — can't decrypt any messages, return empty
-                    return Ok::<Option<PublicKey>, anyhow::Error>(None);
-                }
-            };
-
-            let pubkey_bytes = BASE64_STANDARD.decode(&pubkey_str)
-                .with_context(|| "failed to decode X25519 public key")?;
-
-            if pubkey_bytes.len() != 32 {
-                anyhow::bail!("invalid X25519 public key length: {}", pubkey_bytes.len());
-            }
-
-            let mut key_array = [0u8; 32];
-            key_array.copy_from_slice(&pubkey_bytes);
-            Ok(Some(PublicKey::from(key_array)))
-        })?;
-
-        let their_pubkey = match their_pubkey {
+        // Get peer's X25519 public key. If we don't have one (short friendcode,
+        // profile not yet synced), we can't decrypt anything from them — return
+        // empty so the UI shows the pending stub conversation rather than an
+        // error.
+        let their_pubkey = match self.lookup_sender_pubkey(peer_id)? {
             Some(pk) => pk,
-            None => return Ok(Vec::new()), // No X25519 key, no messages can be decrypted
+            None => return Ok(Vec::new()),
         };
 
         self.database.with_repositories(|repos| {
@@ -285,6 +441,12 @@ impl DmService {
             let mut views = Vec::new();
 
             for record in records {
+                // Skip messages that previously failed for non-key reasons. They
+                // remain in the DB for forensics but we won't keep retrying.
+                if record.decrypt_status == DECRYPT_STATUS_FAILED {
+                    continue;
+                }
+
                 // Convert nonce
                 if record.nonce.len() != 24 {
                     tracing::warn!("skipping message with invalid nonce length");
@@ -435,6 +597,7 @@ mod tests {
             conversation_id: conv.into(),
             from_peer_id: from.into(),
             to_peer_id: to.into(),
+            decrypt_status: DECRYPT_STATUS_DECRYPTED.into(),
             encrypted_body: vec![1, 2, 3],
             nonce: vec![0u8; 24],
             created_at: ts.into(),
@@ -567,6 +730,53 @@ mod tests {
             let listed = repos.direct_messages().list_for_conversation("conv-1", 3)?;
             let ids: Vec<&str> = listed.iter().map(|m| m.id.as_str()).collect();
             assert_eq!(ids, vec!["dm-2", "dm-3", "dm-4"]);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn list_pending_for_sender_filters_by_status() {
+        // Repo helper for the retry path: only returns 'pending_key' rows from
+        // a given sender, ignoring decrypted and failed ones.
+        let db = setup_db();
+        db.with_repositories(|repos| {
+            let mut r1 = make_record("ok-1", "conv-1", "alice", "bob", "2024-01-01T00:00:01Z");
+            r1.decrypt_status = DECRYPT_STATUS_DECRYPTED.into();
+            let mut r2 = make_record("pending-1", "conv-1", "alice", "bob", "2024-01-01T00:00:02Z");
+            r2.decrypt_status = DECRYPT_STATUS_PENDING_KEY.into();
+            let mut r3 = make_record("pending-2", "conv-1", "alice", "bob", "2024-01-01T00:00:03Z");
+            r3.decrypt_status = DECRYPT_STATUS_PENDING_KEY.into();
+            let mut r4 = make_record("failed-1", "conv-1", "alice", "bob", "2024-01-01T00:00:04Z");
+            r4.decrypt_status = DECRYPT_STATUS_FAILED.into();
+            // Different sender — must not appear.
+            let mut r5 = make_record("other-pending", "conv-2", "b", "bob", "2024-01-01T00:00:05Z");
+            r5.decrypt_status = DECRYPT_STATUS_PENDING_KEY.into();
+
+            repos.direct_messages().create(&r1)?;
+            repos.direct_messages().create(&r2)?;
+            repos.direct_messages().create(&r3)?;
+            repos.direct_messages().create(&r4)?;
+            repos.direct_messages().create(&r5)?;
+
+            let pending = repos.direct_messages().list_pending_for_sender("alice")?;
+            let ids: Vec<&str> = pending.iter().map(|m| m.id.as_str()).collect();
+            assert_eq!(ids, vec!["pending-1", "pending-2"]);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn update_decrypt_status_transitions_in_place() {
+        let db = setup_db();
+        db.with_repositories(|repos| {
+            let mut r = make_record("dm-1", "conv-1", "alice", "bob", "2024-01-01T00:00:01Z");
+            r.decrypt_status = DECRYPT_STATUS_PENDING_KEY.into();
+            repos.direct_messages().create(&r)?;
+            repos.direct_messages().update_decrypt_status("dm-1", DECRYPT_STATUS_DECRYPTED)?;
+            let after = repos.direct_messages().get("dm-1")?.expect("exists");
+            assert_eq!(after.decrypt_status, DECRYPT_STATUS_DECRYPTED);
             Ok(())
         })
         .unwrap();

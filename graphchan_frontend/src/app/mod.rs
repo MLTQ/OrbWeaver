@@ -12,6 +12,7 @@ use crate::api::ApiClient;
 // ImageLoader removed; using custom async pipeline
 use crate::models::{CreatePostInput, CreateThreadInput, PeerView, ThreadSummary};
 
+mod event_stream;
 mod messages;
 mod state;
 mod tasks;
@@ -222,6 +223,10 @@ impl GraphchanApp {
         app.spawn_load_ip_block_stats();
         app.spawn_load_topics();
         app.spawn_load_theme_color();
+        // Long-lived /events SSE consumer. Pushes AppMessage::ServerEvent into
+        // the existing channel whenever the backend reports a state change
+        // (DmReceived, PostAdded, ProfileUpdated, …). Reconnects forever.
+        event_stream::spawn_event_stream(app.api.clone(), app.tx.clone());
         app
     }
 

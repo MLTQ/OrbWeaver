@@ -100,6 +100,15 @@ impl ApiClient {
         &self.upload_client
     }
 
+    /// Hand out the underlying reqwest client for callers that need to drive
+    /// the request lifecycle themselves — currently the SSE consumer, which
+    /// wants to read the response body as a stream rather than `.json()`-decode
+    /// it. Auth headers are already injected via the client builder so
+    /// streaming requests inherit them.
+    pub fn raw_client(&self) -> &Client {
+        &self.client
+    }
+
     pub fn list_threads(&self) -> Result<Vec<ThreadSummary>> {
         let url = self.url("/threads")?;
         let response = self.client.get(url).send()?.error_for_status()?;

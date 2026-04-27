@@ -13,8 +13,8 @@ impl<'conn> super::DirectMessageRepository for SqliteDirectMessageRepository<'co
         // rather than a constraint violation that drops the message.
         self.conn.execute(
             r#"
-            INSERT INTO direct_messages (id, conversation_id, from_peer_id, to_peer_id, encrypted_body, nonce, created_at, read_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            INSERT INTO direct_messages (id, conversation_id, from_peer_id, to_peer_id, encrypted_body, nonce, created_at, read_at, decrypt_status)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             ON CONFLICT(id) DO NOTHING
             "#,
             params![
@@ -25,7 +25,8 @@ impl<'conn> super::DirectMessageRepository for SqliteDirectMessageRepository<'co
                 record.encrypted_body,
                 record.nonce,
                 record.created_at,
-                record.read_at
+                record.read_at,
+                record.decrypt_status,
             ],
         )?;
         Ok(())
@@ -34,7 +35,7 @@ impl<'conn> super::DirectMessageRepository for SqliteDirectMessageRepository<'co
     fn get(&self, id: &str) -> Result<Option<DirectMessageRecord>> {
         let result = self.conn.query_row(
             r#"
-            SELECT id, conversation_id, from_peer_id, to_peer_id, encrypted_body, nonce, created_at, read_at
+            SELECT id, conversation_id, from_peer_id, to_peer_id, encrypted_body, nonce, created_at, read_at, decrypt_status
             FROM direct_messages
             WHERE id = ?1
             "#,
@@ -49,6 +50,8 @@ impl<'conn> super::DirectMessageRepository for SqliteDirectMessageRepository<'co
                     nonce: row.get(5)?,
                     created_at: row.get(6)?,
                     read_at: row.get(7)?,
+                    decrypt_status: row.get::<_, Option<String>>(8)?
+                        .unwrap_or_else(|| "decrypted".into()),
                 })
             },
         ).optional()?;
@@ -62,9 +65,9 @@ impl<'conn> super::DirectMessageRepository for SqliteDirectMessageRepository<'co
         // between "newest N" and "ascending order" and reverse on the client.
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, conversation_id, from_peer_id, to_peer_id, encrypted_body, nonce, created_at, read_at
+            SELECT id, conversation_id, from_peer_id, to_peer_id, encrypted_body, nonce, created_at, read_at, decrypt_status
             FROM (
-                SELECT id, conversation_id, from_peer_id, to_peer_id, encrypted_body, nonce, created_at, read_at
+                SELECT id, conversation_id, from_peer_id, to_peer_id, encrypted_body, nonce, created_at, read_at, decrypt_status
                 FROM direct_messages
                 WHERE conversation_id = ?1
                 ORDER BY created_at DESC
@@ -84,6 +87,8 @@ impl<'conn> super::DirectMessageRepository for SqliteDirectMessageRepository<'co
                 nonce: row.get(5)?,
                 created_at: row.get(6)?,
                 read_at: row.get(7)?,
+                decrypt_status: row.get::<_, Option<String>>(8)?
+                    .unwrap_or_else(|| "decrypted".into()),
             })
         })?;
 
@@ -125,6 +130,50 @@ impl<'conn> super::DirectMessageRepository for SqliteDirectMessageRepository<'co
             params![read_at, conversation_id, to_peer_id],
         )?;
         Ok(updated)
+    }
+
+    fn update_decrypt_status(&self, id: &str, status: &str) -> Result<()> {
+        self.conn.execute(
+            r#"
+            UPDATE direct_messages
+            SET decrypt_status = ?1
+            WHERE id = ?2
+            "#,
+            params![status, id],
+        )?;
+        Ok(())
+    }
+
+    fn list_pending_for_sender(&self, from_peer_id: &str) -> Result<Vec<DirectMessageRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, conversation_id, from_peer_id, to_peer_id, encrypted_body, nonce, created_at, read_at, decrypt_status
+            FROM direct_messages
+            WHERE from_peer_id = ?1 AND decrypt_status = 'pending_key'
+            ORDER BY created_at ASC
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![from_peer_id], |row| {
+            Ok(DirectMessageRecord {
+                id: row.get(0)?,
+                conversation_id: row.get(1)?,
+                from_peer_id: row.get(2)?,
+                to_peer_id: row.get(3)?,
+                encrypted_body: row.get(4)?,
+                nonce: row.get(5)?,
+                created_at: row.get(6)?,
+                read_at: row.get(7)?,
+                decrypt_status: row.get::<_, Option<String>>(8)?
+                    .unwrap_or_else(|| "decrypted".into()),
+            })
+        })?;
+
+        let mut messages = Vec::new();
+        for row in rows {
+            messages.push(row?);
+        }
+        Ok(messages)
     }
 
     fn count_unread(&self, to_peer_id: &str) -> Result<usize> {

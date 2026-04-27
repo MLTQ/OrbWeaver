@@ -94,6 +94,10 @@ pub struct DirectMessageRecord {
     pub nonce: Vec<u8>,
     pub created_at: String,
     pub read_at: Option<String>,
+    /// 'decrypted' (success), 'pending_key' (sender's x25519 unknown — retry
+    /// later), 'failed' (corrupt or wrong recipient — won't retry).
+    /// Set on insert by ingest_dm. Older rows default to 'decrypted'.
+    pub decrypt_status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
